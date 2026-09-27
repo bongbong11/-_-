@@ -16,7 +16,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.6.3');
+assert.equal(manifest.version, '0.6.4');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -45,6 +45,8 @@ assert.match(source, /공통 인물 등장 확률/);
 assert.match(source, /새 사건 발생 확률/);
 assert.match(source, /부정 편향을 최우선으로 사용/);
 assert.match(source, /이번 턴 최종 적용/);
+assert.match(source, /현재 사건·인물 현황/);
+assert.ok(source.indexOf('현재 사건·인물 현황') < source.indexOf('장면·관계 판독'), 'active event and character dashboard must stay above accordions');
 assert.match(source, /장면·관계 판독/);
 assert.match(source, /사건·NPC 진행/);
 assert.match(source, /갈등·실행 점검/);
@@ -118,7 +120,7 @@ for (const [name, expected] of Object.entries(expectedHashes)) {
 
 const preferences = { progressionMode: 'investigation', worldDirection: 'hostile', relationshipDirection: 'hostile', negativePriority: true, judgmentStyle: 'balanced', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', fightSustain: true, villainEnabled: true, socialEnabled: true, worldHostility: true, npcToUser: true, userMisfortune: true };
 const questions = buildQuestions({ preferences, hasVillain: false, hasNpc: false, hasEvent: false, pacingState: { relationship: { closer: 1, distant: 0 }, event: { qualifiedSteps: 1 } }, previousRoutes: { npc_route: 'reuse' } });
-for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_followthrough', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'action_evasion', 'directive_followthrough', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'resolution_pacing', 'fight_sustain', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
+for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_followthrough', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'action_evasion', 'directive_followthrough', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'resolution_pacing', 'fight_sustain', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
 for (const key of ['npc_autonomy', 'world_hostility', 'npc_guard', 'misfortune']) assert.equal(questions[key], undefined, `${key} must be fixed or conditionally connected, not Jev-gated`);
 const npc = rollNpcProfile('investigation', () => 0);
 assert.equal(npc.role, 'witness');

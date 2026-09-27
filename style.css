@@ -57,6 +57,7 @@
 #scene-reader-dialog .sr-decision-row strong { text-align: right; }
 #scene-reader-dialog .sr-decision-row small { grid-column: 1 / -1; opacity: .65; text-align: right; }
 #scene-reader-dialog #sr-profile-status { display: grid; gap: 8px; }
+#scene-reader-dialog .sr-active-dashboard { border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 45%, var(--SmartThemeBorderColor)); }
 #scene-reader-dialog #sr-profile-status > div { display: grid; gap: 3px; }
 #scene-reader-dialog .sr-roll-card { padding: 9px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); border-radius: 9px; background: rgba(0,0,0,.14); }
 #scene-reader-dialog .sr-roll-card span { font-size: .88rem; line-height: 1.4; }

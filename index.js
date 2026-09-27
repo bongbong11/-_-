@@ -81,9 +81,11 @@ const FALLBACKS = {
     unresolved: 'unclear',
     time_relation: 'unclear',
     event_state: 'none',
+    event_valence: 'neutral',
     event_blocker: 'none',
     resolution_readiness: 'none',
     npc_presence: 'none',
+    npc_valence: 'neutral',
     npc_role: 'none',
     npc_weight: 'none',
     npc_knowledge: 'none',
@@ -123,9 +125,11 @@ const THRESHOLDS = {
     unresolved: 0.52,
     time_relation: 0.58,
     event_state: 0.55,
+    event_valence: 0.55,
     event_blocker: 0.55,
     resolution_readiness: 0.60,
     npc_presence: 0.55,
+    npc_valence: 0.55,
     npc_role: 0.64,
     npc_weight: 0.64,
     npc_knowledge: 0.66,
@@ -837,13 +841,13 @@ function decisionTitle(key) {
     const user = context.name1 || '유저';
     const character = context.name2 || '캐릭터';
     return {
-        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', event_state: '현재 중심 사건 단계', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 진행을 유저에게 넘김`, action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성',
+        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 진행을 유저에게 넘김`, action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성',
     }[key] || key;
 }
 
 const RESULT_GROUPS = {
     'sr-scene-relation': ['scene_state', 'conversation_tone', 'time_relation', 'response_cadence', 'continuity_change', 'ambiguity', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
-    'sr-event-npc': ['primary_focus', 'event_state', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
+    'sr-event-npc': ['primary_focus', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
     'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
 };
 
@@ -881,12 +885,22 @@ function renderJudgment() {
         || ['partial', 'missed'].includes(d.directive_followthrough)
         || ['partial', 'missed'].includes(d.npc_followthrough);
     const appliedCorrections = Number(hasPrimaryCorrection) + Number(d.npc_knowledge_fit === 'overreach');
-    const npcText = ['create', 'reuse'].includes(d.npc_route) ? `${resultLabel('npc_route', d.npc_route)} · ${resultLabel('npc_weight', d.npc_weight)}` : '미사용';
+    const npcText = ['create', 'reuse'].includes(d.npc_route) ? `${resultLabel('npc_route', d.npc_route)} · ${resultLabel('npc_weight', d.npc_weight)} · ${resultLabel('npc_valence', d.npc_valence)}` : '미사용';
+    const conflictApplied = [];
+    if (d.negative_priority === 'on') conflictApplied.push('부정 편향 우선');
+    if (d.fight_sustain === 'yes') conflictApplied.push('싸움 유지');
+    if (['create', 'continue'].includes(d.villain_route)) conflictApplied.push(`빌런 ${resultLabel('villain_route', d.villain_route)}`);
+    if (d.npc_autonomy === 'yes') conflictApplied.push('갈등 NPC');
+    if (d.world_hostility === 'yes') conflictApplied.push('세계 적대성');
+    if (d.npc_guard === 'yes') conflictApplied.push('NPC 특별취급 방지');
+    if (d.misfortune === 'yes') conflictApplied.push('유저 불운');
+    if (record()?.preferences?.privatePromptEnabled && ownerPrompt()) conflictApplied.push('제작자 전용');
     summary.innerHTML = [
         ['주요 초점', resultLabel('primary_focus', d.primary_focus)],
         ['관계', `${resultLabel('relationship_pacing', d.relationship_pacing)}${d.relationship_beat && d.relationship_beat !== 'none' ? ` · ${resultLabel('relationship_beat', d.relationship_beat)}` : ''}`],
-        ['사건', `${resultLabel('progression_move', d.progression_move)} · ${resultLabel('resolution_pacing', d.resolution_pacing)}`],
+        ['사건', `${resultLabel('progression_move', d.progression_move)} · ${resultLabel('resolution_pacing', d.resolution_pacing)} · ${resultLabel('event_valence', d.event_valence)}`],
         ['NPC', npcText],
+        ['갈등용', conflictApplied.length ? conflictApplied.join(' · ') : '미적용'],
         ['서술 호흡', resultLabel('response_cadence', d.response_cadence)],
         ['실행 교정', correctionIssues ? `${correctionIssues}개 감지 · ${appliedCorrections}개 우선 적용` : '문제 없음'],
     ].map(([name, value]) => `<div class="sr-summary-item"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
@@ -901,13 +915,21 @@ function renderProfiles() {
     const root = document.getElementById('sr-profile-status');
     if (!root) return;
     const rec = record();
+    const decisions = rec?.lastJudgment?.decisions || {};
     const rows = [];
     const phaseLabels = { introduced: '도입', active: '진행 중', turning: '전환점', aftermath: '해결 후 여파' };
-    if (rec?.eventProfile) rows.push(`<div class="sr-roll-card"><strong>현재 중심 사건 · ${escapeHtml(rec.eventProfile.title)}</strong><span>계기: ${escapeHtml(rec.eventProfile.trigger)}</span><span>목표: ${escapeHtml(rec.eventProfile.goal)}</span><span>압박: ${escapeHtml(rec.eventProfile.pressure)}</span><span>해결 조건: ${escapeHtml(rec.eventProfile.resolution)}</span><span>현재 단계: ${escapeHtml(phaseLabels[rec.eventProfile.phase] || rec.eventProfile.phase)}</span></div>`);
+    const eventRouteLabels = { create: '이번 턴 새로 도입', continue: '이번 턴 진행', waiting: '추첨 대기', none: '저장만 유지', retire: '종료', replace: '교체' };
+    const npcRouteLabels = { create: '이번 턴 새로 등장', reuse: '이번 턴 행동', background: '배경 유지', waiting: '추첨 대기', none: '저장만 유지', retire: '종료', replace: '교체' };
+    const villainRouteLabels = { create: '이번 턴 새로 등장', continue: '이번 턴 행동', waiting: '추첨 대기', none: '저장만 유지', retire: '종료', replace: '교체' };
+    const eventDirection = resultLabel('event_valence', decisions.event_valence || 'neutral');
+    const npcDirection = resultLabel('npc_valence', decisions.npc_valence || 'neutral');
+    if (rec?.eventProfile) rows.push(`<div class="sr-roll-card"><strong>현재 중심 사건 · ${escapeHtml(rec.eventProfile.title)}</strong><span>상태: ${escapeHtml(eventRouteLabels[decisions.event_route] || '저장만 유지')} · 방향: ${escapeHtml(eventDirection)}</span><span>계기: ${escapeHtml(rec.eventProfile.trigger)}</span><span>목표: ${escapeHtml(rec.eventProfile.goal)}</span><span>압박: ${escapeHtml(rec.eventProfile.pressure)}</span><span>해결 조건: ${escapeHtml(rec.eventProfile.resolution)}</span><span>현재 단계: ${escapeHtml(phaseLabels[rec.eventProfile.phase] || rec.eventProfile.phase)}</span></div>`);
+    else if (decisions.event_state && decisions.event_state !== 'none') rows.push(`<div class="sr-roll-card"><strong>현재 장면 사건 · 확장 추첨 외</strong><span>상태: ${escapeHtml(eventRouteLabels[decisions.event_route] || '장면에서 감지')} · 방향: ${escapeHtml(eventDirection)}</span><span>현재 단계: ${escapeHtml(resultLabel('event_state', decisions.event_state))}</span></div>`);
     else if (rec?.lastEventRoll) rows.push('<div class="sr-roll-card"><strong>새 사건</strong><span>이번 적합한 계기의 추첨은 통과하지 않아 다음 장면 기회를 기다립니다.</span></div>');
-    if (rec?.villainProfile) rows.push(`<div class="sr-roll-card"><strong>현재 빌런</strong><span>동기: ${escapeHtml(rec.villainProfile.motive)}</span><span>수단: ${escapeHtml(rec.villainProfile.method)}</span><span>접근: ${escapeHtml(rec.villainProfile.access)}</span><span>영향력: ${escapeHtml(rec.villainProfile.leverage)}</span><span>능력: ${escapeHtml(rec.villainProfile.competence)}</span></div>`);
+    if (rec?.villainProfile) rows.push(`<div class="sr-roll-card"><strong>현재 빌런 · 부정</strong><span>상태: ${escapeHtml(villainRouteLabels[decisions.villain_route] || '저장만 유지')}</span><span>동기: ${escapeHtml(rec.villainProfile.motive)}</span><span>수단: ${escapeHtml(rec.villainProfile.method)}</span><span>접근: ${escapeHtml(rec.villainProfile.access)}</span><span>영향력: ${escapeHtml(rec.villainProfile.leverage)}</span><span>능력: ${escapeHtml(rec.villainProfile.competence)}</span></div>`);
     else if (rec?.lastVillainRoll) rows.push('<div class="sr-roll-card"><strong>새 빌런</strong><span>이번 적합한 계기의 추첨은 통과하지 않아 다음 장면 기회를 기다립니다.</span></div>');
-    if (rec?.npcProfile) rows.push(`<div class="sr-roll-card"><strong>현재 일반 NPC · ${escapeHtml(rec.npcProfile.role)}</strong><span>목적: ${escapeHtml(rec.npcProfile.aim)}</span><span>이해관계: ${escapeHtml(rec.npcProfile.stake || '현재 목적과 연결')}</span><span>제약: ${escapeHtml(rec.npcProfile.constraint || '설정된 능력과 접근 범위')}</span><span>기능: ${escapeHtml(rec.npcProfile.contribution)}</span><span>입장 변화 조건: ${escapeHtml(rec.npcProfile.turningCondition || '구체적인 장면 원인 필요')}</span><span>신뢰성: ${escapeHtml(rec.npcProfile.reliability)}</span><span>현재 상태: ${escapeHtml(rec.npcProfile.status)}</span></div>`);
+    if (rec?.npcProfile) rows.push(`<div class="sr-roll-card"><strong>현재 일반 NPC · ${escapeHtml(rec.npcProfile.role)} · ${escapeHtml(npcDirection)}</strong><span>상태: ${escapeHtml(npcRouteLabels[decisions.npc_route] || rec.npcProfile.status || '저장만 유지')} · 갈등 NPC 지시: ${decisions.npc_autonomy === 'yes' ? '적용' : '미적용'}</span><span>목적: ${escapeHtml(rec.npcProfile.aim)}</span><span>이해관계: ${escapeHtml(rec.npcProfile.stake || '현재 목적과 연결')}</span><span>제약: ${escapeHtml(rec.npcProfile.constraint || '설정된 능력과 접근 범위')}</span><span>기능: ${escapeHtml(rec.npcProfile.contribution)}</span><span>입장 변화 조건: ${escapeHtml(rec.npcProfile.turningCondition || '구체적인 장면 원인 필요')}</span><span>신뢰성: ${escapeHtml(rec.npcProfile.reliability)}</span></div>`);
+    else if (['present', 'entering', 'multiple'].includes(decisions.npc_presence)) rows.push(`<div class="sr-roll-card"><strong>현재 장면 NPC · ${escapeHtml(npcDirection)}</strong><span>상태: ${escapeHtml(npcRouteLabels[decisions.npc_route] || '장면 참여')} · 갈등 NPC 지시: ${decisions.npc_autonomy === 'yes' ? '적용' : '미적용'}</span><span>확장이 새로 추첨한 인물이 아니라 현재 채팅에 이미 존재하는 NPC입니다.</span></div>`);
     else if (rec?.lastNpcRoll) rows.push('<div class="sr-roll-card"><strong>새 일반 NPC</strong><span>이번 적합한 계기의 추첨은 통과하지 않아 다음 장면 기회를 기다립니다.</span></div>');
     root.innerHTML = rows.length ? rows.join('') : '<div class="sr-empty-small">저장된 사건·인물 추첨 결과 없음</div>';
 }
@@ -1230,8 +1252,9 @@ function createDialog() {
                     <section class="sr-control-card"><label for="sr-event-chance">새 사건 발생 확률</label><select id="sr-event-chance" class="text_pole"><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="35">35%</option><option value="50">50%</option><option value="100">100% · 다음 적합한 기회에 확정</option></select><p class="sr-help">Jev가 새 중심 사건을 넣어도 된다고 판정한 적합한 계기마다 한 번만 굴립니다. 같은 장면에서 실패 추첨을 반복하지 않습니다.</p></section>
                     <div class="sr-run-row"><div id="sr-live-status">판독 대기</div><button id="sr-run" class="menu_button"><i class="fa-solid fa-bolt"></i> 지금 판독</button></div>
                     <section class="sr-summary-card"><h3>이번 턴 최종 적용</h3><div id="sr-turn-summary" class="sr-summary-grid"></div></section>
+                    <section class="sr-summary-card sr-active-dashboard"><h3>현재 사건·인물 현황</h3><p class="sr-criteria-note">추첨·감지된 항목의 이번 턴 실행 여부와 긍정·부정 방향을 항상 표시합니다.</p><div id="sr-profile-status"></div></section>
                     <details class="sr-details"><summary><span>장면·관계 판독</span><small id="sr-caption-scene">판독 대기</small></summary><div id="sr-scene-relation"></div></details>
-                    <details class="sr-details"><summary><span>사건·NPC 진행</span><small id="sr-caption-event">판독 대기</small></summary><div id="sr-event-npc"></div><div class="sr-section-divider">현재 사건·인물 추첨</div><div id="sr-profile-status"></div></details>
+                    <details class="sr-details"><summary><span>사건·NPC 진행</span><small id="sr-caption-event">판독 대기</small></summary><div id="sr-event-npc"></div></details>
                     <details class="sr-details"><summary><span>갈등·실행 점검</span><small id="sr-caption-quality">판독 대기</small></summary><div id="sr-conflict-quality"></div></details>
                     <details class="sr-details"><summary><span>저장 상태·실제 주입문</span><small>채팅방별 기록</small></summary><p class="sr-criteria-note">의미 있는 관계 변화와 완료·보관된 사건만 누적하며, 아래에는 이번 응답의 실제 주입문만 표시합니다.</p><div id="sr-stored-state"></div><div class="sr-section-divider">실제 주입문</div><pre id="sr-prompt-preview" class="sr-preview"></pre></details>
                 </div>

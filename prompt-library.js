@@ -51,9 +51,11 @@ export const DECISION_LABELS = {
     unresolved: { none: '뚜렷한 미해결 없음', relationship: '관계 문제', conflict: '갈등', goal: '목표·행동', information: '정보·비밀', danger: '위협·위기', multiple: '여러 요소', unclear: '불명확' },
     time_relation: { first_scene: '비교할 이전 장면 없음', immediate: '직전 장면에서 즉시 연속', minutes: '수분~수십 분 후', hours: '몇 시간 후', next_day: '다음날', days: '며칠 후', weeks_months: '수주~수개월 후', unclear: '실제로 판별 불가' },
     event_state: { none: '진행 중인 중심 사건 없음', introduced: '사건 도입', active: '사건 진행 중', turning: '전환점', resolution_ready: '해결 조건 마련됨', aftermath: '해결 후 여파' },
+    event_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립' },
     event_blocker: { none: '뚜렷한 방해 없음', information: '정보·단서 부족', action: '실제 행동 필요', choice: '결정·선택 필요', resource: '시간·자원 부족', resistance: '인물·세력의 저항', external: '외부 방해' },
     resolution_readiness: { none: '해결 근거 없음', partial: '일부 조건 충족', core: '핵심 조건 충족', decisive: '결정적 행동 실행됨' },
     npc_presence: { none: '활성 NPC 없음', mentioned: '언급만 됨', present: 'NPC가 장면에 참여 중', entering: 'NPC의 등장·접촉이 확정됨', multiple: '여러 NPC가 참여 중' },
+    npc_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립' },
     hesitation_drag: { no: '과도한 망설임 없음', yes: '망설임이 진행을 방해함' },
     refusal_stall: { no: '거절이 서술을 막지 않음', yes: '거절 반복으로 상호작용 정체' },
     circularity: { no: '의미 있는 새 내용 있음', yes: '같은 내용이 반복됨' },
@@ -468,6 +470,11 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             instructions: 'Classify the primary plot event, task, mystery, danger, negotiation, or practical problem currently in focus. A relationship conversation alone is not a plot event unless it has a concrete external objective or consequence.',
             criteria: { none: 'No primary event is active.', introduced: 'A concrete problem, objective, or question has just been established.', active: 'Participants are actively pursuing or confronting an established event.', turning: 'A discovery, loss, choice, or reversal has materially changed the event.', resolution_ready: 'The core information, access, choice, or action needed for resolution is now available.', aftermath: 'The central matter is resolved and its consequences are currently being handled.' },
         },
+        event_valence: {
+            type: 'choice',
+            instructions: 'Classify the current primary event by its immediate practical direction in the scene, not by genre mood or whether the writing is pleasant. Consider concrete opportunity, relief, success, danger, loss, obstruction, and cost. If no primary event is active, select neutral.',
+            criteria: { positive: 'The event currently provides a concrete benefit, opportunity, relief, recovery, useful success, or favorable opening.', negative: 'The event currently imposes danger, loss, harm, pressure, obstruction, worsening conditions, or an adverse consequence.', mixed: 'The event currently carries both a concrete benefit and a concrete adverse cost or threat.', neutral: 'No active primary event exists, or its current practical direction is neither favorable nor adverse.' },
+        },
         event_blocker: {
             type: 'choice',
             instructions: 'Identify the main thing preventing the current event from advancing or resolving. Select none when no active event exists or no material blocker remains.',
@@ -482,6 +489,11 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             type: 'choice',
             instructions: 'Classify whether any non-user, non-primary-character NPC is participating or concretely entering the immediate scene. Distinguish mere mention from presence.',
             criteria: { none: 'No NPC is present, entering, or materially mentioned.', mentioned: 'An NPC is only mentioned, remembered, or offstage with no current entry or action.', present: 'One NPC is currently participating.', entering: 'An NPC contact, arrival, summons, or intervention is concretely underway.', multiple: 'Two or more NPCs are currently participating or entering.' },
+        },
+        npc_valence: {
+            type: 'choice',
+            instructions: 'Classify the immediate practical direction of the participating or entering NPCs. Judge their current conduct and effect, not whether they are morally good or likable. When different NPCs pull in opposite directions, select mixed. If no NPC is active, select neutral.',
+            criteria: { positive: 'The relevant NPCs currently provide concrete help, protection, cooperation, access, useful information, or a favorable opportunity.', negative: 'The relevant NPCs currently obstruct, exploit, threaten, harm, deceive, pressure, or impose an adverse consequence.', mixed: 'One NPC or several NPCs currently produce both favorable and adverse effects.', neutral: 'No NPC is active, or the NPC is presently independent/background without a material favorable or adverse effect.' },
         },
         npc_knowledge_fit: {
             type: 'choice',
