@@ -64,6 +64,10 @@
 #scene-reader-dialog .sr-preview { min-height: 180px; max-height: 380px; margin: 8px 0 0; padding: 11px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; background: rgba(0,0,0,.25); border-radius: 9px; font: inherit; font-size: .84rem; line-height: 1.5; }
 #scene-reader-dialog .sr-settings-card { display: grid; gap: 8px; }
 #scene-reader-dialog [hidden] { display: none !important; }
+#scene-reader-dialog details.sr-owner-details { display: block; }
+#scene-reader-dialog .sr-owner-details > summary { min-height: 28px; cursor: pointer; font-weight: 700; }
+#scene-reader-dialog .sr-owner-details:not([open]) > .sr-owner-body { display: none; }
+#scene-reader-dialog .sr-owner-body { display: grid; gap: 8px; padding-top: 12px; }
 #scene-reader-dialog .sr-owner-unlock-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 #scene-reader-dialog .sr-owner-unlock-row .menu_button { min-width: 96px; }
 #scene-reader-dialog #sr-owner-prompt { width: 100%; min-height: 150px; resize: vertical; }
