@@ -78,7 +78,7 @@ export const DECISION_LABELS = {
     npc_route: { none: '미적용', waiting: '확률 추첨 대기', reuse: '기존 NPC 행동·재등장', create: '새 일반 NPC 생성', background: 'NPC를 배경으로 전환', retire: '기존 NPC 종료', replace: '기존 NPC 교체 추첨' },
     npc_role: { none: '역할 없음', participant: '사건 당사자', witness: '목격자', information: '정보 보유자', support: '도움·자원 제공자', gatekeeper: '접근 통제자', opposition: '방해·반대 인물', mediator: '중재자', authority: '권한 행사자', exploiter: '갈등 이용자', consequence: '결과 전달자', protector: '보호·구조 인물', self_directed: '자기 목적 추구자' },
     npc_weight: { none: '미적용', background: '배경 유지', brief: '짧은 반응', supporting: '보조 역할', primary: '이번 턴 주요 역할', exit: '퇴장·후퇴' },
-    npc_knowledge: { none: '관련 지식 없음', direct: '직접 경험한 정보', reported: '전달받은 정보', role_based: '직업·지위 기반 정보', public: '공개·일반 정보', partial: '부분적·오인 포함', privileged: '근거 있는 내부 정보' },
+    npc_knowledge: { none: '관련 지식 없음', direct: '직접 경험한 정보', reported: '전달받은 정보', role_based: '직업·지위 기반 정보', public: '공개·일반 정보', partial: '관찰 단서 기반 제한 추론', privileged: '근거 있는 내부 정보' },
     npc_disclosure: { none: '정보 사용 없음', open: '솔직히 공개', selective: '필요한 만큼 공개', conditional: '조건·대가 요구', withhold: '자기 이유로 숨김', distort: '근거 있는 왜곡', uncertain: '불확실성을 구분함' },
     npc_followthrough: { not_applicable: '직전 NPC 지시 없음', fulfilled: 'NPC 지시 이행됨', partial: 'NPC 지시 일부만 이행', missed: 'NPC 지시 미이행' },
     npc_knowledge_fit: { not_applicable: '판정할 NPC 지식 없음', fit: '지식 범위가 타당함', overreach: '알 수 없는 정보를 사용함' },
@@ -135,7 +135,7 @@ const EXECUTION_CORRECTIONS = {
 };
 export const EXECUTION_CORRECTION_PRIORITY = ['scene_cutoff', 'action_evasion', 'user_handoff', 'circularity', 'refusal_stall', 'hesitation_drag'];
 
-const NPC_COMMON_PROMPT = 'Keep active NPCs consistent and self-directed: let the relevant NPC speak, choose, or act from established motives, knowledge, and immediate stakes—not merely answer {{user}}, deliver exposition, or wait—and do not replace {{char}} or take over unrelated parts of the scene.';
+const NPC_COMMON_PROMPT = 'Keep active NPCs consistent and self-directed: let the relevant NPC speak, choose, or act from established motives, knowledge, and immediate stakes—not merely answer {{user}}, deliver exposition, or wait—and do not replace {{char}} or take over unrelated parts of the scene. Suspicion, intuition, body-language reading, coincidence, and genre convention do not grant hidden knowledge: infer only broad surface states from cues this NPC actually observed, never an unavailable fact, cause, relationship, motive, plan, or location.';
 
 const NPC_ROLE_PROMPTS = {
     participant: 'Let the NPC act as a directly affected participant with something concrete to gain, lose, decide, or protect.',
@@ -161,12 +161,12 @@ const NPC_WEIGHT_PROMPTS = {
 };
 
 const NPC_KNOWLEDGE_PROMPTS = {
-    none: 'The NPC lacks relevant knowledge; do not use them for exposition or a convenient solution.',
+    none: 'The NPC lacks relevant knowledge; they may react to observable conduct but must not infer the relevant hidden state or supply exposition or a convenient solution.',
     direct: 'Use only facts the NPC directly witnessed or experienced.',
     reported: 'Use only what the NPC was explicitly told, including the source\'s omissions and possible errors.',
     role_based: 'Use only knowledge plausibly available through the NPC\'s established profession, position, affiliation, or access.',
     public: 'Limit the NPC to public, ordinary, or locally observable information.',
-    partial: 'Keep the NPC\'s understanding incomplete, including a specific missing context, mistake, or uncertain inference.',
+    partial: 'Allow only a broad, uncertain surface inference from cues this NPC actually observed. Keep multiple explanations open; do not let a guess identify the unavailable truth, its cause, participants, motive, plan, or location.',
     privileged: 'Use private or internal information only when established access supports it; do not invent secret access to advance the plot.',
 };
 
@@ -497,8 +497,8 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         },
         npc_knowledge_fit: {
             type: 'choice',
-            instructions: 'Judge whether participating NPCs used only information plausibly available through witnessed events, explicit reports, public facts, or established role and access.',
-            criteria: { not_applicable: 'No participating NPC used relevant information.', fit: 'The NPC knowledge is plausibly available or uncertainty is preserved.', overreach: 'An NPC uses private thoughts, offscreen facts, narration, or conclusions without established access.' },
+            instructions: 'Judge whether participating NPCs used only information available through witnessed events, explicit reports, public facts, or established role and access. Uncertainty wording, intuition, suspicion, body-language reading, coincidence, and genre convention do not excuse a conclusion whose content depends on private, offscreen, or narrator-only information.',
+            criteria: { not_applicable: 'No participating NPC used relevant information.', fit: 'The information has an established source; any inference stays broad and follows only from cues that NPC actually observed.', overreach: 'The NPC states or correctly guesses an unavailable fact, cause, relationship, motive, plan, location, or private thought. If removing inaccessible narration would make the conclusion impossible, it is overreach even when phrased as a hunch or uncertainty.' },
         },
         hesitation_drag: {
             type: 'choice',
@@ -696,8 +696,8 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     };
     questions.npc_knowledge = {
         type: 'choice',
-        instructions: 'Choose the narrowest knowledge source the active NPC may rely on now. Never grant narration, private thoughts, or offscreen facts without established access.',
-        criteria: { none: 'The NPC lacks relevant knowledge.', direct: 'Only directly witnessed or experienced facts are available.', reported: 'The NPC relies on an explicit report and inherits its omissions or errors.', role_based: 'Relevant knowledge follows from established profession, position, affiliation, or access.', public: 'Only public, ordinary, or locally observable information is available.', partial: 'The NPC has incomplete context or a plausible mistaken inference.', privileged: 'Private or internal information is available through explicitly established access.' },
+        instructions: 'Choose the narrowest established knowledge source the active NPC may rely on now. Never grant narration, private thoughts, or offscreen facts without established access. A hunch may describe only a broad surface state supported by cues this NPC observed; it may not correctly identify the hidden truth.',
+        criteria: { none: 'The NPC lacks relevant knowledge and may not infer the relevant hidden state.', direct: 'Only directly witnessed or experienced facts are available.', reported: 'The NPC relies on an explicit report and inherits its omissions or errors.', role_based: 'Relevant knowledge follows from established profession, position, affiliation, or access.', public: 'Only public, ordinary, or locally observable information is available.', partial: 'Observed cues support only a broad uncertain impression, with multiple explanations left open and no identification of the hidden fact.', privileged: 'Private or internal information is available through explicitly established access.' },
     };
     questions.npc_disclosure = {
         type: 'choice',
@@ -766,7 +766,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     const corrections = selectedCorrection ? [EXECUTION_CORRECTIONS[selectedCorrection]] : [];
     if (!corrections.length && ['partial', 'missed'].includes(decisions.directive_followthrough)) corrections.push('Carry out the highest-priority unfulfilled relationship, event, conflict, NPC, or execution route from the prior response through one concrete action, fact, choice, or consequence now. Do not merely restate the intended development.');
     if (!corrections.length && ['partial', 'missed'].includes(decisions.npc_followthrough)) corrections.push('Carry out the selected NPC function now through one concrete NPC-driven statement, decision, action, condition, or consequence; do not replace it with passive observation, exposition, or another question.');
-    if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Restrict NPC knowledge to established experience, reports, public facts, role, and access; do not give them narration, private thoughts, offscreen facts, or unsupported conclusions.');
+    if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
 
     const relationshipMoves = {

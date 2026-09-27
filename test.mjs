@@ -16,7 +16,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.6.4');
+assert.equal(manifest.version, '0.6.5');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -183,8 +183,19 @@ const npcPayload = buildInjection({
 });
 assert.match(npcPayload, /<NPC_SCENE_EXECUTION role="witness" weight="supporting" knowledge="partial" disclosure="selective">/);
 assert.match(npcPayload, /Keep active NPCs consistent and self-directed/);
-assert.match(npcPayload, /understanding incomplete/);
+assert.match(npcPayload, /do not grant hidden knowledge/);
+assert.match(npcPayload, /multiple explanations open/);
 assert.match(npcPayload, /Reveal only the portion/);
+
+const npcOverreachPayload = buildInjection({
+    settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', negativePriority: false, progressionMode: 'investigation', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', socialEnabled: false, worldHostility: false, npcToUser: false, userMisfortune: false },
+    decisions: { response_cadence: 'natural', primary_focus: 'event', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'active', event_route: 'none', progression_move: 'advance', resolution_pacing: 'continue', npc_route: 'none', npc_knowledge_fit: 'overreach', villain_route: 'none', fight_sustain: 'no' },
+    villainProfile: null,
+    npcProfile: null,
+    eventProfile: null,
+});
+assert.match(npcOverreachPayload, /Remove the NPC's leaked conclusion/);
+assert.match(npcOverreachPayload, /hunch, suspicion, intuition/);
 
 assert.equal(plugin.info.id, 'scene-reader-jev');
 const routes = {};
