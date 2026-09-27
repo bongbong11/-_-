@@ -18,7 +18,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.7.2');
+assert.equal(manifest.version, '0.7.3');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -78,6 +78,8 @@ assert.match(source, /id="sr-owner-card"/);
 assert.match(source, /<details id="sr-owner-card"/);
 assert.match(source, /OWNER_PASSWORD_HASH/);
 assert.match(source, /OWNER_PROMPT_STORAGE/);
+assert.match(source, /ownerUnlocked: false/);
+assert.match(source, /saveGlobal\('ownerUnlocked', true\)/);
 assert.doesNotMatch(source, /id="sr-depth"/);
 assert.doesNotMatch(source, /injectionDepth/);
 assert.match(source, /setExtensionPrompt\(INJECT_KEY, macroMode \? '' : payload, IN_CHAT, 0, false, SYSTEM_ROLE\)/);

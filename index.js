@@ -48,7 +48,7 @@ const STATE_DB_STORE = 'chat-snapshots';
 const STATE_HISTORY_LIMIT = 12;
 const OWNER_UNLOCK_STORAGE = 'scene-reader-owner-unlocked-v1';
 const OWNER_PROMPT_STORAGE = 'scene-reader-owner-prompt-v1';
-const OWNER_PASSWORD_HASH = '39a7a9ab08547b5dcffc705379b90b3f01bfe725b5e14d7fb4ac78e06ab8cffb';
+const OWNER_PASSWORD_HASH = 'cb5ec39967a4c59c8b08b4396291761f404f51bcf23d42b4cff47011169feab2';
 
 const DEFAULTS = {
     enabled: true,
@@ -56,6 +56,7 @@ const DEFAULTS = {
     pauseOnOoc: true,
     recentTurns: 3,
     showConfidence: true,
+    ownerUnlocked: false,
 };
 
 const CHAT_DEFAULTS = {
@@ -258,6 +259,7 @@ async function clearStateHistory(chatKey = stateChatKey()) {
 }
 
 function ownerUnlocked() {
+    if (settings?.ownerUnlocked === true) return true;
     try { return localStorage.getItem(OWNER_UNLOCK_STORAGE) === 'yes'; }
     catch { return false; }
 }
@@ -1310,6 +1312,7 @@ function bindForm() {
             return;
         }
         localStorage.setItem(OWNER_UNLOCK_STORAGE, 'yes');
+        saveGlobal('ownerUnlocked', true);
         if (input) input.value = '';
         renderOwnerMode();
         window.toastr?.success?.('제작자 모드를 이 브라우저에서 열었습니다.', '씬판독기');
@@ -1530,7 +1533,7 @@ function createDialog() {
                 </div>
                 <div id="sr-tab-settings" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>기본 설정</h3><label class="checkbox_label"><input id="sr-enabled" type="checkbox"><span><strong>씬판독기 전체 사용</strong></span></label><p class="sr-help">끄면 Jev 판독, 기본 주입, 프리셋 매크로 출력을 모두 중단합니다.</p><label class="checkbox_label"><input id="sr-auto" type="checkbox"><span>생성 직전에 자동 판독</span></label><label class="checkbox_label"><input id="sr-pause-ooc" type="checkbox"><span><code>(OOC:</code>로 시작하는 입력에서는 판독·주입 일시정지</span></label><p class="sr-help">대소문자와 앞쪽 공백을 구분하지 않습니다. 감지된 생성에서는 Jev를 호출하지 않고 기존 주입도 비웁니다.</p><label class="checkbox_label"><input id="sr-confidence" type="checkbox"><span>화면에 확신도 표시</span></label><label for="sr-recent-turns">최근 채팅 범위</label><select id="sr-recent-turns" class="text_pole"><option value="1">최근 1턴</option><option value="2">최근 2턴</option><option value="3">최근 3턴</option><option value="4">최근 4턴</option><option value="5">최근 5턴</option></select><p class="sr-help">한 턴은 유저 입력에서 시작해 뒤따르는 캐릭터 출력까지입니다. 생성 직전에는 현재 유저 입력이 최신 미완성 턴으로 포함됩니다. 매우 긴 기록은 최신 내용을 우선해 자동으로 제한합니다.</p></section>
-                    <section class="sr-settings-card"><h3>제작자 모드</h3><label for="sr-owner-password">제작자 비밀번호</label><div class="sr-owner-unlock-row"><input id="sr-owner-password" class="text_pole" type="password" autocomplete="off" placeholder="비밀번호"><button id="sr-owner-unlock" class="menu_button">잠금 해제</button></div><div id="sr-owner-status" class="sr-key-status">잠금 상태</div><p class="sr-help">한 번 해제하면 이 브라우저에서 유지되며, 두 번째 탭에 로컬 전용 입력 영역이 나타납니다.</p></section>
+                    <section class="sr-settings-card"><h3>제작자 모드</h3><label for="sr-owner-password">제작자 비밀번호</label><div class="sr-owner-unlock-row"><input id="sr-owner-password" class="text_pole" type="password" autocomplete="off" placeholder="비밀번호"><button id="sr-owner-unlock" class="menu_button">잠금 해제</button></div><div id="sr-owner-status" class="sr-key-status">잠금 상태</div><p class="sr-help">한 번 해제하면 이 SillyTavern 설치의 확장 설정에 유지되며, 갈등용 진행 탭에 로컬 전용 입력 영역이 나타납니다.</p></section>
                     <section class="sr-settings-card"><h3>주입 위치</h3><label for="sr-injection-mode">1. 기본 판정·전개 주입</label><select id="sr-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader}}</code><button id="sr-copy-macro" class="menu_button">복사</button></div><label for="sr-world-injection-mode">2. 세계관 전문 주입</label><select id="sr-world-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader-world}}</code><button id="sr-copy-world-macro" class="menu_button">복사</button></div><p class="sr-help">각 매크로 방식은 기본 위치와 중복 주입하지 않습니다. 세계관 전문은 Jev 판독 요청에 보내지 않고 최종 프리셋에만 넣습니다.</p><div id="sr-macro-status" class="sr-key-status"></div></section>
                     <section class="sr-settings-card"><h3>Jev API</h3><p class="sr-help">공식 TypeSafe Jev 주소와 <code>jev-latest</code>는 동봉 서버 플러그인에 고정되어 있습니다. 화면에는 키만 입력합니다.</p><label for="sr-jev-key">API 키</label><div class="sr-key-row"><input id="sr-jev-key" class="text_pole" type="password" autocomplete="new-password" placeholder="새 키 입력 (빈 값 저장 시 삭제)"><button id="sr-jev-toggle" class="menu_button" aria-label="키 표시 전환"><i class="fa-solid fa-eye"></i></button></div><div id="sr-jev-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-jev-save" class="menu_button">키 저장</button><button id="sr-jev-test" class="menu_button">연결 확인</button></div></section>
                     <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>

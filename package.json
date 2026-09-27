@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-scene-reader",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "private": true,
   "type": "module",
   "main": "server-plugin/index.cjs",
