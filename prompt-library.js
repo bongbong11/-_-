@@ -380,6 +380,7 @@ export function rollVillainProfile(random = Math.random) {
 
 export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {}, previousRoutes = {} }) {
     const progressionMode = preferences.advancedEnabled ? 'off' : preferences.progressionMode;
+    const newEventEnabled = preferences.advancedEnabled || progressionMode !== 'off';
     const posture = {
         conservative: 'Require direct, explicit evidence. Use unclear when the recent exchange does not establish the answer reliably.',
         balanced: 'Choose the most likely supported state from the recent exchange. Use unclear only when evidence is insufficient or materially contradictory.',
@@ -638,7 +639,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             event: 'The established primary event should receive the main action, clue, obstacle, result, or resolution.',
             conflict: 'An actual active confrontation or immediate threat requires execution.',
             npc: 'An established or concretely entering NPC or antagonist should make the main move.',
-            new_event: progressionMode === 'off' ? 'Do not select: automatic RP progression is disabled.' : 'No stronger unfinished focus exists and one new genre-compatible event can enter without disrupting the scene.',
+            new_event: newEventEnabled ? 'No stronger unfinished focus exists and one new event compatible with the selected world and progression controls can enter without disrupting the scene.' : 'Do not select: automatic RP progression is disabled.',
             transition: 'The active beat has a natural handoff into another time, place, or phase.',
         },
     };
@@ -724,6 +725,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         hasEvent,
         worldHint: preferences.worldHint || '',
         eventTitle: preferences.advancedEventTitle || '',
+        eventElement: preferences.advancedEventElement || '',
     }));
     return questions;
 }

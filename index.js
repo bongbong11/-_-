@@ -517,7 +517,12 @@ function coordinateDecisions(rec, details, decisions) {
         if (!['latent', 'open'].includes(decisions.advanced_entry)) overrideDecision(details, decisions, 'advanced_route', 'none', '고급 전개 진입 근거 없음');
         if (rec.eventProfile?.source === 'advanced' && decisions.advanced_route === 'create') overrideDecision(details, decisions, 'advanced_route', 'continue', '저장된 고급 사건 유지');
         if (!rec.eventProfile && decisions.advanced_route === 'continue') overrideDecision(details, decisions, 'advanced_route', 'none', '저장된 고급 사건 없음');
-        if (!rec.preferences.advancedElements.includes(decisions.advanced_element)) overrideDecision(details, decisions, 'advanced_element', 'none', '꺼진 고급 요소 제외');
+        if (decisions.advanced_route === 'create' && focus !== 'new_event') overrideDecision(details, decisions, 'advanced_route', 'none', '현재 응답의 주초점이 새 사건이 아님');
+        if (decisions.advanced_route === 'continue' && rec.eventProfile?.source === 'advanced' && ADVANCED_ELEMENTS[rec.eventProfile.element]) {
+            overrideDecision(details, decisions, 'advanced_element', rec.eventProfile.element, '진행 중인 사건의 기존 요소 유지');
+        } else if (decisions.advanced_route === 'create' && !rec.preferences.advancedElements.includes(decisions.advanced_element)) {
+            overrideDecision(details, decisions, 'advanced_element', 'none', '꺼진 고급 요소 제외');
+        }
         if (decisions.advanced_route === 'none') {
             for (const key of ['advanced_cause', 'advanced_element']) overrideDecision(details, decisions, key, 'none', '이번 응답 고급 전개 없음');
             overrideDecision(details, decisions, 'advanced_move', 'quiet', '이번 응답 고급 전개 없음');
@@ -879,7 +884,12 @@ async function runJudge({ force = false } = {}) {
     try { transcript = recentTranscript(); }
     catch (error) { updateActivity(error.message, { error: true }); throw error; }
     const world = selectedWorld(rec);
-    const questionPrefs = { ...prefs, worldHint: world?.hint || '', advancedEventTitle: rec.eventProfile?.title || '' };
+    const questionPrefs = {
+        ...prefs,
+        worldHint: world?.hint || '',
+        advancedEventTitle: rec.eventProfile?.title || '',
+        advancedEventElement: rec.eventProfile?.source === 'advanced' ? rec.eventProfile.element || '' : '',
+    };
     const questions = buildQuestions({
         preferences: questionPrefs,
         hasVillain: Boolean(rec.villainProfile),
@@ -1394,7 +1404,7 @@ function bindForm() {
         document.getElementById('sr-world-import-json').value = '';
     });
     document.getElementById('sr-world-import-cancel')?.addEventListener('click', showWorldList);
-    document.getElementById('sr-world-save')?.addEventListener('click', () => {
+    document.getElementById('sr-world-save')?.addEventListener('click', async () => {
         const name = String(document.getElementById('sr-world-edit-name')?.value || '').trim();
         const prompt = String(document.getElementById('sr-world-edit-prompt')?.value || '').trim();
         if (!name || !prompt) { window.toastr?.warning?.('세계관 이름과 전문을 입력하세요.', '씬판독기'); return; }
@@ -1405,6 +1415,7 @@ function bindForm() {
         const index = worlds.findIndex((world) => world.id === id);
         if (index >= 0) worlds[index] = next; else worlds.push(next);
         saveCustomWorlds(worlds);
+        if (preferences().selectedWorldId === id) await applyStoredInjection();
         showWorldList();
         window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
     });
@@ -1418,11 +1429,12 @@ function bindForm() {
     document.getElementById('sr-world-export')?.addEventListener('click', async () => {
         try { await copyText(JSON.stringify(loadCustomWorlds(), null, 2)); window.toastr?.success?.('저장 세계관 JSON을 복사했습니다.', '씬판독기'); } catch { window.toastr?.error?.('복사하지 못했습니다.', '씬판독기'); }
     });
-    document.getElementById('sr-world-import')?.addEventListener('click', () => {
+    document.getElementById('sr-world-import')?.addEventListener('click', async () => {
         try {
             const parsed = JSON.parse(String(document.getElementById('sr-world-import-json')?.value || ''));
             if (!Array.isArray(parsed) || parsed.some((item) => !item?.name || !item?.prompt)) throw new Error();
             saveCustomWorlds(parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || makeWorldHint(item.name, item.prompt)), prompt: String(item.prompt) })));
+            await applyStoredInjection();
             showWorldList(); window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
         } catch { window.toastr?.error?.('가져오기 JSON 형식을 확인하세요.', '씬판독기'); }
     });

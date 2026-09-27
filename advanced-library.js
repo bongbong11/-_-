@@ -196,7 +196,7 @@ export function rollAdvancedEntity(event, { random = Math.random, existing = [] 
     return { entity, reused: false };
 }
 
-export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHint = '', eventTitle = '' }) {
+export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHint = '', eventTitle = '', eventElement = '' }) {
     if (!preferences.advancedEnabled) return {};
     const enabled = Array.isArray(preferences.advancedElements) && preferences.advancedElements.length
         ? preferences.advancedElements.filter((key) => ADVANCED_ELEMENTS[key])
@@ -219,6 +219,9 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
     }[preferences.progressionMode] || 'Use the current scene and world without preferring a particular advanced element.';
     const elementCriteria = { none: 'No enabled element should be used in this response.' };
     for (const key of enabled) elementCriteria[key] = `${ADVANCED_ELEMENTS[key]} is the single best fit for the available causal route and current scene.`;
+    if (hasEvent && ADVANCED_ELEMENTS[eventElement] && !elementCriteria[eventElement]) {
+        elementCriteria[eventElement] = `${ADVANCED_ELEMENTS[eventElement]} is the stored primary event's fixed element; it may continue even if new events of this element are now disabled.`;
+    }
     return {
         advanced_entry: {
             type: 'choice',
@@ -253,7 +256,7 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         },
         advanced_element: {
             type: 'choice',
-            instructions: `Choose at most one enabled content element for the advanced route. The choice controls event material, not prose genre or preset atmosphere. The saved RP progression type is a soft routing preference, never a requirement: ${progressionBias}`,
+            instructions: `For a new event, choose at most one enabled content element. When continuing the stored event, keep its fixed element${hasEvent && ADVANCED_ELEMENTS[eventElement] ? ` (${ADVANCED_ELEMENTS[eventElement]})` : ''}. The choice controls event material, not prose genre or preset atmosphere. The saved RP progression type is a soft routing preference, never a requirement: ${progressionBias}`,
             criteria: elementCriteria,
         },
         advanced_move: {
