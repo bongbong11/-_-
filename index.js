@@ -21,15 +21,27 @@ import {
     rollVillainProfile,
     rollEventProfile,
 } from './prompt-library.js';
+import {
+    ADVANCED_STYLES,
+    ADVANCED_ELEMENTS,
+    ADVANCED_DEFAULT_ELEMENTS,
+    BUILTIN_WORLDS,
+    advancedChance,
+    rollAdvancedEvent,
+    rollAdvancedEntity,
+} from './advanced-library.js';
+import { allWorlds, loadCustomWorlds, saveCustomWorlds } from './world-library.js';
 
 const MODULE = 'sceneReader';
 const INJECT_KEY = 'scene-reader-router';
+const WORLD_INJECT_KEY = 'scene-reader-world';
 const IN_CHAT = 1;
 const SYSTEM_ROLE = 0;
 const JEV_KEY_STORAGE = 'sceneReader.jevApiKey';
 const JEV_API_URL = '/api/plugins/scene-reader-jev/systemone';
 const JEV_MODEL = 'jev-latest';
 const PROMPT_MACRO = 'scene-reader';
+const WORLD_PROMPT_MACRO = 'scene-reader-world';
 const MAX_TRANSCRIPT_CHARS = 18000;
 const STATE_DB_NAME = 'scene-reader-state';
 const STATE_DB_STORE = 'chat-snapshots';
@@ -53,6 +65,11 @@ const CHAT_DEFAULTS = {
     progressionMode: 'natural',
     judgmentStyle: 'balanced',
     injectionMode: 'depth',
+    worldInjectionMode: 'macro',
+    selectedWorldId: 'current',
+    advancedEnabled: false,
+    advancedStyle: 'balanced',
+    advancedElements: ADVANCED_DEFAULT_ELEMENTS,
     relationshipPace: 'medium',
     resolutionPace: 'medium',
     roleplayPace: 'medium',
@@ -109,6 +126,12 @@ const FALLBACKS = {
     directive_followthrough: 'not_applicable',
     scene_cutoff: 'no',
     response_cadence: 'natural',
+    input_echo: 'no',
+    advanced_entry: 'closed',
+    advanced_route: 'none',
+    advanced_cause: 'none',
+    advanced_element: 'none',
+    advanced_move: 'quiet',
 };
 
 const THRESHOLDS = {
@@ -153,6 +176,12 @@ const THRESHOLDS = {
     directive_followthrough: 0.65,
     scene_cutoff: 0.62,
     response_cadence: 0.58,
+    input_echo: 0.58,
+    advanced_entry: 0.62,
+    advanced_route: 0.70,
+    advanced_cause: 0.62,
+    advanced_element: 0.66,
+    advanced_move: 0.66,
 };
 
 const JUDGMENT_DELTAS = { conservative: 0.08, balanced: 0, active: -0.08 };
@@ -163,6 +192,7 @@ let dialog;
 let judgeInFlight = false;
 let macroAvailable = false;
 let activeMacroPayload = '';
+let activeWorldMacroPayload = '';
 let activityToast = null;
 let activityToastTimer = null;
 let stateDbPromise = null;
@@ -315,14 +345,22 @@ function record(create = false) {
     const value = chat_metadata[MODULE] || null;
     if (value && create) {
         const saved = value.preferences || {};
-        value.preferences = Object.fromEntries(Object.entries(CHAT_DEFAULTS).map(([key, fallback]) => [key, Object.hasOwn(saved, key) ? saved[key] : fallback]));
+        value.preferences = Object.fromEntries(Object.entries(CHAT_DEFAULTS).map(([key, fallback]) => [key, Object.hasOwn(saved, key) ? saved[key] : Array.isArray(fallback) ? [...fallback] : fallback]));
         if (!Object.hasOwn(saved, 'relationshipDirection')) value.preferences.relationshipDirection = saved.characterToUser ? 'hostile' : 'dynamic';
         value.pacingState ||= { relationship: { closer: 0, distant: 0, lastBeat: 'none' }, event: { qualifiedSteps: 0 } };
         value.relationshipState ||= { motion: 'none', trust: 'none', intimacy: 'none', romance: 'none', unresolved: 'none', lastBeat: 'none' };
         value.backgroundEvents ||= [];
+        value.advancedEntities ||= [];
         value.sceneOpportunity ||= 1;
     }
     return value;
+}
+
+function availableWorlds() { return allWorlds(BUILTIN_WORLDS, loadCustomWorlds()); }
+
+function selectedWorld(rec = record()) {
+    const worlds = availableWorlds();
+    return worlds.find((world) => world.id === rec?.preferences?.selectedWorldId) || worlds[0];
 }
 
 function preferences() {
@@ -462,9 +500,19 @@ function overrideDecision(details, decisions, key, value, reason = '') {
 
 function coordinateDecisions(rec, details, decisions) {
     let focus = decisions.primary_focus || 'direct';
-    if (rec.preferences.progressionMode === 'off' && focus === 'new_event') {
+    if (!rec.preferences.advancedEnabled && rec.preferences.progressionMode === 'off' && focus === 'new_event') {
         overrideDecision(details, decisions, 'primary_focus', 'direct', '자동 RP 진행 꺼짐');
         focus = 'direct';
+    }
+    if (rec.preferences.advancedEnabled) {
+        if (!['latent', 'open'].includes(decisions.advanced_entry)) overrideDecision(details, decisions, 'advanced_route', 'none', '고급 전개 진입 근거 없음');
+        if (rec.eventProfile?.source === 'advanced' && decisions.advanced_route === 'create') overrideDecision(details, decisions, 'advanced_route', 'continue', '저장된 고급 사건 유지');
+        if (!rec.eventProfile && decisions.advanced_route === 'continue') overrideDecision(details, decisions, 'advanced_route', 'none', '저장된 고급 사건 없음');
+        if (!rec.preferences.advancedElements.includes(decisions.advanced_element)) overrideDecision(details, decisions, 'advanced_element', 'none', '꺼진 고급 요소 제외');
+        if (decisions.advanced_route === 'none') {
+            for (const key of ['advanced_cause', 'advanced_element']) overrideDecision(details, decisions, key, 'none', '이번 응답 고급 전개 없음');
+            overrideDecision(details, decisions, 'advanced_move', 'quiet', '이번 응답 고급 전개 없음');
+        }
     }
     const relation = decisions.relationship_pacing || 'hold';
     const beat = decisions.relationship_beat || 'none';
@@ -545,6 +593,7 @@ function reversibleStateSnapshot(rec) {
         lastNpcRoll: rec.lastNpcRoll || null,
         lastVillainRoll: rec.lastVillainRoll || null,
         backgroundEvents: rec.backgroundEvents || [],
+        advancedEntities: rec.advancedEntities || [],
         sceneOpportunity: rec.sceneOpportunity || 1,
         lastOpportunityInput: rec.lastOpportunityInput || null,
         lastStateInput: rec.lastStateInput || null,
@@ -557,6 +606,51 @@ function restoreReversibleState(rec, snapshot) {
 }
 
 function prepareProfiles(rec, decisions, details) {
+    if (rec.preferences.advancedEnabled) {
+        decisions.event_route = 'none';
+        if (details.event_route) details.event_route.effective = 'none';
+        if (rec.eventProfile && rec.eventProfile.source !== 'advanced' && decisions.advanced_route === 'continue') {
+            const world = selectedWorld(rec);
+            rec.eventProfile.source = 'advanced';
+            rec.eventProfile.worldId = world.id;
+            rec.eventProfile.worldName = world.name;
+            rec.eventProfile.element = decisions.advanced_element !== 'none' ? decisions.advanced_element : 'objective';
+        }
+        if (decisions.advanced_route === 'create' && !rec.eventProfile) {
+            if (rec.lastEventRoll?.opportunity === rec.sceneOpportunity) {
+                overrideDecision(details, decisions, 'advanced_route', 'none', '같은 기회의 고급 사건 추첨 완료');
+                overrideDecision(details, decisions, 'advanced_cause', 'none', '고급 사건 추첨 대기');
+                overrideDecision(details, decisions, 'advanced_element', 'none', '고급 사건 추첨 대기');
+                overrideDecision(details, decisions, 'advanced_move', 'quiet', '고급 사건 추첨 대기');
+            } else {
+                const roll = 1 + Math.floor(Math.random() * 100);
+                const chance = advancedChance(rec.preferences.advancedStyle);
+                rec.lastEventRoll = { roll, chance, opportunity: rec.sceneOpportunity, advanced: true, at: new Date().toISOString() };
+                if (roll <= chance && decisions.advanced_element !== 'none') {
+                    const world = selectedWorld(rec);
+                    rec.eventProfile = rollAdvancedEvent(decisions.advanced_element, { worldId: world.id, worldName: world.name });
+                    const { entity, reused } = rollAdvancedEntity(rec.eventProfile, { existing: rec.advancedEntities });
+                    if (entity) {
+                        rec.eventProfile.entity = entity;
+                        rec.eventProfile.entityReused = reused;
+                        if (!reused && !['crowd'].includes(entity.form)) rec.advancedEntities = [entity, ...rec.advancedEntities].slice(0, 24);
+                    }
+                } else {
+                    overrideDecision(details, decisions, 'advanced_route', 'none', '고급 사건 확률 추첨 대기');
+                    overrideDecision(details, decisions, 'advanced_cause', 'none', '고급 사건 추첨 대기');
+                    overrideDecision(details, decisions, 'advanced_element', 'none', '고급 사건 추첨 대기');
+                    overrideDecision(details, decisions, 'advanced_move', 'quiet', '고급 사건 추첨 대기');
+                }
+            }
+        } else if (rec.eventProfile?.source === 'advanced' && decisions.advanced_route === 'continue') {
+            rec.eventProfile.status = 'active';
+        }
+    }
+    if (rec.preferences.advancedEnabled) return prepareConflictProfiles(rec, decisions, details);
+    return prepareStandardProfiles(rec, decisions, details);
+}
+
+function prepareStandardProfiles(rec, decisions, details) {
     if (decisions.event_route === 'retire') {
         archiveCurrentEvent(rec, 'completed');
         rec.eventProfile = null;
@@ -640,6 +734,23 @@ function prepareProfiles(rec, decisions, details) {
     if (decisions.npc_route === 'background' && rec.npcProfile) rec.npcProfile.status = 'background';
 }
 
+function prepareConflictProfiles(rec, decisions, details) {
+    if (decisions.villain_route === 'retire') { rec.villainProfile = null; rec.lastVillainRoll = null; }
+    if (decisions.villain_route === 'replace') { rec.villainProfile = null; rec.lastVillainRoll = null; decisions.villain_route = 'create'; }
+    if (decisions.villain_route === 'create') {
+        if (!rec.villainProfile) {
+            if (rec.lastVillainRoll?.opportunity === rec.sceneOpportunity) overrideDecision(details, decisions, 'villain_route', 'waiting', '같은 기회의 빌런 추첨 완료');
+            else {
+                const roll = 1 + Math.floor(Math.random() * 100);
+                rec.lastVillainRoll = { roll, chance: Number(rec.preferences.appearanceChance) || 10, opportunity: rec.sceneOpportunity, at: new Date().toISOString() };
+                if (roll <= rec.lastVillainRoll.chance) rec.villainProfile = { ...rollVillainProfile(), status: 'active', createdAt: new Date().toISOString() };
+                else overrideDecision(details, decisions, 'villain_route', 'waiting', '빌런 확률 추첨 대기');
+            }
+        } else decisions.villain_route = 'continue';
+    }
+    if (['create', 'replace'].includes(decisions.npc_route)) overrideDecision(details, decisions, 'npc_route', 'none', '고급 전개의 사건 인물 조립 사용');
+}
+
 async function commitPendingState(rec = record(), assistantIndex = null) {
     if (!rec?.pendingCommit) return false;
     const { decisions, inputKey, stateSnapshot } = rec.pendingCommit;
@@ -648,6 +759,10 @@ async function commitPendingState(rec = record(), assistantIndex = null) {
         if (decisions.resolution_pacing === 'partial') rec.eventProfile.phase = 'turning';
         if (decisions.resolution_pacing === 'resolve') rec.eventProfile.phase = 'aftermath';
         rec.eventProfile.progress = Number(rec.eventProfile.progress || 0) + (['advance', 'reveal', 'consequence', 'turning_point'].includes(decisions.progression_move) ? 1 : 0);
+    }
+    if (['create', 'continue'].includes(decisions.advanced_route) && rec.eventProfile?.source === 'advanced') {
+        rec.eventProfile.lastMove = decisions.advanced_move;
+        rec.eventProfile.progress = Number(rec.eventProfile.progress || 0) + (decisions.advanced_move !== 'quiet' ? 1 : 0);
     }
     if (decisions.npc_route === 'create' && rec.npcProfile?.status === 'pending') rec.npcProfile.status = 'active';
     rec.lastStateInput = inputKey;
@@ -702,16 +817,22 @@ async function onAssistantOutputChanged(messageId, kind) {
 async function applyStoredInjection() {
     const rec = record();
     const payload = settings.enabled && rec?.lastJudgment?.payload ? rec.lastJudgment.payload : '';
+    const worldPayload = settings.enabled ? String(selectedWorld(rec)?.prompt || '') : '';
     const macroMode = rec?.preferences?.injectionMode === 'macro' && macroAvailable;
+    const worldMacroMode = rec?.preferences?.worldInjectionMode === 'macro' && macroAvailable;
     activeMacroPayload = macroMode ? payload : '';
+    activeWorldMacroPayload = worldMacroMode ? worldPayload : '';
     await setExtensionPrompt(INJECT_KEY, macroMode ? '' : payload, IN_CHAT, 0, false, SYSTEM_ROLE);
+    await setExtensionPrompt(WORLD_INJECT_KEY, worldMacroMode ? '' : worldPayload, IN_CHAT, 0, false, SYSTEM_ROLE);
     const preview = document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = payload || '현재 주입문 없음';
 }
 
 async function clearInjection() {
     activeMacroPayload = '';
+    activeWorldMacroPayload = '';
     await setExtensionPrompt(INJECT_KEY, '', IN_CHAT, 0, false, SYSTEM_ROLE);
+    await setExtensionPrompt(WORLD_INJECT_KEY, '', IN_CHAT, 0, false, SYSTEM_ROLE);
     const preview = document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = '현재 주입문 없음';
 }
@@ -748,8 +869,10 @@ async function runJudge({ force = false } = {}) {
     let transcript;
     try { transcript = recentTranscript(); }
     catch (error) { updateActivity(error.message, { error: true }); throw error; }
+    const world = selectedWorld(rec);
+    const questionPrefs = { ...prefs, worldHint: world?.hint || '', advancedEventTitle: rec.eventProfile?.title || '' };
     const questions = buildQuestions({
-        preferences: prefs,
+        preferences: questionPrefs,
         hasVillain: Boolean(rec.villainProfile),
         hasNpc: Boolean(rec.npcProfile && rec.npcProfile.status !== 'retired'),
         hasEvent: Boolean(rec.eventProfile),
@@ -767,7 +890,7 @@ async function runJudge({ force = false } = {}) {
             state: {
                 scope: 'Use only the recent roleplay transcript. Progression mode controls the kind of plot movement only. Roleplay pace controls selective attention and response granularity only; it does not advance in-world time, relationships, or events. Relationship pace controls relationship change only. Resolution pace controls event, goal, conflict, or mystery resolution only. World direction controls disposition toward the user only. These controls are independent and must not define or override preset genre, tone, setting, prose style, character voice, or world rules.',
                 recent_roleplay: transcript,
-                controls: prefs,
+                controls: { ...prefs, world: { id: world?.id, name: world?.name, hint: world?.hint } },
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, relationship: rec.relationshipState, background_events: rec.backgroundEvents },
                 previous_routes: rec.lastJudgment?.decisions || null,
@@ -841,14 +964,15 @@ function decisionTitle(key) {
     const user = context.name1 || '유저';
     const character = context.name2 || '캐릭터';
     return {
-        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 진행을 유저에게 넘김`, action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성',
+        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계',
     }[key] || key;
 }
 
 const RESULT_GROUPS = {
     'sr-scene-relation': ['scene_state', 'conversation_tone', 'time_relation', 'response_cadence', 'continuity_change', 'ambiguity', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
     'sr-event-npc': ['primary_focus', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
-    'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
+    'sr-advanced-judgment': ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move'],
+    'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
 };
 
 function resultLabel(key, value) {
@@ -863,7 +987,7 @@ function renderJudgment() {
     if (!judgment?.details) {
         summary.innerHTML = '<div class="sr-empty-small">아직 판독 결과가 없습니다.</div>';
         for (const root of Object.values(roots)) root.innerHTML = '<div class="sr-empty-small">판독 후 세부 결과를 표시합니다.</div>';
-        for (const id of ['sr-caption-scene', 'sr-caption-event', 'sr-caption-quality']) { const node = document.getElementById(id); if (node) node.textContent = '판독 대기'; }
+        for (const id of ['sr-caption-scene', 'sr-caption-event', 'sr-caption-advanced', 'sr-caption-quality']) { const node = document.getElementById(id); if (node) node.textContent = '판독 대기'; }
         return;
     }
     const card = ([key, value]) => {
@@ -884,7 +1008,7 @@ function renderJudgment() {
     const hasPrimaryCorrection = EXECUTION_CORRECTION_PRIORITY.some((key) => d[key] === 'yes')
         || ['partial', 'missed'].includes(d.directive_followthrough)
         || ['partial', 'missed'].includes(d.npc_followthrough);
-    const appliedCorrections = Number(hasPrimaryCorrection) + Number(d.npc_knowledge_fit === 'overreach');
+    const appliedCorrections = Math.min(2, correctionIssues);
     const npcText = ['create', 'reuse'].includes(d.npc_route) ? `${resultLabel('npc_route', d.npc_route)} · ${resultLabel('npc_weight', d.npc_weight)} · ${resultLabel('npc_valence', d.npc_valence)}` : '미사용';
     const conflictApplied = [];
     if (d.negative_priority === 'on') conflictApplied.push('부정 편향 우선');
@@ -899,6 +1023,7 @@ function renderJudgment() {
         ['주요 초점', resultLabel('primary_focus', d.primary_focus)],
         ['관계', `${resultLabel('relationship_pacing', d.relationship_pacing)}${d.relationship_beat && d.relationship_beat !== 'none' ? ` · ${resultLabel('relationship_beat', d.relationship_beat)}` : ''}`],
         ['사건', `${resultLabel('progression_move', d.progression_move)} · ${resultLabel('resolution_pacing', d.resolution_pacing)} · ${resultLabel('event_valence', d.event_valence)}`],
+        ...(record()?.preferences?.advancedEnabled ? [['고급 전개', `${resultLabel('advanced_route', d.advanced_route)} · ${resultLabel('advanced_element', d.advanced_element)} · ${resultLabel('advanced_move', d.advanced_move)}`]] : []),
         ['NPC', npcText],
         ['갈등용', conflictApplied.length ? conflictApplied.join(' · ') : '미적용'],
         ['서술 호흡', resultLabel('response_cadence', d.response_cadence)],
@@ -908,6 +1033,7 @@ function renderJudgment() {
     const setCaption = (id, text) => { const node = document.getElementById(id); if (node) node.textContent = text; };
     setCaption('sr-caption-scene', `${resultLabel('conversation_tone', d.conversation_tone)} · ${resultLabel('relationship_pacing', d.relationship_pacing)}`);
     setCaption('sr-caption-event', `${resultLabel('progression_move', d.progression_move)} · NPC ${npcText}`);
+    setCaption('sr-caption-advanced', record()?.preferences?.advancedEnabled ? `${resultLabel('advanced_route', d.advanced_route)} · ${resultLabel('advanced_move', d.advanced_move)}` : '사용 안 함');
     setCaption('sr-caption-quality', correctionIssues ? `${correctionIssues}개 감지 · ${appliedCorrections}개 우선 적용` : '문제 없음');
 }
 
@@ -923,7 +1049,7 @@ function renderProfiles() {
     const villainRouteLabels = { create: '이번 턴 새로 등장', continue: '이번 턴 행동', waiting: '추첨 대기', none: '저장만 유지', retire: '종료', replace: '교체' };
     const eventDirection = resultLabel('event_valence', decisions.event_valence || 'neutral');
     const npcDirection = resultLabel('npc_valence', decisions.npc_valence || 'neutral');
-    if (rec?.eventProfile) rows.push(`<div class="sr-roll-card"><strong>현재 중심 사건 · ${escapeHtml(rec.eventProfile.title)}</strong><span>상태: ${escapeHtml(eventRouteLabels[decisions.event_route] || '저장만 유지')} · 방향: ${escapeHtml(eventDirection)}</span><span>계기: ${escapeHtml(rec.eventProfile.trigger)}</span><span>목표: ${escapeHtml(rec.eventProfile.goal)}</span><span>압박: ${escapeHtml(rec.eventProfile.pressure)}</span><span>해결 조건: ${escapeHtml(rec.eventProfile.resolution)}</span><span>현재 단계: ${escapeHtml(phaseLabels[rec.eventProfile.phase] || rec.eventProfile.phase)}</span></div>`);
+    if (rec?.eventProfile) rows.push(`<div class="sr-roll-card"><strong>현재 중심 사건 · ${escapeHtml(rec.eventProfile.title)}</strong><span>상태: ${escapeHtml(rec.eventProfile.source === 'advanced' ? resultLabel('advanced_route', decisions.advanced_route) : eventRouteLabels[decisions.event_route] || '저장만 유지')} · 방향: ${escapeHtml(eventDirection)}</span>${rec.eventProfile.worldName ? `<span>세계관: ${escapeHtml(rec.eventProfile.worldName)} · 요소: ${escapeHtml(resultLabel('advanced_element', rec.eventProfile.element))}</span>` : ''}<span>계기: ${escapeHtml(rec.eventProfile.trigger)}</span><span>목표: ${escapeHtml(rec.eventProfile.goal)}</span><span>압박: ${escapeHtml(rec.eventProfile.pressure)}</span><span>해결 조건: ${escapeHtml(rec.eventProfile.resolution)}</span>${rec.eventProfile.entity ? `<span>인물·존재: ${escapeHtml(rec.eventProfile.entity.label)} · ${escapeHtml(rec.eventProfile.entity.purpose)} · ${escapeHtml(rec.eventProfile.entityReused ? '저장 인물 재사용' : '새 추첨')}</span>` : ''}<div class="sr-action-row"><button id="sr-end-active-event" class="menu_button">사건 끝내기</button></div></div>`);
     else if (decisions.event_state && decisions.event_state !== 'none') rows.push(`<div class="sr-roll-card"><strong>현재 장면 사건 · 확장 추첨 외</strong><span>상태: ${escapeHtml(eventRouteLabels[decisions.event_route] || '장면에서 감지')} · 방향: ${escapeHtml(eventDirection)}</span><span>현재 단계: ${escapeHtml(resultLabel('event_state', decisions.event_state))}</span></div>`);
     else if (rec?.lastEventRoll) rows.push('<div class="sr-roll-card"><strong>새 사건</strong><span>이번 적합한 계기의 추첨은 통과하지 않아 다음 장면 기회를 기다립니다.</span></div>');
     if (rec?.villainProfile) rows.push(`<div class="sr-roll-card"><strong>현재 빌런 · 부정</strong><span>상태: ${escapeHtml(villainRouteLabels[decisions.villain_route] || '저장만 유지')}</span><span>동기: ${escapeHtml(rec.villainProfile.motive)}</span><span>수단: ${escapeHtml(rec.villainProfile.method)}</span><span>접근: ${escapeHtml(rec.villainProfile.access)}</span><span>영향력: ${escapeHtml(rec.villainProfile.leverage)}</span><span>능력: ${escapeHtml(rec.villainProfile.competence)}</span></div>`);
@@ -1005,8 +1131,13 @@ function setFormValues() {
     setValue('sr-relationship-direction', prefs.relationshipDirection);
     setChecked('sr-negative-priority', prefs.negativePriority);
     setValue('sr-progression-mode', prefs.progressionMode);
+    setValue('sr-world-profile', prefs.selectedWorldId);
+    setChecked('sr-advanced-enabled', prefs.advancedEnabled);
+    setValue('sr-advanced-style', prefs.advancedStyle);
+    for (const key of Object.keys(ADVANCED_ELEMENTS)) setChecked(`sr-advanced-${key}`, prefs.advancedElements.includes(key));
     setValue('sr-judgment-style', prefs.judgmentStyle);
     setValue('sr-injection-mode', macroAvailable ? prefs.injectionMode : 'depth');
+    setValue('sr-world-injection-mode', macroAvailable ? prefs.worldInjectionMode : 'depth');
     setValue('sr-relationship-pace', prefs.relationshipPace);
     setValue('sr-resolution-pace', prefs.resolutionPace);
     setValue('sr-roleplay-pace', prefs.roleplayPace);
@@ -1029,8 +1160,29 @@ function setFormValues() {
     updateKeyStatus();
     updateStatus();
     const macroStatus = document.getElementById('sr-macro-status');
-    if (macroStatus) macroStatus.textContent = macroAvailable ? '프리셋에 {{scene-reader}}를 한 번 넣으세요.' : '이 SillyTavern 버전에서는 사용자 매크로를 등록할 수 없습니다.';
+    if (macroStatus) macroStatus.textContent = macroAvailable ? '필요한 위치에 각 매크로를 한 번씩 넣으세요.' : '이 SillyTavern 버전에서는 사용자 매크로를 등록할 수 없습니다.';
+    const progression = document.getElementById('sr-progression-mode');
+    if (progression) progression.disabled = prefs.advancedEnabled;
+    const eventChance = document.getElementById('sr-event-chance');
+    if (eventChance) eventChance.disabled = prefs.advancedEnabled;
+    const advancedNote = document.getElementById('sr-basic-progression-note');
+    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled ? '고급 전개가 사건 생성을 대신 사용 중입니다. 저장된 기본 선택은 고급 전개를 끄면 다시 적용됩니다.' : '사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.';
+    const advancedResults = document.getElementById('sr-advanced-results');
+    if (advancedResults) advancedResults.hidden = !prefs.advancedEnabled;
+    renderWorldControls();
     renderOwnerMode();
+}
+
+function renderWorldControls() {
+    const worlds = availableWorlds();
+    const current = preferences().selectedWorldId;
+    const select = document.getElementById('sr-world-profile');
+    if (select) {
+        select.innerHTML = worlds.map((world) => `<option value="${escapeHtml(world.id)}">${world.builtin ? '기본 · ' : '저장 · '}${escapeHtml(world.name)}</option>`).join('');
+        select.value = worlds.some((world) => world.id === current) ? current : 'current';
+    }
+    const manager = document.getElementById('sr-world-manager-list');
+    if (manager) manager.innerHTML = loadCustomWorlds().map((world) => `<button type="button" class="menu_button sr-world-item" data-world-id="${escapeHtml(world.id)}">${escapeHtml(world.name)}</button>`).join('') || '<div class="sr-empty-small">저장한 커스텀 세계관 없음</div>';
 }
 
 function saveGlobal(key, value) {
@@ -1046,6 +1198,7 @@ async function savePreference(key, value) {
     rec.lastJudgment = null;
     await persistChat();
     await clearInjection();
+    if (key === 'selectedWorldId') await applyStoredInjection();
     renderAll();
 }
 
@@ -1056,6 +1209,29 @@ async function saveInjectionMode(value) {
     await persistChat();
     await applyStoredInjection();
     setFormValues();
+}
+
+async function saveWorldInjectionMode(value) {
+    if (value === 'macro' && !macroAvailable) window.toastr?.warning?.('현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
+    preferences().worldInjectionMode = value === 'macro' && macroAvailable ? 'macro' : 'depth';
+    await persistChat();
+    await applyStoredInjection();
+    setFormValues();
+}
+
+async function endActiveEvent() {
+    const rec = record(true);
+    if (rec.eventProfile) archiveCurrentEvent(rec, 'ended_by_user');
+    rec.eventProfile = null;
+    rec.lastEventRoll = null;
+    rec.pacingState.event = { qualifiedSteps: 0 };
+    rec.sceneOpportunity += 1;
+    rec.lastJudgment = null;
+    rec.pendingCommit = null;
+    await persistChat();
+    await clearInjection();
+    renderAll();
+    window.toastr?.success?.('현재 사건을 끝냈습니다. 다음 적합한 기회부터 새 사건을 판정합니다.', '씬판독기');
 }
 
 function bindForm() {
@@ -1070,8 +1246,17 @@ function bindForm() {
     document.getElementById('sr-world-direction')?.addEventListener('change', (event) => void savePreference('worldDirection', event.target.value));
     document.getElementById('sr-relationship-direction')?.addEventListener('change', (event) => void savePreference('relationshipDirection', event.target.value));
     document.getElementById('sr-progression-mode')?.addEventListener('change', (event) => void savePreference('progressionMode', event.target.value));
+    document.getElementById('sr-world-profile')?.addEventListener('change', (event) => void savePreference('selectedWorldId', event.target.value));
+    document.getElementById('sr-advanced-enabled')?.addEventListener('change', (event) => void savePreference('advancedEnabled', event.target.checked).then(setFormValues));
+    document.getElementById('sr-advanced-style')?.addEventListener('change', (event) => void savePreference('advancedStyle', event.target.value));
+    for (const key of Object.keys(ADVANCED_ELEMENTS)) document.getElementById(`sr-advanced-${key}`)?.addEventListener('change', async () => {
+        const selected = Object.keys(ADVANCED_ELEMENTS).filter((item) => document.getElementById(`sr-advanced-${item}`)?.checked);
+        if (!selected.length) { document.getElementById(`sr-advanced-${key}`).checked = true; return; }
+        await savePreference('advancedElements', selected);
+    });
     document.getElementById('sr-judgment-style')?.addEventListener('change', (event) => void savePreference('judgmentStyle', event.target.value));
     document.getElementById('sr-injection-mode')?.addEventListener('change', (event) => void saveInjectionMode(event.target.value));
+    document.getElementById('sr-world-injection-mode')?.addEventListener('change', (event) => void saveWorldInjectionMode(event.target.value));
     document.getElementById('sr-relationship-pace')?.addEventListener('change', (event) => void savePreference('relationshipPace', event.target.value));
     document.getElementById('sr-resolution-pace')?.addEventListener('change', (event) => void savePreference('resolutionPace', event.target.value));
     document.getElementById('sr-roleplay-pace')?.addEventListener('change', (event) => void savePreference('roleplayPace', event.target.value));
@@ -1154,6 +1339,58 @@ function bindForm() {
             window.toastr?.success?.('씬판독기 매크로를 복사했습니다.', '씬판독기');
         } catch { window.toastr?.error?.('매크로를 복사하지 못했습니다.', '씬판독기'); }
     });
+    document.getElementById('sr-copy-world-macro')?.addEventListener('click', async () => {
+        try { await copyText('{{scene-reader-world}}'); window.toastr?.success?.('세계관 매크로를 복사했습니다.', '씬판독기'); }
+        catch { window.toastr?.error?.('매크로를 복사하지 못했습니다.', '씬판독기'); }
+    });
+    dialog.addEventListener('click', (event) => {
+        if (event.target.closest('#sr-end-active-event')) { void endActiveEvent(); return; }
+        const item = event.target.closest('.sr-world-item');
+        if (item) {
+            const world = loadCustomWorlds().find((entry) => entry.id === item.dataset.worldId);
+            if (world) {
+                document.getElementById('sr-world-edit-id').value = world.id;
+                document.getElementById('sr-world-edit-name').value = world.name;
+                document.getElementById('sr-world-edit-hint').value = world.hint || '';
+                document.getElementById('sr-world-edit-prompt').value = world.prompt || '';
+            }
+        }
+    });
+    document.getElementById('sr-world-new')?.addEventListener('click', () => {
+        for (const id of ['sr-world-edit-id', 'sr-world-edit-name', 'sr-world-edit-hint', 'sr-world-edit-prompt']) document.getElementById(id).value = '';
+    });
+    document.getElementById('sr-world-save')?.addEventListener('click', () => {
+        const name = String(document.getElementById('sr-world-edit-name')?.value || '').trim();
+        const prompt = String(document.getElementById('sr-world-edit-prompt')?.value || '').trim();
+        if (!name || !prompt) { window.toastr?.warning?.('세계관 이름과 전문을 입력하세요.', '씬판독기'); return; }
+        const worlds = loadCustomWorlds();
+        const oldId = String(document.getElementById('sr-world-edit-id')?.value || '');
+        const id = oldId || `custom-${Date.now()}`;
+        const next = { id, name, hint: String(document.getElementById('sr-world-edit-hint')?.value || '').trim() || name, prompt };
+        const index = worlds.findIndex((world) => world.id === id);
+        if (index >= 0) worlds[index] = next; else worlds.push(next);
+        saveCustomWorlds(worlds); document.getElementById('sr-world-edit-id').value = id; renderWorldControls();
+        window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
+    });
+    document.getElementById('sr-world-delete')?.addEventListener('click', async () => {
+        const id = String(document.getElementById('sr-world-edit-id')?.value || '');
+        if (!id) return;
+        saveCustomWorlds(loadCustomWorlds().filter((world) => world.id !== id));
+        if (preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
+        for (const field of ['sr-world-edit-id', 'sr-world-edit-name', 'sr-world-edit-hint', 'sr-world-edit-prompt']) document.getElementById(field).value = '';
+        renderWorldControls();
+    });
+    document.getElementById('sr-world-export')?.addEventListener('click', async () => {
+        try { await copyText(JSON.stringify(loadCustomWorlds(), null, 2)); window.toastr?.success?.('저장 세계관 JSON을 복사했습니다.', '씬판독기'); } catch { window.toastr?.error?.('복사하지 못했습니다.', '씬판독기'); }
+    });
+    document.getElementById('sr-world-import')?.addEventListener('click', () => {
+        try {
+            const parsed = JSON.parse(String(document.getElementById('sr-world-edit-prompt')?.value || ''));
+            if (!Array.isArray(parsed) || parsed.some((item) => !item?.name || !item?.prompt)) throw new Error();
+            saveCustomWorlds(parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || item.name), prompt: String(item.prompt) })));
+            renderWorldControls(); window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
+        } catch { window.toastr?.error?.('전문 입력칸의 JSON 형식을 확인하세요.', '씬판독기'); }
+    });
     document.getElementById('sr-reset-npc')?.addEventListener('click', async () => {
         const rec = record(true);
         rec.npcProfile = null;
@@ -1165,6 +1402,7 @@ function bindForm() {
         rec.pacingState = { relationship: { closer: 0, distant: 0, lastBeat: 'none' }, event: { qualifiedSteps: 0 } };
         rec.relationshipState = { motion: 'none', trust: 'none', intimacy: 'none', romance: 'none', unresolved: 'none', lastBeat: 'none' };
         rec.backgroundEvents = [];
+        rec.advancedEntities = [];
         rec.pendingCommit = null;
         rec.lastJudgment = null;
         await clearStateHistory();
@@ -1198,20 +1436,7 @@ function bindForm() {
         renderAll();
         window.toastr?.success?.('현재 일반 NPC를 종료하고 새 판독 대기로 전환했습니다.', '씬판독기');
     });
-    document.getElementById('sr-reset-event')?.addEventListener('click', async () => {
-        const rec = record(true);
-        rec.eventProfile = null;
-        rec.lastEventRoll = null;
-        rec.pacingState.event = { qualifiedSteps: 0 };
-        rec.lastJudgment = null;
-        rec.pendingCommit = null;
-        rec.sceneOpportunity += 1;
-        await clearStateHistory();
-        await persistChat();
-        await clearInjection();
-        renderAll();
-        window.toastr?.success?.('현재 중심 사건을 종료하고 새 사건 추첨 대기로 전환했습니다.', '씬판독기');
-    });
+    document.getElementById('sr-reset-event')?.addEventListener('click', () => void endActiveEvent());
     document.getElementById('sr-reset-relationship')?.addEventListener('click', async () => {
         const rec = record(true);
         rec.pacingState.relationship = { closer: 0, distant: 0, lastBeat: 'none' };
@@ -1239,13 +1464,14 @@ function createDialog() {
                 <div><h2>씬판독기</h2><p>최근 장면을 Jev가 판독해 필요한 진행문만 넣습니다</p></div>
                 <button id="sr-close" class="sr-icon-button" aria-label="닫기"><i class="fa-solid fa-xmark"></i></button>
             </header>
-            <nav class="sr-tabs" aria-label="씬판독기 메뉴"><button class="active" data-sr-tab="flow">자동 전개</button><button data-sr-tab="conflict">갈등용 진행</button><button data-sr-tab="settings">설정</button></nav>
+            <nav class="sr-tabs" aria-label="씬판독기 메뉴"><button class="active" data-sr-tab="flow">자동 전개</button><button data-sr-tab="advanced">고급 전개</button><button data-sr-tab="conflict">갈등용 진행</button><button data-sr-tab="settings">설정</button></nav>
             <main class="sr-main">
                 <div id="sr-tab-flow" class="sr-tab-panel active">
                     <section class="sr-control-card"><label for="sr-world-direction">세계 반응 방향</label><select id="sr-world-direction" class="text_pole">${optionsHtml(WORLD_DIRECTIONS)}</select><p class="sr-help">프리셋의 장르와 분위기를 바꾸지 않고, 유저를 향한 세계 반응의 기본 방향만 고정합니다.</p></section>
+                    <section class="sr-control-card"><label for="sr-world-profile">현재 세계관</label><select id="sr-world-profile" class="text_pole"></select><p class="sr-help">한 번에 하나만 사용합니다. 세계 규칙을 보강하며 고급 사건 사용 여부와는 독립적입니다. 커스텀 추가·수정은 고급 전개 탭에서 합니다.</p></section>
                     <section class="sr-control-card"><label for="sr-relationship-direction">캐릭터→유저 관계 방향</label><select id="sr-relationship-direction" class="text_pole">${optionsHtml(RELATIONSHIP_DIRECTIONS)}</select><p class="sr-help">선택한 방향은 고정 주입됩니다. Jev는 이 방향을 바꾸지 않고 이번 턴의 관계 변화 여부와 크기만 판정합니다.</p></section>
                     <section class="sr-control-card"><label for="sr-judgment-style">판정 기준</label><select id="sr-judgment-style" class="text_pole">${optionsHtml(JUDGMENT_STYLES)}</select><p class="sr-help">보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행, 적극적은 애매하거나 유지여도 선택한 진행 장르를 활용합니다.</p></section>
-                    <section class="sr-control-card"><label for="sr-progression-mode">RP 진행 유형</label><select id="sr-progression-mode" class="text_pole">${optionsHtml(PROGRESSION_MODES)}</select><p class="sr-help">사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.</p></section>
+                    <section class="sr-control-card"><label for="sr-progression-mode">RP 진행 유형</label><select id="sr-progression-mode" class="text_pole">${optionsHtml(PROGRESSION_MODES)}</select><p id="sr-basic-progression-note" class="sr-help">사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.</p></section>
                     <section class="sr-control-card"><label for="sr-roleplay-pace">전체 RP 호흡</label><select id="sr-roleplay-pace" class="text_pole">${optionsHtml(PACE_OPTIONS)}</select><p class="sr-help">관계나 사건의 속도와 별개입니다. 중요한 순간은 살리고 반복·연결부·사소한 반응을 얼마나 압축할지 정합니다.</p></section>
                     <section class="sr-control-card"><div class="sr-grid-2"><div><label for="sr-relationship-pace">관계 진전 속도</label><select id="sr-relationship-pace" class="text_pole">${optionsHtml(PACE_OPTIONS)}</select></div><div><label for="sr-resolution-pace">사건 해결 속도</label><select id="sr-resolution-pace" class="text_pole">${optionsHtml(PACE_OPTIONS)}</select></div></div><p class="sr-help">두 속도는 RP 진행 유형·전체 호흡·세계·관계 방향에서 독립적으로 판정됩니다.</p></section>
                     <section class="sr-control-card"><label for="sr-appearance-chance">공통 인물 등장 확률</label><select id="sr-appearance-chance" class="text_pole"><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="35">35%</option><option value="50">50%</option><option value="100">100% · 다음 적합한 기회에 확정</option></select><p class="sr-help">Jev가 새 인물이 필요하다고 판정한 경우에만 굴립니다. 새 빌런과 새 일반 NPC에 공통 적용하며, 기존 인물 유지에는 다시 굴리지 않습니다.</p></section>
@@ -1255,8 +1481,14 @@ function createDialog() {
                     <section class="sr-summary-card sr-active-dashboard"><h3>현재 사건·인물 현황</h3><p class="sr-criteria-note">추첨·감지된 항목의 이번 턴 실행 여부와 긍정·부정 방향을 항상 표시합니다.</p><div id="sr-profile-status"></div></section>
                     <details class="sr-details"><summary><span>장면·관계 판독</span><small id="sr-caption-scene">판독 대기</small></summary><div id="sr-scene-relation"></div></details>
                     <details class="sr-details"><summary><span>사건·NPC 진행</span><small id="sr-caption-event">판독 대기</small></summary><div id="sr-event-npc"></div></details>
+                    <details id="sr-advanced-results" class="sr-details"><summary><span>고급 전개 판정</span><small id="sr-caption-advanced">사용 안 함</small></summary><div id="sr-advanced-judgment"></div></details>
                     <details class="sr-details"><summary><span>갈등·실행 점검</span><small id="sr-caption-quality">판독 대기</small></summary><div id="sr-conflict-quality"></div></details>
                     <details class="sr-details"><summary><span>저장 상태·실제 주입문</span><small>채팅방별 기록</small></summary><p class="sr-criteria-note">의미 있는 관계 변화와 완료·보관된 사건만 누적하며, 아래에는 이번 응답의 실제 주입문만 표시합니다.</p><div id="sr-stored-state"></div><div class="sr-section-divider">실제 주입문</div><pre id="sr-prompt-preview" class="sr-preview"></pre></details>
+                </div>
+                <div id="sr-tab-advanced" class="sr-tab-panel">
+                    <section class="sr-settings-card"><h3>고급 전개</h3><label class="checkbox_label"><input id="sr-advanced-enabled" type="checkbox"><span><strong>고급 전개 사용</strong></span></label><p class="sr-help">켜면 기본 RP 진행 유형의 사건 생성을 대신합니다. Jev가 맥락과 진입 경로를 판정하고, 확장이 필요한 요소 하나만 추첨·조립합니다. 관계·호흡·갈등용 설정은 그대로 함께 작동합니다.</p><label for="sr-advanced-style">전개 개방도</label><select id="sr-advanced-style" class="text_pole">${optionsHtml(ADVANCED_STYLES)}</select><p class="sr-help">보수적 18% · 균형 35% · 적극적 58%. Jev가 가능한 원인 경로를 찾은 새 사건 기회에만 한 번 굴립니다.</p></section>
+                    <section class="sr-settings-card"><h3>사용할 요소</h3><div class="sr-chip-grid">${Object.entries(ADVANCED_ELEMENTS).map(([key, label]) => `<label class="checkbox_label"><input id="sr-advanced-${key}" type="checkbox"><span>${escapeHtml(label)}</span></label>`).join('')}</div><p class="sr-help">켜 둔 요소 중 이번 장면에 필요한 하나만 사용합니다. 선택만으로 매턴 주입하지 않습니다. 일상·교류는 큰 사건 없이 캠퍼스·직장·생활 흐름을 움직일 때도 사용할 수 있습니다.</p></section>
+                    <details class="sr-settings-card sr-world-manager"><summary>저장한 세계관</summary><p class="sr-help">기본 세계관은 읽기 전용입니다. 아래에는 사용자가 수정·추가할 수 있는 커스텀 세계관만 표시됩니다.</p><div id="sr-world-manager-list" class="sr-world-list"></div><input id="sr-world-edit-id" type="hidden"><label for="sr-world-edit-name">이름</label><input id="sr-world-edit-name" class="text_pole" placeholder="세계관 이름"><label for="sr-world-edit-hint">Jev용 짧은 판정 힌트</label><textarea id="sr-world-edit-hint" class="text_pole" rows="2" placeholder="전문을 보내지 않고 판정에 쓸 짧은 요약"></textarea><label for="sr-world-edit-prompt">주입 전문 또는 가져올 JSON</label><textarea id="sr-world-edit-prompt" class="text_pole" rows="12" placeholder="세계관 전문을 붙여 넣으세요."></textarea><div class="sr-action-row"><button id="sr-world-new" class="menu_button">새로 작성</button><button id="sr-world-save" class="menu_button">저장</button><button id="sr-world-delete" class="menu_button">삭제</button><button id="sr-world-export" class="menu_button">전체 JSON 복사</button><button id="sr-world-import" class="menu_button">JSON 가져오기</button></div></details>
                 </div>
                 <div id="sr-tab-conflict" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>부정 편향 우선순위</h3><label class="checkbox_label"><input id="sr-negative-priority" type="checkbox"><span><strong>부정 편향을 최우선으로 사용</strong></span></label><p class="sr-help">켜면 이 탭에서 활성화한 원문 빠답을 씬판독기의 관계·사건·NPC·속도 지시보다 우선합니다. 다른 이야기는 이 기반을 무효화하지 않는 범위에서 진행됩니다.</p></section>
@@ -1267,7 +1499,7 @@ function createDialog() {
                 <div id="sr-tab-settings" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>기본 설정</h3><label class="checkbox_label"><input id="sr-enabled" type="checkbox"><span><strong>씬판독기 전체 사용</strong></span></label><p class="sr-help">끄면 Jev 판독, 기본 주입, 프리셋 매크로 출력을 모두 중단합니다.</p><label class="checkbox_label"><input id="sr-auto" type="checkbox"><span>생성 직전에 자동 판독</span></label><label class="checkbox_label"><input id="sr-pause-ooc" type="checkbox"><span><code>(OOC:</code>로 시작하는 입력에서는 판독·주입 일시정지</span></label><p class="sr-help">대소문자와 앞쪽 공백을 구분하지 않습니다. 감지된 생성에서는 Jev를 호출하지 않고 기존 주입도 비웁니다.</p><label class="checkbox_label"><input id="sr-confidence" type="checkbox"><span>화면에 확신도 표시</span></label><label for="sr-recent-turns">최근 채팅 범위</label><select id="sr-recent-turns" class="text_pole"><option value="1">최근 1턴</option><option value="2">최근 2턴</option><option value="3">최근 3턴</option><option value="4">최근 4턴</option><option value="5">최근 5턴</option></select><p class="sr-help">한 턴은 유저 입력에서 시작해 뒤따르는 캐릭터 출력까지입니다. 생성 직전에는 현재 유저 입력이 최신 미완성 턴으로 포함됩니다. 매우 긴 기록은 최신 내용을 우선해 자동으로 제한합니다.</p></section>
                     <section class="sr-settings-card"><h3>제작자 모드</h3><label for="sr-owner-password">제작자 비밀번호</label><div class="sr-owner-unlock-row"><input id="sr-owner-password" class="text_pole" type="password" autocomplete="off" placeholder="비밀번호"><button id="sr-owner-unlock" class="menu_button">잠금 해제</button></div><div id="sr-owner-status" class="sr-key-status">잠금 상태</div><p class="sr-help">한 번 해제하면 이 브라우저에서 유지되며, 두 번째 탭에 로컬 전용 입력 영역이 나타납니다.</p></section>
-                    <section class="sr-settings-card"><h3>주입 위치</h3><label for="sr-injection-mode">주입 방식</label><select id="sr-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><p class="sr-help">매크로 방식을 선택하면 기본 위치에는 중복 주입하지 않습니다. 활성 프리셋의 원하는 위치에 아래 매크로를 한 번만 넣으세요.</p><div class="sr-macro-row"><code>{{scene-reader}}</code><button id="sr-copy-macro" class="menu_button">복사</button></div><div id="sr-macro-status" class="sr-key-status"></div></section>
+                    <section class="sr-settings-card"><h3>주입 위치</h3><label for="sr-injection-mode">1. 기본 판정·전개 주입</label><select id="sr-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader}}</code><button id="sr-copy-macro" class="menu_button">복사</button></div><label for="sr-world-injection-mode">2. 세계관 전문 주입</label><select id="sr-world-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader-world}}</code><button id="sr-copy-world-macro" class="menu_button">복사</button></div><p class="sr-help">각 매크로 방식은 기본 위치와 중복 주입하지 않습니다. 세계관 전문은 Jev 판독 요청에 보내지 않고 최종 프리셋에만 넣습니다.</p><div id="sr-macro-status" class="sr-key-status"></div></section>
                     <section class="sr-settings-card"><h3>Jev API</h3><p class="sr-help">공식 TypeSafe Jev 주소와 <code>jev-latest</code>는 동봉 서버 플러그인에 고정되어 있습니다. 화면에는 키만 입력합니다.</p><label for="sr-jev-key">API 키</label><div class="sr-key-row"><input id="sr-jev-key" class="text_pole" type="password" autocomplete="new-password" placeholder="새 키 입력 (빈 값 저장 시 삭제)"><button id="sr-jev-toggle" class="menu_button" aria-label="키 표시 전환"><i class="fa-solid fa-eye"></i></button></div><div id="sr-jev-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-jev-save" class="menu_button">키 저장</button><button id="sr-jev-test" class="menu_button">연결 확인</button></div></section>
                     <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>
                 </div>
@@ -1352,6 +1584,13 @@ async function init() {
                 returns: '활성 주입문 또는 빈 문자열',
                 exampleUsage: ['{{scene-reader}}'],
                 handler: () => activeMacroPayload,
+            });
+            macros.register(WORLD_PROMPT_MACRO, {
+                category: macros.category?.MISC ?? 'misc',
+                description: '씬판독기에서 선택한 세계관 전문입니다.',
+                returns: '활성 세계관 전문 또는 빈 문자열',
+                exampleUsage: ['{{scene-reader-world}}'],
+                handler: () => activeWorldMacroPayload,
             });
             macroAvailable = true;
         } catch (error) {

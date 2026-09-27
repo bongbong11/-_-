@@ -1,4 +1,5 @@
 import { LEGACY_PROMPTS as L } from './legacy-prompts.js';
+import { buildAdvancedInjection, buildAdvancedQuestions } from './advanced-library.js';
 
 export const WORLD_DIRECTIONS = {
     natural: '자연스럽게',
@@ -61,6 +62,7 @@ export const DECISION_LABELS = {
     circularity: { no: '의미 있는 새 내용 있음', yes: '같은 내용이 반복됨' },
     user_handoff: { no: '캐릭터가 자기 몫을 실행함', yes: '질문만 하며 진행을 유저에게 넘김' },
     action_evasion: { no: '필요한 행동이 구체적으로 실행됨', yes: '행동을 분위기·말로만 얼버무림' },
+    input_echo: { no: '유저 입력을 되풀이하지 않음', yes: '유저 입력을 반복·바꿔 말함' },
     directive_followthrough: { not_applicable: '직전 필수 실행 없음', fulfilled: '직전 지시 이행됨', partial: '일부만 이행됨', missed: '필요한 지시가 이행되지 않음' },
     relationship_direction: RELATIONSHIP_DIRECTIONS,
     relationship_pacing: { hold: '관계 상태 유지', closer_incremental: '조금 가까워짐', closer_significant: '분명히 가까워짐', distant_incremental: '조금 멀어짐', distant_significant: '분명히 멀어짐' },
@@ -84,11 +86,18 @@ export const DECISION_LABELS = {
     npc_knowledge_fit: { not_applicable: '판정할 NPC 지식 없음', fit: '지식 범위가 타당함', overreach: '알 수 없는 정보를 사용함' },
     scene_cutoff: { no: '현재 비트가 실행됨', yes: '행동 직전에 장면을 끊음' },
     response_cadence: { compress: '부수 내용 압축', natural: '핵심 중심 자연 호흡', linger: '중요한 순간 확대' },
+    advanced_entry: { closed: '진입 근거 없음', latent: '잠재적 진입 가능', open: '즉시 진입 가능' },
+    advanced_route: { none: '고급 전개 없음', continue: '저장 사건 진행', create: '새 고급 사건 추첨' },
+    advanced_cause: { none: '원인 없음', existing: '기존 사건·실마리', world: '세계 규칙', location: '장소·환경', faction: '인물·세력', consequence: '이전 행동의 결과', chance: '맥락상 가능한 우연' },
+    advanced_element: { none: '사용 안 함', social: '일상·교류', exploration: '탐험·발견', objective: '사건·목표', investigation: '추리·수사', threat: '위협·전투', horror: '공포·초자연', intrigue: '암투·공작', relationship: '관계·치정' },
+    advanced_move: { quiet: '이번 응답은 대기', seed: '첫 징후·압력', advance: '한 단계 진전', obstacle: '장애·비용', reveal: '제한된 정보', contact: '직접 접촉', attack: '직접 공격', aftermath: '결과·후속 영향' },
 };
 
 const COMMON_META = `(Meta: Silent OOC hard-execution directive for this IC response. Do not acknowledge, quote, explain, summarize, or discuss it; apply only the active enclosed directives and output only the resulting IC continuation.
 
-Preserve the preset's genre, setting, tone, prose style, characterization, world logic, and pacing. Treat the user's input as a whole: center what materially changes the immediate scene, absorb minor remarks without acknowledging each one, and never mirror, recap, or answer it point by point. Integrate directives through one primary beat and at most one naturally dependent secondary beat, without treating them as a checklist, forcing several major developments, rushing time, cutting an active interaction short, or changing scenes merely to comply.`;
+Preserve the preset's genre, setting, tone, prose style, characterization, world logic, and pacing. Treat the user's input as established context: begin with the non-user characters' response, action, consequence, or next development; never quote, translate, paraphrase, enumerate, reenact, recalculate, or indirectly restate it merely to show recognition. Integrate directives through one primary beat and at most one naturally dependent secondary beat, without treating them as a checklist, forcing several major developments, rushing time, cutting an active interaction short, or changing scenes merely to comply.
+
+Do not append a question, menu of alternatives, permission request, invented deadline, or demand that {{user}} decide the next beat merely to hand back the turn. Let non-user characters first execute their own available intent. A natural in-character question may end the response only when {{user}} is genuinely the next unresolved participant and the question itself materially advances the live interaction.`;
 
 const WORLD_PROMPTS = {
     natural: `<WORLD_DIRECTION mode="natural">
@@ -131,9 +140,10 @@ const EXECUTION_CORRECTIONS = {
     circularity: 'Do not restate the same position, emotion, threat, explanation, or question in new wording. Add one concrete action, fact, consequence, changed tactic, or meaningful choice that alters the immediate interaction.',
     user_handoff: 'Do not substitute repeated questions, permission-seeking, or handing the next move to {{user}} for the non-user characters\' own conduct. Make one concrete character-driven statement, choice, or action now without writing {{user}}\'s response or actions.',
     action_evasion: 'When an established intent, threat, hostile pressure, or active directive has means and opportunity, execute it through concrete speech, action, or consequence. Do not reduce it to atmosphere, posture, vague implication, another warning, or a last-moment refusal without a concrete blocking cause.',
+    input_echo: 'Treat {{user}}\'s input as already established. Do not repeat, translate, paraphrase, summarize, enumerate, reenact, recalculate, or answer its minor parts one by one. Begin from the resulting response, action, consequence, or next development.',
     scene_cutoff: 'Do not summarize, time-skip, fade out, or end the scene before the selected immediate action, response, or consequence is materially executed. Complete the current beat and leave the next participant response open.',
 };
-export const EXECUTION_CORRECTION_PRIORITY = ['scene_cutoff', 'action_evasion', 'user_handoff', 'circularity', 'refusal_stall', 'hesitation_drag'];
+export const EXECUTION_CORRECTION_PRIORITY = ['input_echo', 'user_handoff', 'scene_cutoff', 'action_evasion', 'circularity', 'refusal_stall', 'hesitation_drag'];
 
 const NPC_COMMON_PROMPT = 'Keep active NPCs consistent and self-directed: let the relevant NPC speak, choose, or act from established motives, knowledge, and immediate stakes—not merely answer {{user}}, deliver exposition, or wait—and do not replace {{char}} or take over unrelated parts of the scene. Suspicion, intuition, body-language reading, coincidence, and genre convention do not grant hidden knowledge: infer only broad surface states from cues this NPC actually observed, never an unavailable fact, cause, relationship, motive, plan, or location.';
 
@@ -369,7 +379,7 @@ export function rollVillainProfile(random = Math.random) {
 }
 
 export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {}, previousRoutes = {} }) {
-    const { progressionMode } = preferences;
+    const progressionMode = preferences.advancedEnabled ? 'off' : preferences.progressionMode;
     const posture = {
         conservative: 'Require direct, explicit evidence. Use unclear when the recent exchange does not establish the answer reliably.',
         balanced: 'Choose the most likely supported state from the recent exchange. Use unclear only when evidence is insufficient or materially contradictory.',
@@ -517,8 +527,13 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         },
         user_handoff: {
             type: 'choice',
-            instructions: 'Detect whether non-user characters repeatedly avoid their own next action by only asking what the user does, seeking permission, offering choices, or ending immediately before execution. Never require writing the user\'s dialogue, feelings, consent, or actions.',
-            criteria: { no: 'Non-user characters perform their own supported speech, choices, and actions while leaving the user\'s response open.', yes: 'The output repeatedly substitutes a question, permission request, menu of options, or abrupt handoff to the user for a concrete non-user action that could already occur.' },
+            instructions: 'Detect whether the latest character output uses a closing question to transfer narrative labor to the user instead of executing the non-user character\'s available intent. Count forced either/or menus, asking where or how the user wants the character positioned, permission-seeking, generic solicitation, invented countdowns or deadlines demanding a choice, and a question that merely restates a decision the character could make. A natural question is allowed only when the user is genuinely the next unresolved participant and it materially advances the live interaction. Never require writing the user\'s dialogue, feelings, consent, or actions.',
+            criteria: { no: 'Non-user characters first perform their own supported speech, choices, and actions. Any closing question is specifically necessary because the user is the next unresolved participant.', yes: 'The output ends on a question, option menu, permission request, deadline, or demand for direction that substitutes for an available non-user action or exists mainly to hand back the turn.' },
+        },
+        input_echo: {
+            type: 'choice',
+            instructions: 'Detect whether the latest character output repeats the user input merely to prove recognition. Include quotation, translation, paraphrase, summary, reenactment, answering every minor point in order, repeated numbers or dates, recalculation, and indirect equivalents. Preserve necessary factual reference when it changes the response or consequence.',
+            criteria: { no: 'The output begins from the response, action, consequence, or next development; any repeated detail is necessary to what changes now.', yes: 'The output spends material space quoting, translating, paraphrasing, enumerating, reenacting, recalculating, or individually acknowledging information already established by the user.' },
         },
         action_evasion: {
             type: 'choice',
@@ -704,6 +719,12 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         instructions: 'If the NPC has relevant information, choose how their motive and current stake govern its use. Otherwise select none.',
         criteria: { none: 'No information use is needed.', open: 'Plain disclosure serves the NPC\'s motive.', selective: 'The NPC has reason to reveal only a useful portion.', conditional: 'The NPC requires a concrete price, favor, protection, proof, or exchange.', withhold: 'A specific interest, fear, obligation, or relationship supports concealment.', distort: 'A supported motive and concrete stake support omission or deception.', uncertain: 'The NPC should distinguish observation, report, assumption, and uncertainty.' },
     };
+    Object.assign(questions, buildAdvancedQuestions({
+        preferences,
+        hasEvent,
+        worldHint: preferences.worldHint || '',
+        eventTitle: preferences.advancedEventTitle || '',
+    }));
     return questions;
 }
 
@@ -762,11 +783,11 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         linger: 'Stay close to the one decisive action, revelation, sensation, or emotional turn that needs detail. Do not broaden the response into coverage of every input point.',
     };
     blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
-    const selectedCorrection = EXECUTION_CORRECTION_PRIORITY.find((key) => decisions[key] === 'yes');
-    const corrections = selectedCorrection ? [EXECUTION_CORRECTIONS[selectedCorrection]] : [];
+    const selectedCorrections = EXECUTION_CORRECTION_PRIORITY.filter((key) => decisions[key] === 'yes').slice(0, 2);
+    const corrections = selectedCorrections.map((key) => EXECUTION_CORRECTIONS[key]);
     if (!corrections.length && ['partial', 'missed'].includes(decisions.directive_followthrough)) corrections.push('Carry out the highest-priority unfulfilled relationship, event, conflict, NPC, or execution route from the prior response through one concrete action, fact, choice, or consequence now. Do not merely restate the intended development.');
     if (!corrections.length && ['partial', 'missed'].includes(decisions.npc_followthrough)) corrections.push('Carry out the selected NPC function now through one concrete NPC-driven statement, decision, action, condition, or consequence; do not replace it with passive observation, exposition, or another question.');
-    if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
+    if (decisions.npc_knowledge_fit === 'overreach' && corrections.length < 2) corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
 
     const relationshipMoves = {
@@ -788,7 +809,10 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     const hasResolvableMatter = Boolean(eventProfile) || (decisions.event_state && decisions.event_state !== 'none') || ['event', 'conflict'].includes(decisions.primary_focus);
     if (hasResolvableMatter && resolutionMoves[decisions.resolution_pacing]) blocks.push(`<EVENT_RESOLUTION_PACING mode="${settings.resolutionPace}">\n${resolutionMoves[decisions.resolution_pacing]}\n</EVENT_RESOLUTION_PACING>`);
 
-    if (settings.progressionMode !== 'off') {
+    if (settings.advancedEnabled) {
+        const advanced = buildAdvancedInjection({ decisions, eventProfile });
+        if (advanced) blocks.push(advanced);
+    } else if (settings.progressionMode !== 'off') {
         const activeEvent = eventPrompt(eventProfile, decisions.event_route);
         if (activeEvent) blocks.push(activeEvent);
         if (eventProfile?.phase === 'aftermath') blocks.push('<EVENT_AFTERMATH>Carry one concrete aftermath into the scene—a changed relationship, cost, injury, obligation, reputation, access condition, loss, or limitation—before replacing the resolved event with unrelated material.</EVENT_AFTERMATH>');

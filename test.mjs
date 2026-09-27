@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { access, readFile } from 'node:fs/promises';
 import { LEGACY_PROMPTS } from './legacy-prompts.js';
 import { buildInjection, buildQuestions, rollEventProfile, rollNpcProfile } from './prompt-library.js';
+import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvancedEvent } from './advanced-library.js';
+import { INITIAL_CUSTOM_WORLDS } from './world-library.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -16,7 +18,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.6.5');
+assert.equal(manifest.version, '0.7.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -37,6 +39,7 @@ assert.match(source, /최근 1턴/);
 assert.match(source, /최근 2턴/);
 assert.match(source, /최근 5턴/);
 assert.match(source, /자동 전개/);
+assert.match(source, /고급 전개/);
 assert.match(source, /갈등용 진행/);
 assert.match(source, /설정/);
 assert.match(source, /관계 진전 속도/);
@@ -80,14 +83,17 @@ assert.doesNotMatch(source, /injectionDepth/);
 assert.match(source, /setExtensionPrompt\(INJECT_KEY, macroMode \? '' : payload, IN_CHAT, 0, false, SYSTEM_ROLE\)/);
 assert.match(source, /setExtensionPrompt\(INJECT_KEY, '', IN_CHAT, 0, false, SYSTEM_ROLE\)/);
 assert.match(source, /macros\.register\(PROMPT_MACRO/);
+assert.match(source, /macros\.register\(WORLD_PROMPT_MACRO/);
 assert.match(source, /\{\{scene-reader\}\}/);
+assert.match(source, /\{\{scene-reader-world\}\}/);
 assert.match(source, /id="sr-copy-macro"/);
 assert.match(source, /씬판독기 전체 사용/);
 assert.match(source, /판독과 주입 중단/);
 assert.match(source, /document\.execCommand\('copy'\)/);
 assert.doesNotMatch(source, /ConnectionManagerRequestService/);
 assert.doesNotMatch(source, /enableCorsProxy/);
-assert.match(css, /\.sr-tabs \{[^\n]*grid-template-columns: repeat\(3/);
+assert.match(css, /\.sr-tabs \{[^\n]*grid-template-columns: repeat\(4/);
+assert.match(css, /@media[\s\S]*\.sr-tabs \{ grid-template-columns: repeat\(2/);
 assert.match(css, /100dvh/);
 assert.match(css, /@media \(max-width: 600px\)/);
 assert.match(css, /\.sr-run-row \.menu_button \{[^\n]*min-width: 150px/);
@@ -120,7 +126,7 @@ for (const [name, expected] of Object.entries(expectedHashes)) {
 
 const preferences = { progressionMode: 'investigation', worldDirection: 'hostile', relationshipDirection: 'hostile', negativePriority: true, judgmentStyle: 'balanced', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', fightSustain: true, villainEnabled: true, socialEnabled: true, worldHostility: true, npcToUser: true, userMisfortune: true };
 const questions = buildQuestions({ preferences, hasVillain: false, hasNpc: false, hasEvent: false, pacingState: { relationship: { closer: 1, distant: 0 }, event: { qualifiedSteps: 1 } }, previousRoutes: { npc_route: 'reuse' } });
-for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_followthrough', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'action_evasion', 'directive_followthrough', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'resolution_pacing', 'fight_sustain', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
+for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_followthrough', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'action_evasion', 'directive_followthrough', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'resolution_pacing', 'fight_sustain', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
 for (const key of ['npc_autonomy', 'world_hostility', 'npc_guard', 'misfortune']) assert.equal(questions[key], undefined, `${key} must be fixed or conditionally connected, not Jev-gated`);
 const npc = rollNpcProfile('investigation', () => 0);
 assert.equal(npc.role, 'witness');
@@ -128,6 +134,22 @@ assert.equal(npc.stake, 'personal safety');
 assert.equal(npc.constraint, 'limited time or access');
 const event = rollEventProfile('investigation', () => 0);
 assert.equal(event.title, '진술의 핵심 모순');
+assert.equal(advancedChance('conservative'), 18);
+assert.equal(advancedChance('balanced'), 35);
+assert.equal(advancedChance('active'), 58);
+assert.ok(BUILTIN_WORLDS.some((world) => world.id === 'campus'));
+assert.equal(INITIAL_CUSTOM_WORLDS.length, 5);
+const advancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ADVANCED_DEFAULT_ELEMENTS, worldHint: 'campus', advancedEventTitle: '' }, hasVillain: false, hasNpc: false, hasEvent: false });
+for (const key of ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move']) assert.ok(advancedQuestions[key], `${key} question missing`);
+assert.equal(advancedQuestions.event_route, undefined, 'advanced mode must replace basic event routing');
+const advancedEvent = rollAdvancedEvent('exploration', { random: () => 0, worldId: 'campus', worldName: '현대 대학·캠퍼스' });
+const advancedPayload = buildInjection({
+    settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'natural', advancedEnabled: true, relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium' },
+    decisions: { response_cadence: 'natural', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'event', advanced_route: 'create', advanced_move: 'seed', advanced_cause: 'location', npc_route: 'none', villain_route: 'none', fight_sustain: 'no' },
+    eventProfile: advancedEvent,
+});
+assert.match(advancedPayload, /<ADVANCED_PROGRESSION element="exploration" move="seed" cause="location">/);
+assert.doesNotMatch(advancedPayload, /<RP_PROGRESSION/);
 
 const exactPayload = buildInjection({
     settings: { worldDirection: 'hostile', relationshipDirection: 'hostile', negativePriority: true, progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', socialEnabled: true, worldHostility: true, npcToUser: true, userMisfortune: true },
