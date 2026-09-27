@@ -223,7 +223,16 @@ export function makeWorldHint(name, prompt) {
 export function loadCustomWorlds() {
     try {
         const parsed = JSON.parse(localStorage.getItem(CUSTOM_WORLD_STORAGE) || 'null');
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+            const seen = new Set();
+            return parsed.filter((world) => {
+                if (!world || typeof world !== 'object') return false;
+                if (!String(world.id || '').trim() || !String(world.name || '').trim() || !String(world.prompt || '').trim()) return false;
+                if (seen.has(world.id)) return false;
+                seen.add(world.id);
+                return true;
+            }).map((world) => ({ id: String(world.id), name: String(world.name), hint: String(world.hint || makeWorldHint(world.name, world.prompt)), prompt: String(world.prompt) }));
+        }
     } catch { /* use bundled defaults */ }
     const initial = structuredClone(INITIAL_CUSTOM_WORLDS);
     try { localStorage.setItem(CUSTOM_WORLD_STORAGE, JSON.stringify(initial)); } catch { /* storage optional */ }
@@ -231,7 +240,12 @@ export function loadCustomWorlds() {
 }
 
 export function saveCustomWorlds(worlds) {
-    localStorage.setItem(CUSTOM_WORLD_STORAGE, JSON.stringify(worlds));
+    try {
+        localStorage.setItem(CUSTOM_WORLD_STORAGE, JSON.stringify(worlds));
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 export function allWorlds(builtins, customs = loadCustomWorlds()) {

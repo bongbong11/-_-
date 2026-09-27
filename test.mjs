@@ -5,7 +5,8 @@ import { access, readFile } from 'node:fs/promises';
 import { LEGACY_PROMPTS } from './legacy-prompts.js';
 import { buildInjection, buildQuestions, rollEventProfile, rollNpcProfile } from './prompt-library.js';
 import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvancedEvent } from './advanced-library.js';
-import { INITIAL_CUSTOM_WORLDS, makeWorldHint } from './world-library.js';
+import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, loadCustomWorlds, makeWorldHint } from './world-library.js';
+import { appendPendingUserMessage, buildInputKey, buildRecentTranscript, generationCycleSalt, latestUserMessageText, pendingComposerText } from './runtime-utils.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -18,9 +19,10 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.7.5');
+assert.equal(manifest.version, '0.7.6');
 assert.equal(pkg.version, manifest.version);
-assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
+assert.match(source, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
+assert.match(source, /allowedChoices\.includes\(candidate\)/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
 assert.match(library, /An unclear or stable scene is not by itself a reason to hold/);
 assert.match(library, /an NPC may still be routed when the enabled progression mode has a plausible concrete function/);
@@ -62,6 +64,14 @@ assert.match(source, /\(\?:ooc\|out\\s\+of\\s\+character\|오오씨\|사담\).*\
 const oocPattern = /^\s*[\[(]?\s*(?:ooc|out\s+of\s+character|오오씨|사담)\s*:/i;
 for (const text of ['(ooc:', '(OOC:', '  (Ooc:', '[oOc:', '사담:']) assert.ok(oocPattern.test(text), `${text} must pause case-insensitively`);
 assert.match(source, /OOC 입력 감지 · 이번 판독과 주입을 멈춥니다/);
+assert.match(source, /pendingComposerText\(type, data, document\.getElementById\('send_textarea'\)\?\.value\)/);
+assert.match(source, /runJudge\(\{ pendingUserText, cycleSalt \}\)/);
+assert.match(source, /자동 판독 꺼짐 · 현재 입력은 수동 판독 필요/);
+assert.match(source, /activeInjectionPayload \|\| '현재 주입문 없음'/);
+assert.match(source, /pendingGenerationType === 'regenerate' \? 'regenerated' : 'deleted'/);
+assert.match(source, /\['swiped', 'regenerated'\]\.includes\(kind\)/);
+assert.match(source, /preparedStateSnapshot/);
+assert.match(source, /judgment: rec\.lastJudgment \? JSON\.parse\(JSON\.stringify\(rec\.lastJudgment\)\) : null/);
 assert.match(source, /Jev가 최근 장면을 판독하고 있습니다/);
 assert.match(source, /필요한 주입문을 조립하고 있습니다/);
 assert.match(source, /현재 빌런 종료 · 새 추첨 대기/);
@@ -114,6 +124,9 @@ assert.match(css, /\.sr-owner-details:not\(\[open\]\) > \.sr-owner-body \{ displ
 assert.match(css, /\.sr-action-row \{ display: grid; grid-template-columns: minmax\(0, 1fr\); width: 100%; \}/);
 const dialogIds = [...source.matchAll(/id="(sr-[^"]+)"/g)].map((match) => match[1]);
 assert.equal(new Set(dialogIds).size, dialogIds.length, 'dialog element ids must be unique');
+const referencedDialogIds = [...source.matchAll(/getElementById\('(sr-[^']+)'\)/g)].map((match) => match[1]);
+const missingDialogIds = [...new Set(referencedDialogIds.filter((id) => !dialogIds.includes(id)))];
+assert.deepEqual(missingDialogIds, [], `referenced dialog ids must exist: ${missingDialogIds.join(', ')}`);
 
 const expectedHashes = {
     AUTONOMOUS_NPC_DYNAMICS: 'b9bca5d8decacc8bd6f9e7879473fd9308005ed6b648590cf28c940327d67e74',
@@ -148,9 +161,46 @@ assert.equal(advancedChance('balanced'), 35);
 assert.equal(advancedChance('active'), 58);
 assert.equal(advancedChance('very_active'), 75);
 assert.ok(BUILTIN_WORLDS.some((world) => world.id === 'campus'));
+const presetWorld = BUILTIN_WORLDS.find((world) => world.id === 'current');
+assert.equal(presetWorld?.name, '프리셋 기본 세계관 사용');
+assert.equal(presetWorld?.prompt, '', 'preset world option must not inject a separate world prompt');
+assert.match(presetWorld?.hint || '', /route only the selected roleplay progression/);
 assert.equal(INITIAL_CUSTOM_WORLDS.length, 5);
 assert.match(makeWorldHint('테스트', '## TEST_WORLD\nUse established rules.\n<LOCK>Keep continuity.</LOCK>'), /^테스트: TEST WORLD Use established rules/);
 assert.ok(makeWorldHint('테스트', 'x'.repeat(800)).length <= 365);
+const savedLocalStorage = globalThis.localStorage;
+const localValues = new Map([[CUSTOM_WORLD_STORAGE, JSON.stringify([null, { id: 'custom-ok', name: '정상', prompt: 'Keep continuity.' }, { id: 'custom-ok', name: '중복', prompt: 'Duplicate.' }, { id: '', name: '손상', prompt: '' }])]]);
+globalThis.localStorage = { getItem: (key) => localValues.get(key) ?? null, setItem: (key, value) => localValues.set(key, value) };
+const recoveredWorlds = loadCustomWorlds();
+assert.equal(recoveredWorlds.length, 1);
+assert.equal(recoveredWorlds[0].id, 'custom-ok');
+assert.match(recoveredWorlds[0].hint, /^정상:/);
+if (savedLocalStorage === undefined) delete globalThis.localStorage; else globalThis.localStorage = savedLocalStorage;
+const baseChat = [
+    { is_user: true, mes: '첫 질문', name: 'U' },
+    { is_user: false, mes: '첫 답변', name: 'C' },
+    { is_user: true, mes: '둘째 질문', name: 'U' },
+    { is_user: false, mes: '둘째 답변', name: 'C' },
+    { is_user: false, mes: '숨김 기억', hidden: true, name: 'C' },
+];
+const pendingTranscript = buildRecentTranscript({ chat: baseChat, pendingUserText: '방금 전송한 입력', turnCount: 2, userName: 'U', characterName: 'C' });
+assert.doesNotMatch(pendingTranscript, /첫 질문/);
+assert.match(pendingTranscript, /둘째 질문/);
+assert.match(pendingTranscript, /방금 전송한 입력/);
+assert.doesNotMatch(pendingTranscript, /숨김 기억/);
+assert.equal(latestUserMessageText(baseChat, '(OOC: 잠시 멈춤)'), '(OOC: 잠시 멈춤)');
+assert.equal(appendPendingUserMessage([...baseChat, { is_user: true, mes: '동일 입력' }], '동일 입력').filter((message) => message.is_user && message.mes === '동일 입력').length, 2, 'identical consecutive user inputs are still distinct turns');
+const preSendKey = buildInputKey(baseChat, '방금 전송한 입력');
+const postSendKey = buildInputKey([...baseChat, { is_user: true, mes: '방금 전송한 입력', name: 'U' }]);
+assert.equal(preSendKey, postSendKey, 'pre-send and saved forms of the same user input must share a key');
+assert.equal(pendingComposerText('normal', { automatic_trigger: false }, ' 새 입력 '), '새 입력');
+assert.equal(pendingComposerText('swipe', {}, '무시할 입력'), '');
+assert.equal(pendingComposerText('normal', { automatic_trigger: true }, '무시할 입력'), '');
+const firstContinueSalt = generationCycleSalt(baseChat, 'continue', {});
+const continuedChat = baseChat.map((message, index) => index === 3 ? { ...message, mes: '둘째 답변 뒤에 이어진 내용' } : message);
+const nextContinueSalt = generationCycleSalt(continuedChat, 'continue', {});
+assert.notEqual(firstContinueSalt, nextContinueSalt, 'continued output must form a new judgment cycle after its text changes');
+assert.equal(generationCycleSalt(baseChat, 'swipe', {}), '');
 const advancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ADVANCED_DEFAULT_ELEMENTS, worldHint: 'campus', advancedEventTitle: '' }, hasVillain: false, hasNpc: false, hasEvent: false });
 for (const key of ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move']) assert.ok(advancedQuestions[key], `${key} question missing`);
 assert.equal(advancedQuestions.event_route, undefined, 'advanced mode must replace basic event routing');
@@ -265,6 +315,15 @@ const response = {
     send(value) { this.body = value; return this; },
     json(value) { this.body = JSON.stringify(value); return this; },
 };
+const missingKeyResponse = { ...response, code: 0, body: '' };
+await routes['POST /systemone']({ get: () => '', body: {} }, missingKeyResponse);
+assert.equal(missingKeyResponse.code, 401);
+const invalidBodyResponse = { ...response, code: 0, body: '' };
+await routes['POST /systemone']({ get: () => 'secret-key', body: null }, invalidBodyResponse);
+assert.equal(invalidBodyResponse.code, 400);
+const oversizedResponse = { ...response, code: 0, body: '' };
+await routes['POST /systemone']({ get: () => 'secret-key', body: { state: 'x'.repeat(1_000_100) } }, oversizedResponse);
+assert.equal(oversizedResponse.code, 413);
 await routes['POST /systemone']({ get: () => 'secret-key', body: { model: 'other', state: 'x', questions: { q: { type: 'choice', criteria: { a: 'a', b: 'b' } } } } }, response);
 globalThis.fetch = previousFetch;
 assert.equal(forwarded.url, 'https://api.typesafe.ai/v1/systemone');

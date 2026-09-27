@@ -19,7 +19,7 @@ export const ADVANCED_ELEMENTS = {
 export const ADVANCED_DEFAULT_ELEMENTS = Object.keys(ADVANCED_ELEMENTS);
 
 export const BUILTIN_WORLDS = [
-    { id: 'current', name: '현재 설정 따름', hint: 'Use only the active preset, lore, and established roleplay. Do not add a new world system.', prompt: '' },
+    { id: 'current', name: '프리셋 기본 세계관 사용', hint: 'Use only the active preset, lorebooks, character information, and established roleplay as the world. Do not add or replace world rules; route only the selected roleplay progression.', prompt: '' },
     { id: 'fantasy', name: '범용 판타지', hint: 'Fantasy world logic; established magic, peoples, institutions, travel, economy, religion, and technology control what is possible.', prompt: `<FANTASY_WORLD>
 Use established magic, peoples, institutions, travel, economy, religion, technology, and social order as practical world rules. Do not import unrelated fantasy systems or grant convenient magic, knowledge, access, creatures, or resources without support.
 </FANTASY_WORLD>` },

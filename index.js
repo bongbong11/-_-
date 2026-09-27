@@ -31,6 +31,7 @@ import {
     rollAdvancedEntity,
 } from './advanced-library.js';
 import { allWorlds, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
+import { buildInputKey, buildRecentTranscript, generationCycleSalt, isVisibleRoleplayMessage, latestUserMessageText, pendingComposerText } from './runtime-utils.js';
 
 const MODULE = 'sceneReader';
 const INJECT_KEY = 'scene-reader-router';
@@ -191,12 +192,16 @@ const CHOICE_THRESHOLDS = { villain_route: { retire: 0.88, replace: 0.90 }, npc_
 let settings;
 let dialog;
 let judgeInFlight = false;
+let judgeCompletionPromise = Promise.resolve();
+let resolveJudgeCompletion = null;
 let macroAvailable = false;
 let activeMacroPayload = '';
 let activeWorldMacroPayload = '';
+let activeInjectionPayload = '';
 let activityToast = null;
 let activityToastTimer = null;
 let stateDbPromise = null;
+let pendingGenerationType = '';
 const stateHistoryCache = new Map();
 
 function getContext() {
@@ -356,11 +361,31 @@ function record(create = false) {
         const saved = value.preferences || {};
         value.preferences = Object.fromEntries(Object.entries(CHAT_DEFAULTS).map(([key, fallback]) => [key, Object.hasOwn(saved, key) ? saved[key] : Array.isArray(fallback) ? [...fallback] : fallback]));
         if (!Object.hasOwn(saved, 'relationshipDirection')) value.preferences.relationshipDirection = saved.characterToUser ? 'hostile' : 'dynamic';
-        value.pacingState ||= { relationship: { closer: 0, distant: 0, lastBeat: 'none' }, event: { qualifiedSteps: 0 } };
-        value.relationshipState ||= { motion: 'none', trust: 'none', intimacy: 'none', romance: 'none', unresolved: 'none', lastBeat: 'none' };
-        value.backgroundEvents ||= [];
-        value.advancedEntities ||= [];
-        value.sceneOpportunity ||= 1;
+        const validValue = (valueToCheck, choices, fallback) => Object.hasOwn(choices, valueToCheck) ? valueToCheck : fallback;
+        value.preferences.worldDirection = validValue(value.preferences.worldDirection, WORLD_DIRECTIONS, CHAT_DEFAULTS.worldDirection);
+        value.preferences.relationshipDirection = validValue(value.preferences.relationshipDirection, RELATIONSHIP_DIRECTIONS, CHAT_DEFAULTS.relationshipDirection);
+        value.preferences.progressionMode = validValue(value.preferences.progressionMode, PROGRESSION_MODES, CHAT_DEFAULTS.progressionMode);
+        value.preferences.judgmentStyle = validValue(value.preferences.judgmentStyle, JUDGMENT_STYLES, CHAT_DEFAULTS.judgmentStyle);
+        value.preferences.advancedStyle = validValue(value.preferences.advancedStyle, ADVANCED_STYLES, CHAT_DEFAULTS.advancedStyle);
+        for (const key of ['relationshipPace', 'resolutionPace', 'roleplayPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
+        for (const key of ['injectionMode', 'worldInjectionMode']) value.preferences[key] = ['depth', 'macro'].includes(value.preferences[key]) ? value.preferences[key] : CHAT_DEFAULTS[key];
+        value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;
+        value.preferences.advancedElements = [...new Set((Array.isArray(value.preferences.advancedElements) ? value.preferences.advancedElements : []).filter((key) => ADVANCED_ELEMENTS[key]))];
+        if (!value.preferences.advancedElements.length) value.preferences.advancedElements = [...ADVANCED_DEFAULT_ELEMENTS];
+        for (const key of ['advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune']) value.preferences[key] = Boolean(value.preferences[key]);
+        for (const key of ['appearanceChance', 'eventChance']) value.preferences[key] = Math.max(1, Math.min(100, Number(value.preferences[key]) || CHAT_DEFAULTS[key]));
+        const pacing = value.pacingState && typeof value.pacingState === 'object' ? value.pacingState : {};
+        const relation = pacing.relationship && typeof pacing.relationship === 'object' ? pacing.relationship : {};
+        const event = pacing.event && typeof pacing.event === 'object' ? pacing.event : {};
+        value.pacingState = {
+            relationship: { closer: Math.max(0, Number(relation.closer) || 0), distant: Math.max(0, Number(relation.distant) || 0), lastBeat: String(relation.lastBeat || 'none') },
+            event: { qualifiedSteps: Math.max(0, Number(event.qualifiedSteps) || 0) },
+        };
+        const relationship = value.relationshipState && typeof value.relationshipState === 'object' ? value.relationshipState : {};
+        value.relationshipState = { motion: String(relationship.motion || 'none'), trust: String(relationship.trust || 'none'), intimacy: String(relationship.intimacy || 'none'), romance: String(relationship.romance || 'none'), unresolved: String(relationship.unresolved || 'none'), lastBeat: String(relationship.lastBeat || 'none') };
+        value.backgroundEvents = Array.isArray(value.backgroundEvents) ? value.backgroundEvents.slice(0, 3) : [];
+        value.advancedEntities = Array.isArray(value.advancedEntities) ? value.advancedEntities.slice(0, 24) : [];
+        value.sceneOpportunity = Math.max(1, Number(value.sceneOpportunity) || 1);
     }
     return value;
 }
@@ -391,42 +416,14 @@ function maskKey(key) {
     return `저장됨 ····${key.slice(-4)}`;
 }
 
-function isVisibleChatMessage(message) {
-    if (!message || message.is_system) return false;
-    if (message.is_hidden || message.hidden || message.extra?.hidden || message.extra?.exclude_from_prompt) return false;
-    return Boolean(String(message.mes ?? '').trim());
+function recentTranscript(pendingUserText = '') {
+    const context = getContext();
+    return buildRecentTranscript({ chat: context.chat, pendingUserText, turnCount: settings.recentTurns, maxChars: MAX_TRANSCRIPT_CHARS, userName: context.name1, characterName: context.name2 });
 }
 
-function recentTranscript() {
-    const chat = (getContext().chat || []).filter(isVisibleChatMessage);
-    const turnCount = Math.max(1, Math.min(5, Number(settings.recentTurns) || 3));
-    const userStarts = chat.map((message, index) => message.is_user ? index : -1).filter((index) => index >= 0);
-    const start = userStarts.length ? userStarts[Math.max(0, userStarts.length - turnCount)] : Math.max(0, chat.length - 1);
-    const selected = chat.slice(start);
-    if (!selected.length) throw new Error('판독할 최근 채팅이 없습니다.');
-    const chunks = selected.map((message, index) => {
-        const role = message.is_user ? 'USER' : 'CHARACTER';
-        const name = String(message.name || (message.is_user ? getContext().name1 : getContext().name2) || role);
-        return `[${index + 1}] ${role} (${name})\n${String(message.mes).trim()}`;
-    });
-    while (chunks.length > 1 && chunks.join('\n\n').length > MAX_TRANSCRIPT_CHARS) chunks.shift();
-    const joined = chunks.join('\n\n');
-    return joined.length <= MAX_TRANSCRIPT_CHARS ? joined : `[older text clipped]\n${joined.slice(-MAX_TRANSCRIPT_CHARS)}`;
-}
+function latestUserText(pendingUserText = '') { return latestUserMessageText(getContext().chat, pendingUserText); }
 
-function latestUserText() {
-    const chat = (getContext().chat || []).filter(isVisibleChatMessage);
-    return String([...chat].reverse().find((message) => message.is_user)?.mes || '');
-}
-
-function currentInputKey() {
-    const chat = (getContext().chat || []).filter(isVisibleChatMessage);
-    const lastUserIndex = chat.map((message, index) => message.is_user ? index : -1).filter((index) => index >= 0).at(-1) ?? -1;
-    const text = lastUserIndex >= 0 ? String(chat[lastUserIndex].mes || '') : '';
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
-    return `${lastUserIndex}:${text.length}:${hash >>> 0}`;
-}
+function currentInputKey(pendingUserText = '', cycleSalt = '') { return buildInputKey(getContext().chat, pendingUserText, cycleSalt); }
 
 function isOocInput(text) {
     return /^\s*[\[(]?\s*(?:ooc|out\s+of\s+character|오오씨|사담)\s*:/i.test(String(text || ''));
@@ -437,11 +434,12 @@ function certainty(answer) {
     const probability = Number(answer?.probabilities?.[choice]);
     const confidence = Number(answer?.confidence);
     const p = Number.isFinite(probability) ? probability : 0;
-    return Number.isFinite(confidence) ? confidence : p;
+    return Math.max(0, Math.min(1, Number.isFinite(confidence) ? confidence : p));
 }
 
-function applyPolicy(key, answer, judgmentStyle = 'balanced') {
-    const selected = String(answer?.choice || '');
+function applyPolicy(key, answer, judgmentStyle = 'balanced', allowedChoices = []) {
+    const candidate = String(answer?.choice || '');
+    const selected = !allowedChoices.length || allowedChoices.includes(candidate) ? candidate : '';
     const score = certainty(answer);
     const fallback = FALLBACKS[key];
     const base = CHOICE_THRESHOLDS[key]?.[selected] ?? THRESHOLDS[key] ?? 0.7;
@@ -767,7 +765,7 @@ function prepareConflictProfiles(rec, decisions, details) {
 
 async function commitPendingState(rec = record(), assistantIndex = null) {
     if (!rec?.pendingCommit) return false;
-    const { decisions, inputKey, stateSnapshot } = rec.pendingCommit;
+    const { decisions, inputKey, stateSnapshot, preparedStateSnapshot } = rec.pendingCommit;
     updatePacingState(rec, decisions);
     if (decisions.event_route === 'continue' && rec.eventProfile) {
         if (decisions.resolution_pacing === 'partial') rec.eventProfile.phase = 'turning';
@@ -783,7 +781,14 @@ async function commitPendingState(rec = record(), assistantIndex = null) {
     const outputIndex = Number.isInteger(Number(assistantIndex)) ? Number(assistantIndex) : Number(rec.pendingCommit.chatCount);
     if (Number.isInteger(outputIndex) && stateSnapshot) {
         const history = [...await loadStateHistory()];
-        history.push({ inputKey, assistantIndex: outputIndex, before: stateSnapshot, committedAt: new Date().toISOString() });
+        history.push({
+            inputKey,
+            assistantIndex: outputIndex,
+            before: stateSnapshot,
+            prepared: preparedStateSnapshot || null,
+            judgment: rec.lastJudgment ? JSON.parse(JSON.stringify(rec.lastJudgment)) : null,
+            committedAt: new Date().toISOString(),
+        });
         await saveStateHistory(history);
     }
     rec.pendingCommit = null;
@@ -793,35 +798,65 @@ async function commitPendingState(rec = record(), assistantIndex = null) {
 async function onCharacterMessageReceived(messageId) {
     const rec = record();
     const index = Number.isInteger(Number(messageId)) ? Number(messageId) : (getContext().chat || []).length - 1;
-    if (!await commitPendingState(rec, index)) return;
-    await persistChat();
-    renderAll();
+    const committed = await commitPendingState(rec, index);
+    pendingGenerationType = '';
+    if (committed) {
+        await persistChat();
+        renderAll();
+    }
 }
 
 async function rollbackChangedOutput(messageId, kind = 'changed') {
     const rec = record();
     if (!rec) return;
     const history = [...await loadStateHistory()];
-    if (!history.length) return;
     const index = Number(messageId);
     if (!Number.isInteger(index)) return;
     const affected = history.findIndex((entry) => Number(entry.assistantIndex) >= index);
-    if (affected < 0) return;
+    if (affected < 0) {
+        const pendingAffected = rec.pendingCommit && Number(rec.pendingCommit.chatCount) >= index;
+        if (!pendingAffected || ['swiped', 'regenerated'].includes(kind)) return;
+        restoreReversibleState(rec, rec.pendingCommit.stateSnapshot);
+        rec.pendingCommit = null;
+        rec.lastJudgment = null;
+        await clearInjection();
+        await persistChat();
+        renderAll();
+        const labels = { edited: '수정', deleted: '삭제' };
+        window.toastr?.info?.(`출력 ${labels[kind] || '변경'} 감지 · 대기 중이던 저장 상태를 복원했습니다.`, '씬판독기', { timeOut: 1800 });
+        return;
+    }
     const entry = history[affected];
-    restoreReversibleState(rec, entry.before);
+    const canReuseSwipe = ['swiped', 'regenerated'].includes(kind) && entry.prepared && entry.judgment;
+    restoreReversibleState(rec, canReuseSwipe ? entry.prepared : entry.before);
     await saveStateHistory(history.slice(0, affected));
-    rec.pendingCommit = null;
-    rec.lastJudgment = null;
-    await clearInjection();
+    if (canReuseSwipe) {
+        const visibleIndex = Math.max(0, (getContext().chat || []).slice(0, index).filter(isVisibleRoleplayMessage).length);
+        rec.lastJudgment = JSON.parse(JSON.stringify(entry.judgment));
+        rec.pendingCommit = {
+            inputKey: entry.inputKey,
+            decisions: { ...entry.judgment.decisions },
+            visibleCount: visibleIndex,
+            chatCount: index,
+            stateSnapshot: entry.before,
+            preparedStateSnapshot: entry.prepared,
+        };
+        await applyStoredInjection();
+    } else {
+        rec.pendingCommit = null;
+        rec.lastJudgment = null;
+        await clearInjection();
+    }
     await persistChat();
     renderAll();
-    const labels = { swiped: '리롤', edited: '수정', deleted: '삭제' };
-    window.toastr?.info?.(`출력 ${labels[kind] || '변경'} 감지 · 직전 저장 상태를 복원했습니다.`, '씬판독기', { timeOut: 1800 });
+    const labels = { swiped: '리롤', regenerated: '재생성', edited: '수정', deleted: '삭제' };
+    const suffix = canReuseSwipe ? '직전 누적을 되돌리고 같은 판정·추첨을 재사용합니다.' : '직전 저장 상태를 복원했습니다.';
+    window.toastr?.info?.(`출력 ${labels[kind] || '변경'} 감지 · ${suffix}`, '씬판독기', { timeOut: 1800 });
 }
 
 async function onAssistantOutputChanged(messageId, kind) {
     const index = Number(messageId);
-    if (kind !== 'deleted' && Number.isInteger(index)) {
+    if (!['deleted', 'regenerated'].includes(kind) && Number.isInteger(index)) {
         const message = (getContext().chat || [])[index];
         if (!message || message.is_user || message.is_system) return;
     }
@@ -834,6 +869,7 @@ async function applyStoredInjection() {
     const worldPayload = settings.enabled ? String(selectedWorld(rec)?.prompt || '') : '';
     const macroMode = rec?.preferences?.injectionMode === 'macro' && macroAvailable;
     const worldMacroMode = rec?.preferences?.worldInjectionMode === 'macro' && macroAvailable;
+    activeInjectionPayload = payload;
     activeMacroPayload = macroMode ? payload : '';
     activeWorldMacroPayload = worldMacroMode ? worldPayload : '';
     await setExtensionPrompt(INJECT_KEY, macroMode ? '' : payload, IN_CHAT, 0, false, SYSTEM_ROLE);
@@ -843,6 +879,7 @@ async function applyStoredInjection() {
 }
 
 async function clearInjection() {
+    activeInjectionPayload = '';
     activeMacroPayload = '';
     activeWorldMacroPayload = '';
     await setExtensionPrompt(INJECT_KEY, '', IN_CHAT, 0, false, SYSTEM_ROLE);
@@ -851,11 +888,11 @@ async function clearInjection() {
     if (preview) preview.textContent = '현재 주입문 없음';
 }
 
-async function runJudge({ force = false } = {}) {
-    if (judgeInFlight) return;
+async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } = {}) {
+    if (judgeInFlight) await judgeCompletionPromise;
     if (!settings.enabled) throw new Error('씬판독기가 꺼져 있습니다.');
     showActivity('입력 확인 중…');
-    if (settings.pauseOnOoc && isOocInput(latestUserText())) {
+    if (settings.pauseOnOoc && isOocInput(latestUserText(pendingUserText))) {
         await clearInjection();
         updateStatus('OOC 입력 · 판독과 주입 일시정지');
         updateActivity('OOC 입력 감지 · 이번 판독과 주입을 멈춥니다.', { done: true });
@@ -864,9 +901,9 @@ async function runJudge({ force = false } = {}) {
 
     const rec = record(true);
     const prefs = rec.preferences;
-    const inputKey = currentInputKey();
+    const inputKey = currentInputKey(pendingUserText, cycleSalt);
     if (rec.pendingCommit && rec.pendingCommit.inputKey !== inputKey) {
-        const visible = (getContext().chat || []).filter(isVisibleChatMessage);
+        const visible = (getContext().chat || []).filter(isVisibleRoleplayMessage);
         const generated = visible[rec.pendingCommit.visibleCount] && !visible[rec.pendingCommit.visibleCount].is_user;
         if (generated) await commitPendingState(rec, rec.pendingCommit.chatCount);
         else {
@@ -881,7 +918,7 @@ async function runJudge({ force = false } = {}) {
         return rec.lastJudgment;
     }
     let transcript;
-    try { transcript = recentTranscript(); }
+    try { transcript = recentTranscript(pendingUserText); }
     catch (error) { updateActivity(error.message, { error: true }); throw error; }
     const world = selectedWorld(rec);
     const questionPrefs = {
@@ -900,6 +937,7 @@ async function runJudge({ force = false } = {}) {
     });
 
     judgeInFlight = true;
+    judgeCompletionPromise = new Promise((resolve) => { resolveJudgeCompletion = resolve; });
     setBusy(true);
     updateStatus('Jev 판독 중…');
     updateActivity('Jev가 최근 장면을 판독하고 있습니다…');
@@ -921,7 +959,7 @@ async function runJudge({ force = false } = {}) {
         updateStatus('판독 완료 · 주입문 조립 중…');
         updateActivity('판독 완료 · 필요한 주입문을 조립하고 있습니다…');
         const details = {};
-        for (const key of Object.keys(questions)) details[key] = applyPolicy(key, data.answers[key], prefs.judgmentStyle);
+        for (const key of Object.keys(questions)) details[key] = applyPolicy(key, data.answers[key], prefs.judgmentStyle, Object.keys(questions[key]?.criteria || {}));
         const decisions = effectiveMap(details);
         const stateBefore = rec.pendingCommit?.inputKey === inputKey ? rec.pendingCommit.stateSnapshot : reversibleStateSnapshot(rec);
         coordinateDecisions(rec, details, decisions);
@@ -946,7 +984,17 @@ async function runJudge({ force = false } = {}) {
         }
         const payload = buildInjection({ settings: prefs, decisions, villainProfile: rec.villainProfile, npcProfile: rec.npcProfile, eventProfile: rec.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '' });
         rec.lastJudgment = { details, decisions, payload, inputKey, judgedAt: new Date().toISOString(), model: String(data.model || JEV_MODEL) };
-        if (rec.lastStateInput !== inputKey) rec.pendingCommit = { inputKey, decisions: { ...decisions }, visibleCount: (getContext().chat || []).filter(isVisibleChatMessage).length, chatCount: (getContext().chat || []).length, stateSnapshot: stateBefore };
+        if (rec.lastStateInput !== inputKey) {
+            const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
+            rec.pendingCommit = {
+                inputKey,
+                decisions: { ...decisions },
+                visibleCount: (getContext().chat || []).filter(isVisibleRoleplayMessage).length + pendingOffset,
+                chatCount: (getContext().chat || []).length + pendingOffset,
+                stateSnapshot: stateBefore,
+                preparedStateSnapshot: reversibleStateSnapshot(rec),
+            };
+        }
         await persistChat();
         await applyStoredInjection();
         renderAll();
@@ -974,6 +1022,8 @@ async function runJudge({ force = false } = {}) {
         throw error;
     } finally {
         judgeInFlight = false;
+        resolveJudgeCompletion?.();
+        resolveJudgeCompletion = null;
         setBusy(false);
     }
 }
@@ -1103,7 +1153,7 @@ function renderAll() {
     renderProfiles();
     renderStoredState();
     const preview = document.getElementById('sr-prompt-preview');
-    if (preview) preview.textContent = record()?.lastJudgment?.payload || '현재 주입문 없음';
+    if (preview) preview.textContent = activeInjectionPayload || '현재 주입문 없음';
 }
 
 function updateStatus(text = '') {
@@ -1116,6 +1166,13 @@ function updateStatus(text = '') {
 function updateKeyStatus(text = '') {
     const root = document.getElementById('sr-jev-status');
     if (root) root.textContent = text || maskKey(getSavedKey());
+}
+
+function runUiTask(task, failureMessage = '설정을 저장하지 못했습니다.') {
+    void Promise.resolve(task).catch((error) => {
+        console.error('[씬판독기] UI 작업 실패', error);
+        window.toastr?.error?.(`${failureMessage}${error?.message ? ` · ${error.message}` : ''}`, '씬판독기');
+    });
 }
 
 function setBusy(busy) {
@@ -1285,26 +1342,29 @@ function bindForm() {
         dialog.querySelectorAll('[data-sr-tab]').forEach((item) => item.classList.toggle('active', item === button));
         dialog.querySelectorAll('.sr-tab-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `sr-tab-${target}`));
     }));
-    document.getElementById('sr-run')?.addEventListener('click', () => void runJudge({ force: true }).catch(() => {}));
-    document.getElementById('sr-world-direction')?.addEventListener('change', (event) => void savePreference('worldDirection', event.target.value));
-    document.getElementById('sr-relationship-direction')?.addEventListener('change', (event) => void savePreference('relationshipDirection', event.target.value));
-    document.getElementById('sr-progression-mode')?.addEventListener('change', (event) => void savePreference('progressionMode', event.target.value));
-    document.getElementById('sr-world-profile')?.addEventListener('change', (event) => void savePreference('selectedWorldId', event.target.value));
-    document.getElementById('sr-advanced-enabled')?.addEventListener('change', (event) => void savePreference('advancedEnabled', event.target.checked).then(setFormValues));
-    document.getElementById('sr-advanced-style')?.addEventListener('change', (event) => void savePreference('advancedStyle', event.target.value));
-    for (const key of Object.keys(ADVANCED_ELEMENTS)) document.getElementById(`sr-advanced-${key}`)?.addEventListener('change', async () => {
+    document.getElementById('sr-run')?.addEventListener('click', () => {
+        const pendingUserText = String(document.getElementById('send_textarea')?.value || '').trim();
+        void runJudge({ force: true, pendingUserText }).catch(() => {});
+    });
+    document.getElementById('sr-world-direction')?.addEventListener('change', (event) => runUiTask(savePreference('worldDirection', event.target.value)));
+    document.getElementById('sr-relationship-direction')?.addEventListener('change', (event) => runUiTask(savePreference('relationshipDirection', event.target.value)));
+    document.getElementById('sr-progression-mode')?.addEventListener('change', (event) => runUiTask(savePreference('progressionMode', event.target.value)));
+    document.getElementById('sr-world-profile')?.addEventListener('change', (event) => runUiTask(savePreference('selectedWorldId', event.target.value)));
+    document.getElementById('sr-advanced-enabled')?.addEventListener('change', (event) => runUiTask(savePreference('advancedEnabled', event.target.checked).then(setFormValues)));
+    document.getElementById('sr-advanced-style')?.addEventListener('change', (event) => runUiTask(savePreference('advancedStyle', event.target.value)));
+    for (const key of Object.keys(ADVANCED_ELEMENTS)) document.getElementById(`sr-advanced-${key}`)?.addEventListener('change', () => {
         const selected = Object.keys(ADVANCED_ELEMENTS).filter((item) => document.getElementById(`sr-advanced-${item}`)?.checked);
         if (!selected.length) { document.getElementById(`sr-advanced-${key}`).checked = true; return; }
-        await savePreference('advancedElements', selected);
+        runUiTask(savePreference('advancedElements', selected));
     });
-    document.getElementById('sr-judgment-style')?.addEventListener('change', (event) => void savePreference('judgmentStyle', event.target.value));
-    document.getElementById('sr-injection-mode')?.addEventListener('change', (event) => void saveInjectionMode(event.target.value));
-    document.getElementById('sr-world-injection-mode')?.addEventListener('change', (event) => void saveWorldInjectionMode(event.target.value));
-    document.getElementById('sr-relationship-pace')?.addEventListener('change', (event) => void savePreference('relationshipPace', event.target.value));
-    document.getElementById('sr-resolution-pace')?.addEventListener('change', (event) => void savePreference('resolutionPace', event.target.value));
-    document.getElementById('sr-roleplay-pace')?.addEventListener('change', (event) => void savePreference('roleplayPace', event.target.value));
+    document.getElementById('sr-judgment-style')?.addEventListener('change', (event) => runUiTask(savePreference('judgmentStyle', event.target.value)));
+    document.getElementById('sr-injection-mode')?.addEventListener('change', (event) => runUiTask(saveInjectionMode(event.target.value)));
+    document.getElementById('sr-world-injection-mode')?.addEventListener('change', (event) => runUiTask(saveWorldInjectionMode(event.target.value)));
+    document.getElementById('sr-relationship-pace')?.addEventListener('change', (event) => runUiTask(savePreference('relationshipPace', event.target.value)));
+    document.getElementById('sr-resolution-pace')?.addEventListener('change', (event) => runUiTask(savePreference('resolutionPace', event.target.value)));
+    document.getElementById('sr-roleplay-pace')?.addEventListener('change', (event) => runUiTask(savePreference('roleplayPace', event.target.value)));
     for (const [id, key] of [['sr-negative-priority', 'negativePriority'], ['sr-fight-sustain', 'fightSustain'], ['sr-social-enabled', 'socialEnabled'], ['sr-world-hostility', 'worldHostility'], ['sr-npc-user', 'npcToUser'], ['sr-user-misfortune', 'userMisfortune']]) {
-        document.getElementById(id)?.addEventListener('change', (event) => void savePreference(key, event.target.checked));
+        document.getElementById(id)?.addEventListener('change', (event) => runUiTask(savePreference(key, event.target.checked)));
     }
     document.getElementById('sr-private-prompt-enabled')?.addEventListener('change', async (event) => {
         if (event.target.checked && !ownerPrompt()) {
@@ -1321,7 +1381,7 @@ function bindForm() {
             window.toastr?.error?.('제작자 비밀번호가 맞지 않습니다.', '씬판독기');
             return;
         }
-        localStorage.setItem(OWNER_UNLOCK_STORAGE, 'yes');
+        try { localStorage.setItem(OWNER_UNLOCK_STORAGE, 'yes'); } catch { /* extension settings still persist unlock */ }
         saveGlobal('ownerUnlocked', true);
         if (input) input.value = '';
         renderOwnerMode();
@@ -1330,8 +1390,13 @@ function bindForm() {
     document.getElementById('sr-owner-save')?.addEventListener('click', async () => {
         if (!ownerUnlocked()) return;
         const value = String(document.getElementById('sr-owner-prompt')?.value || '').trim();
-        if (value) localStorage.setItem(OWNER_PROMPT_STORAGE, value);
-        else localStorage.removeItem(OWNER_PROMPT_STORAGE);
+        try {
+            if (value) localStorage.setItem(OWNER_PROMPT_STORAGE, value);
+            else localStorage.removeItem(OWNER_PROMPT_STORAGE);
+        } catch {
+            window.toastr?.error?.('브라우저 저장소에 제작자 전용 원문을 저장하지 못했습니다.', '씬판독기');
+            return;
+        }
         const rec = record(true);
         if (!value) rec.preferences.privatePromptEnabled = false;
         rec.lastJudgment = null;
@@ -1344,8 +1409,8 @@ function bindForm() {
         await savePreference('villainEnabled', event.target.checked);
         if (!event.target.checked) { const rec = record(true); rec.villainProfile = null; rec.lastVillainRoll = null; await persistChat(); renderProfiles(); }
     });
-    document.getElementById('sr-appearance-chance')?.addEventListener('change', (event) => void savePreference('appearanceChance', Number(event.target.value) || 10));
-    document.getElementById('sr-event-chance')?.addEventListener('change', (event) => void savePreference('eventChance', Number(event.target.value) || 35));
+    document.getElementById('sr-appearance-chance')?.addEventListener('change', (event) => runUiTask(savePreference('appearanceChance', Number(event.target.value) || 10)));
+    document.getElementById('sr-event-chance')?.addEventListener('change', (event) => runUiTask(savePreference('eventChance', Number(event.target.value) || 35)));
     document.getElementById('sr-enabled')?.addEventListener('change', async (event) => {
         saveGlobal('enabled', event.target.checked);
         if (!event.target.checked) {
@@ -1388,7 +1453,7 @@ function bindForm() {
         catch { window.toastr?.error?.('매크로를 복사하지 못했습니다.', '씬판독기'); }
     });
     dialog.addEventListener('click', (event) => {
-        if (event.target.closest('#sr-end-active-event')) { void endActiveEvent(); return; }
+        if (event.target.closest('#sr-end-active-event')) { runUiTask(endActiveEvent(), '사건을 종료하지 못했습니다.'); return; }
         const item = event.target.closest('.sr-world-item');
         if (item) {
             const world = loadCustomWorlds().find((entry) => entry.id === item.dataset.worldId);
@@ -1414,7 +1479,7 @@ function bindForm() {
         const next = { id, name, hint: makeWorldHint(name, prompt), prompt };
         const index = worlds.findIndex((world) => world.id === id);
         if (index >= 0) worlds[index] = next; else worlds.push(next);
-        saveCustomWorlds(worlds);
+        if (!saveCustomWorlds(worlds)) { window.toastr?.error?.('브라우저 저장소에 세계관을 저장하지 못했습니다.', '씬판독기'); return; }
         if (preferences().selectedWorldId === id) await applyStoredInjection();
         showWorldList();
         window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
@@ -1422,7 +1487,7 @@ function bindForm() {
     document.getElementById('sr-world-delete')?.addEventListener('click', async () => {
         const id = String(document.getElementById('sr-world-edit-id')?.value || '');
         if (!id) return;
-        saveCustomWorlds(loadCustomWorlds().filter((world) => world.id !== id));
+        if (!saveCustomWorlds(loadCustomWorlds().filter((world) => world.id !== id))) { window.toastr?.error?.('브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
         if (preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
         showWorldList();
     });
@@ -1433,7 +1498,8 @@ function bindForm() {
         try {
             const parsed = JSON.parse(String(document.getElementById('sr-world-import-json')?.value || ''));
             if (!Array.isArray(parsed) || parsed.some((item) => !item?.name || !item?.prompt)) throw new Error();
-            saveCustomWorlds(parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || makeWorldHint(item.name, item.prompt)), prompt: String(item.prompt) })));
+            const imported = parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || makeWorldHint(item.name, item.prompt)), prompt: String(item.prompt) }));
+            if (!saveCustomWorlds(imported)) throw new Error('storage');
             await applyStoredInjection();
             showWorldList(); window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
         } catch { window.toastr?.error?.('가져오기 JSON 형식을 확인하세요.', '씬판독기'); }
@@ -1483,7 +1549,7 @@ function bindForm() {
         renderAll();
         window.toastr?.success?.('현재 일반 NPC를 종료하고 새 판독 대기로 전환했습니다.', '씬판독기');
     });
-    document.getElementById('sr-reset-event')?.addEventListener('click', () => void endActiveEvent());
+    document.getElementById('sr-reset-event')?.addEventListener('click', () => runUiTask(endActiveEvent(), '사건을 종료하지 못했습니다.'));
     document.getElementById('sr-reset-relationship')?.addEventListener('click', async () => {
         const rec = record(true);
         rec.pacingState.relationship = { closer: 0, distant: 0, lastBeat: 'none' };
@@ -1515,7 +1581,7 @@ function createDialog() {
             <main class="sr-main">
                 <div id="sr-tab-flow" class="sr-tab-panel active">
                     <section class="sr-control-card"><label for="sr-world-direction">세계 반응 방향</label><select id="sr-world-direction" class="text_pole">${optionsHtml(WORLD_DIRECTIONS)}</select><p class="sr-help">프리셋의 장르와 분위기를 바꾸지 않고, 유저를 향한 세계 반응의 기본 방향만 고정합니다.</p></section>
-                    <section class="sr-control-card"><label for="sr-world-profile">현재 세계관</label><select id="sr-world-profile" class="text_pole"></select><p class="sr-help">한 번에 하나만 사용합니다. 세계 규칙을 보강하며 고급 사건 사용 여부와는 독립적입니다. 커스텀 추가·수정은 고급 전개 탭에서 합니다.</p></section>
+                    <section class="sr-control-card"><label for="sr-world-profile">현재 세계관</label><select id="sr-world-profile" class="text_pole"></select><p class="sr-help">‘프리셋 기본 세계관 사용’은 별도 세계관 전문을 넣지 않고 프리셋·로어북의 설정을 그대로 읽어 진행 방향만 적용합니다. 다른 세계관은 한 번에 하나만 사용하며, 커스텀 추가·수정은 고급 전개 탭에서 합니다.</p></section>
                     <section class="sr-control-card"><label for="sr-relationship-direction">캐릭터→유저 관계 방향</label><select id="sr-relationship-direction" class="text_pole">${optionsHtml(RELATIONSHIP_DIRECTIONS)}</select><p class="sr-help">선택한 방향은 고정 주입됩니다. Jev는 이 방향을 바꾸지 않고 이번 턴의 관계 변화 여부와 크기만 판정합니다.</p></section>
                     <section class="sr-control-card"><label for="sr-judgment-style">판정 기준</label><select id="sr-judgment-style" class="text_pole">${optionsHtml(JUDGMENT_STYLES)}</select><p class="sr-help">보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행, 적극적은 애매하거나 유지여도 선택한 진행 장르를 활용합니다.</p></section>
                     <section class="sr-control-card"><label for="sr-progression-mode">RP 진행 유형</label><select id="sr-progression-mode" class="text_pole">${optionsHtml(PROGRESSION_MODES)}</select><p id="sr-basic-progression-note" class="sr-help">사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.</p></section>
@@ -1603,8 +1669,35 @@ function ensureQuickEntry() {
 }
 
 async function onBeforeGeneration(type, data, dryRun) {
-    if (dryRun || !settings.enabled || !settings.autoJudge || data?.quiet_prompt) return;
-    try { await runJudge(); }
+    if (dryRun || data?.quiet_prompt) return;
+    if (!settings.enabled) { await clearInjection(); return; }
+    pendingGenerationType = String(type || 'normal');
+    const pendingUserText = pendingComposerText(type, data, document.getElementById('send_textarea')?.value);
+    const cycleSalt = generationCycleSalt(getContext().chat, type, data);
+    if (settings.pauseOnOoc && isOocInput(latestUserText(pendingUserText))) {
+        await clearInjection();
+        updateStatus('OOC 입력 · 판독과 주입 일시정지');
+        updateActivity('OOC 입력 감지 · 이번 판독과 주입을 멈춥니다.', { done: true });
+        return;
+    }
+    if (!settings.autoJudge) {
+        const rec = record();
+        if (rec?.lastJudgment?.inputKey === currentInputKey(pendingUserText)) {
+            await applyStoredInjection();
+            updateStatus('수동 판독 결과 적용');
+        } else {
+            await clearInjection();
+            updateStatus('자동 판독 꺼짐 · 현재 입력은 수동 판독 필요');
+        }
+        return;
+    }
+    if (['swipe', 'regenerate'].includes(pendingGenerationType) && record()?.lastJudgment) {
+        await applyStoredInjection();
+        updateStatus('리롤·재생성 · 기존 판정과 추첨 재사용');
+        updateActivity('기존 판정 재사용 · 주입 적용 완료', { done: true });
+        return;
+    }
+    try { await runJudge({ pendingUserText, cycleSalt }); }
     catch (error) {
         console.error('[씬판독기] 자동 판독 실패', error);
         updateActivity(`자동 판독 실패 · ${error.message}`, { error: true });
@@ -1620,6 +1713,8 @@ async function onChatChanged() {
 
 async function init() {
     settings = { ...DEFAULTS, ...(extension_settings[MODULE] || {}) };
+    for (const key of ['enabled', 'autoJudge', 'pauseOnOoc', 'showConfidence', 'ownerUnlocked']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
+    settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
     extension_settings[MODULE] = settings;
     saveSettingsDebounced();
     const macros = getContext().macros;
@@ -1653,7 +1748,9 @@ async function init() {
     if (event_types.MESSAGE_RECEIVED) eventSource.on(event_types.MESSAGE_RECEIVED, onCharacterMessageReceived);
     if (event_types.MESSAGE_SWIPED) eventSource.on(event_types.MESSAGE_SWIPED, (messageId) => onAssistantOutputChanged(messageId, 'swiped'));
     if (event_types.MESSAGE_EDITED) eventSource.on(event_types.MESSAGE_EDITED, (messageId) => onAssistantOutputChanged(messageId, 'edited'));
-    if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, (messageId) => onAssistantOutputChanged(messageId, 'deleted'));
+    if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, (messageId) => onAssistantOutputChanged(messageId, pendingGenerationType === 'regenerate' ? 'regenerated' : 'deleted'));
+    if (event_types.GENERATION_STOPPED) eventSource.on(event_types.GENERATION_STOPPED, () => { pendingGenerationType = ''; });
+    if (event_types.GENERATION_ENDED) eventSource.on(event_types.GENERATION_ENDED, () => { pendingGenerationType = ''; });
     await clearInjection();
     console.info('[씬판독기] loaded');
 }
