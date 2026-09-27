@@ -2,6 +2,7 @@ export const ADVANCED_STYLES = {
     conservative: '보수적',
     balanced: '균형',
     active: '적극적',
+    very_active: '매우 적극적',
 };
 
 export const ADVANCED_ELEMENTS = {
@@ -148,7 +149,7 @@ function pick(list, random = Math.random) {
 }
 
 export function advancedChance(style) {
-    return { conservative: 18, balanced: 35, active: 58 }[style] || 35;
+    return { conservative: 18, balanced: 35, active: 58, very_active: 75 }[style] || 35;
 }
 
 export function rollAdvancedEvent(element, { random = Math.random, worldId = 'current', worldName = '현재 설정 따름' } = {}) {
@@ -204,6 +205,7 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         conservative: 'Require a clear existing cause or thread before opening a new event. Apparent safety strongly lowers entry, but does not erase an already established route.',
         balanced: 'Allow a surprising event when the world, location, prior consequence, faction, or ordinary chance supplies a concrete causal route. Do not require explicit foreshadowing.',
         active: 'Actively recognize setting-compatible openings, including latent routes into a calm scene. Still reject events that lack world compatibility, physical access, or scene capacity.',
+        very_active: 'Actively seek setting-compatible openings, including latent routes into calm scenes and plausible surprises. Keep the gate closed only when world compatibility, physical access, causal opportunity, or scene capacity is actually absent.',
     }[preferences.advancedStyle] || 'Allow a surprising event when a concrete causal route exists.';
     const elementCriteria = { none: 'No enabled element should be used in this response.' };
     for (const key of enabled) elementCriteria[key] = `${ADVANCED_ELEMENTS[key]} is the single best fit for the available causal route and current scene.`;

@@ -18,7 +18,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.7.1');
+assert.equal(manifest.version, '0.7.2');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -144,6 +144,7 @@ assert.equal(event.title, '진술의 핵심 모순');
 assert.equal(advancedChance('conservative'), 18);
 assert.equal(advancedChance('balanced'), 35);
 assert.equal(advancedChance('active'), 58);
+assert.equal(advancedChance('very_active'), 75);
 assert.ok(BUILTIN_WORLDS.some((world) => world.id === 'campus'));
 assert.equal(INITIAL_CUSTOM_WORLDS.length, 5);
 assert.match(makeWorldHint('테스트', '## TEST_WORLD\nUse established rules.\n<LOCK>Keep continuity.</LOCK>'), /^테스트: TEST WORLD Use established rules/);
