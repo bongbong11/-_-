@@ -7,6 +7,7 @@ import { buildInjection, buildQuestions, rollEventProfile, rollNpcProfile } from
 import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvancedEvent } from './advanced-library.js';
 import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, loadCustomWorlds, makeWorldHint } from './world-library.js';
 import { appendPendingUserMessage, buildInputKey, buildRecentTranscript, generationCycleSalt, latestUserMessageText, pendingComposerText } from './runtime-utils.js';
+import { sha256Fallback, sha256Hex } from './security-utils.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -19,7 +20,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.7.6');
+assert.equal(manifest.version, '0.7.7');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(source, /allowedChoices\.includes\(candidate\)/);
@@ -87,6 +88,9 @@ assert.match(source, /id="sr-roleplay-pace"/);
 assert.match(source, /id="sr-owner-card"/);
 assert.match(source, /<details id="sr-owner-card"/);
 assert.match(source, /OWNER_PASSWORD_HASH/);
+assert.match(source, /sha256Hex\(candidate\)/);
+assert.match(source, /잠금을 해제하지 못했습니다/);
+assert.match(source, /id="sr-owner-unlock" type="button"/);
 assert.match(source, /OWNER_PROMPT_STORAGE/);
 assert.match(source, /ownerUnlocked: false/);
 assert.match(source, /saveGlobal\('ownerUnlocked', true\)/);
@@ -201,15 +205,18 @@ const continuedChat = baseChat.map((message, index) => index === 3 ? { ...messag
 const nextContinueSalt = generationCycleSalt(continuedChat, 'continue', {});
 assert.notEqual(firstContinueSalt, nextContinueSalt, 'continued output must form a new judgment cycle after its text changes');
 assert.equal(generationCycleSalt(baseChat, 'swipe', {}), '');
+assert.equal(sha256Fallback('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+assert.equal(sha256Fallback('모바일 테스트'), createHash('sha256').update('모바일 테스트').digest('hex'));
+assert.equal(await sha256Hex('모바일 테스트', null), sha256Fallback('모바일 테스트'), 'owner unlock hashing must work without Web Crypto');
 const advancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ADVANCED_DEFAULT_ELEMENTS, worldHint: 'campus', advancedEventTitle: '' }, hasVillain: false, hasNpc: false, hasEvent: false });
 for (const key of ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move']) assert.ok(advancedQuestions[key], `${key} question missing`);
 assert.equal(advancedQuestions.event_route, undefined, 'advanced mode must replace basic event routing');
 assert.doesNotMatch(advancedQuestions.primary_focus.criteria.new_event, /Do not select/, 'advanced mode must keep new-event focus available');
-assert.match(advancedQuestions.advanced_element.instructions, /saved RP progression type is a soft routing preference/);
+assert.match(advancedQuestions.advanced_element.instructions, /Ignore the saved basic RP progression type/);
 const continuingAdvancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ['social'], worldHint: 'campus', advancedEventTitle: '저장 사건', advancedEventElement: 'threat' }, hasVillain: false, hasNpc: false, hasEvent: true });
 assert.ok(continuingAdvancedQuestions.advanced_element.criteria.threat, 'stored event element must remain routable after its creation toggle is disabled');
 assert.match(continuingAdvancedQuestions.advanced_element.instructions, /stored event, keep its fixed element/);
-assert.doesNotMatch(source, /progression\.disabled = prefs\.advancedEnabled/);
+assert.match(source, /progression\.disabled = prefs\.advancedEnabled/);
 assert.match(source, /eventChance\.disabled = prefs\.advancedEnabled/);
 assert.match(source, /decisions\.advanced_route === 'create' && focus !== 'new_event'/);
 assert.match(source, /진행 중인 사건의 기존 요소 유지/);

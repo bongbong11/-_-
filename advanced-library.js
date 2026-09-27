@@ -207,16 +207,6 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         active: 'Actively recognize setting-compatible openings, including latent routes into a calm scene. Still reject events that lack world compatibility, physical access, or scene capacity.',
         very_active: 'Actively seek setting-compatible openings, including latent routes into calm scenes and plausible surprises. Keep the gate closed only when world compatibility, physical access, causal opportunity, or scene capacity is actually absent.',
     }[preferences.advancedStyle] || 'Allow a surprising event when a concrete causal route exists.';
-    const progressionBias = {
-        off: 'No basic progression bias is selected; rely only on enabled advanced elements and the current scene.',
-        natural: 'Use the current scene and world without preferring a particular advanced element.',
-        daily: 'Prefer social or relationship movement when it is useful; larger events still require their own cause.',
-        adventure: 'Prefer exploration, objective, or threat movement when compatible with the current scene.',
-        investigation: 'Prefer investigation or objective movement when evidence, uncertainty, or an active question supports it.',
-        survival: 'Prefer threat, horror, or exploration movement when material danger or survival pressure supports it.',
-        intrigue: 'Prefer intrigue, relationship, or investigation movement when competing interests and access support it.',
-        military: 'Prefer threat, objective, or intrigue movement when command, operations, factions, or armed conflict support it.',
-    }[preferences.progressionMode] || 'Use the current scene and world without preferring a particular advanced element.';
     const elementCriteria = { none: 'No enabled element should be used in this response.' };
     for (const key of enabled) elementCriteria[key] = `${ADVANCED_ELEMENTS[key]} is the single best fit for the available causal route and current scene.`;
     if (hasEvent && ADVANCED_ELEMENTS[eventElement] && !elementCriteria[eventElement]) {
@@ -256,7 +246,7 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         },
         advanced_element: {
             type: 'choice',
-            instructions: `For a new event, choose at most one enabled content element. When continuing the stored event, keep its fixed element${hasEvent && ADVANCED_ELEMENTS[eventElement] ? ` (${ADVANCED_ELEMENTS[eventElement]})` : ''}. The choice controls event material, not prose genre or preset atmosphere. The saved RP progression type is a soft routing preference, never a requirement: ${progressionBias}`,
+            instructions: `For a new event, choose at most one enabled content element from the current scene and selected world. When continuing the stored event, keep its fixed element${hasEvent && ADVANCED_ELEMENTS[eventElement] ? ` (${ADVANCED_ELEMENTS[eventElement]})` : ''}. The choice controls event material, not prose genre or preset atmosphere. Ignore the saved basic RP progression type while advanced progression is enabled.`,
             criteria: elementCriteria,
         },
         advanced_move: {
