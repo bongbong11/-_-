@@ -85,12 +85,21 @@
 #scene-reader-dialog select,
 #scene-reader-dialog textarea,
 #scene-reader-dialog button { touch-action: manipulation; color: var(--SmartThemeBodyColor); }
-#scene-reader-dialog input,
+#scene-reader-dialog input:not([type="checkbox"]),
 #scene-reader-dialog select,
 #scene-reader-dialog textarea { background-color: var(--SmartThemeBlurTintColor, var(--SmartThemeBotMesBlurTintColor)); border-color: var(--SmartThemeBorderColor); }
+#scene-reader-dialog input[type="checkbox"] { display: inline-block !important; position: static !important; transform: none !important; flex: 0 0 18px; width: 18px !important; min-width: 18px; height: 18px !important; margin: 0 7px 0 0; appearance: auto; -webkit-appearance: checkbox; accent-color: var(--SmartThemeQuoteColor); opacity: 1 !important; visibility: visible !important; pointer-events: auto; }
+#scene-reader-dialog .checkbox_label { pointer-events: auto; cursor: pointer; }
 #scene-reader-dialog .sr-chip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-#scene-reader-dialog .sr-world-list { display: flex; flex-wrap: wrap; gap: 7px; }
-#scene-reader-dialog .sr-world-list .menu_button { flex: 1 1 160px; }
+#scene-reader-dialog .sr-world-list { display: grid; gap: 6px; }
+#scene-reader-dialog .sr-world-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 42px; padding: 8px 11px; color: inherit; background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; }
+#scene-reader-dialog .sr-world-toolbar,
+#scene-reader-dialog .sr-world-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#scene-reader-dialog .sr-world-toolbar .sr-help { margin: 0; }
+#scene-reader-dialog .sr-plus-button { width: 42px; min-width: 42px; height: 42px; padding: 0; }
+#scene-reader-dialog #sr-world-editor,
+#scene-reader-dialog #sr-world-import-panel { display: grid; gap: 8px; }
+#scene-reader-dialog .sr-world-list-actions { margin-top: 9px; }
 #scene-reader-dialog .sr-world-manager > summary { min-height: 32px; cursor: pointer; font-weight: 700; }
 #scene-reader-dialog .sr-world-manager[open] > summary { margin-bottom: 8px; }
 #scene-reader-dialog .sr-world-manager textarea { width: 100%; resize: vertical; }

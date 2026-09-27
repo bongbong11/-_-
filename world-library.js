@@ -207,6 +207,19 @@ Keep this check internal.`,
     },
 ];
 
+export function makeWorldHint(name, prompt) {
+    const cleaned = String(prompt || '')
+        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<\/?[A-Z][^>]*>/g, ' ')
+        .replace(/^\s*#{1,6}\s*/gm, '')
+        .replace(/[*_`>|-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const excerpt = cleaned.slice(0, 360).replace(/\s+\S*$/, '').trim() || cleaned.slice(0, 360);
+    return `${String(name || 'Custom world').trim()}: ${excerpt || 'Follow the stored world prompt and active roleplay continuity.'}`;
+}
+
 export function loadCustomWorlds() {
     try {
         const parsed = JSON.parse(localStorage.getItem(CUSTOM_WORLD_STORAGE) || 'null');
@@ -222,5 +235,5 @@ export function saveCustomWorlds(worlds) {
 }
 
 export function allWorlds(builtins, customs = loadCustomWorlds()) {
-    return [...builtins.map((world) => ({ ...world, builtin: true })), ...customs.map((world) => ({ ...world, builtin: false }))];
+    return [...builtins.map((world) => ({ ...world, builtin: true })), ...customs.map((world) => ({ ...world, hint: world.hint || makeWorldHint(world.name, world.prompt), builtin: false }))];
 }

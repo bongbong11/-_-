@@ -30,7 +30,7 @@ import {
     rollAdvancedEvent,
     rollAdvancedEntity,
 } from './advanced-library.js';
-import { allWorlds, loadCustomWorlds, saveCustomWorlds } from './world-library.js';
+import { allWorlds, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
 
 const MODULE = 'sceneReader';
 const INJECT_KEY = 'scene-reader-router';
@@ -325,19 +325,26 @@ function updateActivity(message, { done = false, error = false } = {}) {
 }
 
 async function copyText(value) {
-    if (navigator.clipboard?.writeText) {
-        try { await navigator.clipboard.writeText(value); return; } catch { /* use fallback */ }
-    }
     const textarea = document.createElement('textarea');
     textarea.value = value;
+    textarea.readOnly = true;
     textarea.style.position = 'fixed';
+    textarea.style.left = '-10000px';
+    textarea.style.top = '0';
     textarea.style.opacity = '0';
-    document.body.append(textarea);
+    const host = dialog?.open ? dialog : document.body;
+    host.append(textarea);
     textarea.focus();
     textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
     const copied = document.execCommand('copy');
     textarea.remove();
-    if (!copied) throw new Error('copy failed');
+    if (copied) return;
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+    }
+    throw new Error('copy failed');
 }
 
 function record(create = false) {
@@ -1178,11 +1185,35 @@ function renderWorldControls() {
     const current = preferences().selectedWorldId;
     const select = document.getElementById('sr-world-profile');
     if (select) {
-        select.innerHTML = worlds.map((world) => `<option value="${escapeHtml(world.id)}">${world.builtin ? '기본 · ' : '저장 · '}${escapeHtml(world.name)}</option>`).join('');
+        select.innerHTML = worlds.map((world) => `<option value="${escapeHtml(world.id)}">${escapeHtml(world.name)}</option>`).join('');
         select.value = worlds.some((world) => world.id === current) ? current : 'current';
     }
     const manager = document.getElementById('sr-world-manager-list');
-    if (manager) manager.innerHTML = loadCustomWorlds().map((world) => `<button type="button" class="menu_button sr-world-item" data-world-id="${escapeHtml(world.id)}">${escapeHtml(world.name)}</button>`).join('') || '<div class="sr-empty-small">저장한 커스텀 세계관 없음</div>';
+    if (manager) manager.innerHTML = loadCustomWorlds().map((world) => `<button type="button" class="sr-world-item" data-world-id="${escapeHtml(world.id)}"><span>${escapeHtml(world.name)}</span><i class="fa-solid fa-pen" aria-hidden="true"></i></button>`).join('') || '<div class="sr-empty-small">저장한 커스텀 세계관 없음</div>';
+}
+
+function showWorldEditor(world = null) {
+    const listView = document.getElementById('sr-world-list-view');
+    const editor = document.getElementById('sr-world-editor');
+    const importPanel = document.getElementById('sr-world-import-panel');
+    if (!listView || !editor) return;
+    listView.hidden = true;
+    editor.hidden = false;
+    if (importPanel) importPanel.hidden = true;
+    document.getElementById('sr-world-edit-id').value = world?.id || '';
+    document.getElementById('sr-world-edit-name').value = world?.name || '';
+    document.getElementById('sr-world-edit-prompt').value = world?.prompt || '';
+    document.getElementById('sr-world-editor-title').textContent = world ? `세계관 수정 · ${world.name}` : '새 세계관 작성';
+}
+
+function showWorldList() {
+    const listView = document.getElementById('sr-world-list-view');
+    const editor = document.getElementById('sr-world-editor');
+    const importPanel = document.getElementById('sr-world-import-panel');
+    if (listView) listView.hidden = false;
+    if (editor) editor.hidden = true;
+    if (importPanel) importPanel.hidden = true;
+    renderWorldControls();
 }
 
 function saveGlobal(key, value) {
@@ -1348,17 +1379,18 @@ function bindForm() {
         const item = event.target.closest('.sr-world-item');
         if (item) {
             const world = loadCustomWorlds().find((entry) => entry.id === item.dataset.worldId);
-            if (world) {
-                document.getElementById('sr-world-edit-id').value = world.id;
-                document.getElementById('sr-world-edit-name').value = world.name;
-                document.getElementById('sr-world-edit-hint').value = world.hint || '';
-                document.getElementById('sr-world-edit-prompt').value = world.prompt || '';
-            }
+            if (world) showWorldEditor(world);
         }
     });
-    document.getElementById('sr-world-new')?.addEventListener('click', () => {
-        for (const id of ['sr-world-edit-id', 'sr-world-edit-name', 'sr-world-edit-hint', 'sr-world-edit-prompt']) document.getElementById(id).value = '';
+    document.getElementById('sr-world-new')?.addEventListener('click', () => showWorldEditor());
+    document.getElementById('sr-world-cancel')?.addEventListener('click', showWorldList);
+    document.getElementById('sr-world-import-open')?.addEventListener('click', () => {
+        document.getElementById('sr-world-list-view').hidden = true;
+        document.getElementById('sr-world-editor').hidden = true;
+        document.getElementById('sr-world-import-panel').hidden = false;
+        document.getElementById('sr-world-import-json').value = '';
     });
+    document.getElementById('sr-world-import-cancel')?.addEventListener('click', showWorldList);
     document.getElementById('sr-world-save')?.addEventListener('click', () => {
         const name = String(document.getElementById('sr-world-edit-name')?.value || '').trim();
         const prompt = String(document.getElementById('sr-world-edit-prompt')?.value || '').trim();
@@ -1366,10 +1398,11 @@ function bindForm() {
         const worlds = loadCustomWorlds();
         const oldId = String(document.getElementById('sr-world-edit-id')?.value || '');
         const id = oldId || `custom-${Date.now()}`;
-        const next = { id, name, hint: String(document.getElementById('sr-world-edit-hint')?.value || '').trim() || name, prompt };
+        const next = { id, name, hint: makeWorldHint(name, prompt), prompt };
         const index = worlds.findIndex((world) => world.id === id);
         if (index >= 0) worlds[index] = next; else worlds.push(next);
-        saveCustomWorlds(worlds); document.getElementById('sr-world-edit-id').value = id; renderWorldControls();
+        saveCustomWorlds(worlds);
+        showWorldList();
         window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
     });
     document.getElementById('sr-world-delete')?.addEventListener('click', async () => {
@@ -1377,19 +1410,18 @@ function bindForm() {
         if (!id) return;
         saveCustomWorlds(loadCustomWorlds().filter((world) => world.id !== id));
         if (preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
-        for (const field of ['sr-world-edit-id', 'sr-world-edit-name', 'sr-world-edit-hint', 'sr-world-edit-prompt']) document.getElementById(field).value = '';
-        renderWorldControls();
+        showWorldList();
     });
     document.getElementById('sr-world-export')?.addEventListener('click', async () => {
         try { await copyText(JSON.stringify(loadCustomWorlds(), null, 2)); window.toastr?.success?.('저장 세계관 JSON을 복사했습니다.', '씬판독기'); } catch { window.toastr?.error?.('복사하지 못했습니다.', '씬판독기'); }
     });
     document.getElementById('sr-world-import')?.addEventListener('click', () => {
         try {
-            const parsed = JSON.parse(String(document.getElementById('sr-world-edit-prompt')?.value || ''));
+            const parsed = JSON.parse(String(document.getElementById('sr-world-import-json')?.value || ''));
             if (!Array.isArray(parsed) || parsed.some((item) => !item?.name || !item?.prompt)) throw new Error();
-            saveCustomWorlds(parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || item.name), prompt: String(item.prompt) })));
-            renderWorldControls(); window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
-        } catch { window.toastr?.error?.('전문 입력칸의 JSON 형식을 확인하세요.', '씬판독기'); }
+            saveCustomWorlds(parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || makeWorldHint(item.name, item.prompt)), prompt: String(item.prompt) })));
+            showWorldList(); window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
+        } catch { window.toastr?.error?.('가져오기 JSON 형식을 확인하세요.', '씬판독기'); }
     });
     document.getElementById('sr-reset-npc')?.addEventListener('click', async () => {
         const rec = record(true);
@@ -1488,7 +1520,7 @@ function createDialog() {
                 <div id="sr-tab-advanced" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>고급 전개</h3><label class="checkbox_label"><input id="sr-advanced-enabled" type="checkbox"><span><strong>고급 전개 사용</strong></span></label><p class="sr-help">켜면 기본 RP 진행 유형의 사건 생성을 대신합니다. Jev가 맥락과 진입 경로를 판정하고, 확장이 필요한 요소 하나만 추첨·조립합니다. 관계·호흡·갈등용 설정은 그대로 함께 작동합니다.</p><label for="sr-advanced-style">전개 개방도</label><select id="sr-advanced-style" class="text_pole">${optionsHtml(ADVANCED_STYLES)}</select><p class="sr-help">보수적 18% · 균형 35% · 적극적 58%. Jev가 가능한 원인 경로를 찾은 새 사건 기회에만 한 번 굴립니다.</p></section>
                     <section class="sr-settings-card"><h3>사용할 요소</h3><div class="sr-chip-grid">${Object.entries(ADVANCED_ELEMENTS).map(([key, label]) => `<label class="checkbox_label"><input id="sr-advanced-${key}" type="checkbox"><span>${escapeHtml(label)}</span></label>`).join('')}</div><p class="sr-help">켜 둔 요소 중 이번 장면에 필요한 하나만 사용합니다. 선택만으로 매턴 주입하지 않습니다. 일상·교류는 큰 사건 없이 캠퍼스·직장·생활 흐름을 움직일 때도 사용할 수 있습니다.</p></section>
-                    <details class="sr-settings-card sr-world-manager"><summary>저장한 세계관</summary><p class="sr-help">기본 세계관은 읽기 전용입니다. 아래에는 사용자가 수정·추가할 수 있는 커스텀 세계관만 표시됩니다.</p><div id="sr-world-manager-list" class="sr-world-list"></div><input id="sr-world-edit-id" type="hidden"><label for="sr-world-edit-name">이름</label><input id="sr-world-edit-name" class="text_pole" placeholder="세계관 이름"><label for="sr-world-edit-hint">Jev용 짧은 판정 힌트</label><textarea id="sr-world-edit-hint" class="text_pole" rows="2" placeholder="전문을 보내지 않고 판정에 쓸 짧은 요약"></textarea><label for="sr-world-edit-prompt">주입 전문 또는 가져올 JSON</label><textarea id="sr-world-edit-prompt" class="text_pole" rows="12" placeholder="세계관 전문을 붙여 넣으세요."></textarea><div class="sr-action-row"><button id="sr-world-new" class="menu_button">새로 작성</button><button id="sr-world-save" class="menu_button">저장</button><button id="sr-world-delete" class="menu_button">삭제</button><button id="sr-world-export" class="menu_button">전체 JSON 복사</button><button id="sr-world-import" class="menu_button">JSON 가져오기</button></div></details>
+                    <details class="sr-settings-card sr-world-manager"><summary>세계관 관리</summary><div id="sr-world-list-view"><div class="sr-world-toolbar"><p class="sr-help">커스텀 세계관 목록</p><button id="sr-world-new" type="button" class="menu_button sr-plus-button" aria-label="새 세계관 작성"><i class="fa-solid fa-plus"></i></button></div><div id="sr-world-manager-list" class="sr-world-list"></div><div class="sr-action-row sr-world-list-actions"><button id="sr-world-export" class="menu_button">전체 JSON 복사</button><button id="sr-world-import-open" class="menu_button">JSON 가져오기</button></div></div><div id="sr-world-editor" hidden><div class="sr-world-editor-head"><strong id="sr-world-editor-title">새 세계관 작성</strong><button id="sr-world-cancel" type="button" class="sr-icon-button" aria-label="목록으로 돌아가기"><i class="fa-solid fa-arrow-left"></i></button></div><input id="sr-world-edit-id" type="hidden"><label for="sr-world-edit-name">이름</label><input id="sr-world-edit-name" class="text_pole" placeholder="세계관 이름"><label for="sr-world-edit-prompt">주입 전문</label><textarea id="sr-world-edit-prompt" class="text_pole" rows="12" placeholder="세계관 전문을 붙여 넣으세요. Jev용 판정 힌트는 저장할 때 자동으로 만듭니다."></textarea><div class="sr-action-row"><button id="sr-world-save" class="menu_button">저장하고 목록으로</button><button id="sr-world-delete" class="menu_button">삭제</button></div></div><div id="sr-world-import-panel" hidden><div class="sr-world-editor-head"><strong>세계관 JSON 가져오기</strong><button id="sr-world-import-cancel" type="button" class="sr-icon-button" aria-label="목록으로 돌아가기"><i class="fa-solid fa-arrow-left"></i></button></div><textarea id="sr-world-import-json" class="text_pole" rows="12" placeholder="내보낸 세계관 JSON을 붙여 넣으세요."></textarea><button id="sr-world-import" class="menu_button">가져오고 목록으로</button></div></details>
                 </div>
                 <div id="sr-tab-conflict" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>부정 편향 우선순위</h3><label class="checkbox_label"><input id="sr-negative-priority" type="checkbox"><span><strong>부정 편향을 최우선으로 사용</strong></span></label><p class="sr-help">켜면 이 탭에서 활성화한 원문 빠답을 씬판독기의 관계·사건·NPC·속도 지시보다 우선합니다. 다른 이야기는 이 기반을 무효화하지 않는 범위에서 진행됩니다.</p></section>
