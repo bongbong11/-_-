@@ -1264,9 +1264,40 @@ function createWandEntry() {
     wrapper.tabIndex = 0;
     wrapper.innerHTML = '<div class="list-group-item flex-container flexGap5 interactable" tabindex="0" title="씬판독기 열기"><div class="extensionsMenuExtensionButton fa-solid fa-magnifying-glass-chart"></div>씬판독기</div>';
     document.getElementById('extensionsMenu')?.append(wrapper);
-    const open = () => { setFormValues(); renderAll(); if (!dialog.open) dialog.showModal(); };
-    wrapper.addEventListener('click', open);
-    wrapper.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') open(); });
+    wrapper.addEventListener('click', openSceneReader);
+    wrapper.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') openSceneReader(); });
+}
+
+function openSceneReader() {
+    setFormValues();
+    renderAll();
+    if (!dialog.open) dialog.showModal();
+}
+
+function createQuickEntry() {
+    if (document.getElementById('scene-reader-quick-button')) return true;
+    const extensionButton = document.getElementById('extensionsMenuButton');
+    const holder = extensionButton?.parentElement || document.getElementById('leftSendForm') || document.getElementById('rightSendForm');
+    if (!holder) return false;
+    const button = document.createElement('div');
+    button.id = 'scene-reader-quick-button';
+    button.className = 'fa-solid fa-magnifying-glass-chart interactable';
+    button.tabIndex = 0;
+    button.setAttribute('role', 'button');
+    button.setAttribute('aria-label', '씬판독기 열기');
+    button.title = '씬판독기';
+    button.addEventListener('click', openSceneReader);
+    button.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') openSceneReader(); });
+    extensionButton?.nextSibling ? holder.insertBefore(button, extensionButton.nextSibling) : holder.append(button);
+    return true;
+}
+
+function ensureQuickEntry() {
+    if (createQuickEntry()) return;
+    const observer = new MutationObserver(() => {
+        if (createQuickEntry()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 }
 
 async function onBeforeGeneration(type, data, dryRun) {
@@ -1306,6 +1337,7 @@ async function init() {
     }
     createDialog();
     createWandEntry();
+    ensureQuickEntry();
     await loadStateHistory();
     eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onBeforeGeneration);
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
