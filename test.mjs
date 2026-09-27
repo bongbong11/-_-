@@ -16,7 +16,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.6.0');
+assert.equal(manifest.version, '0.6.1');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -86,6 +86,9 @@ assert.match(css, /100dvh/);
 assert.match(css, /@media \(max-width: 600px\)/);
 assert.match(css, /\.sr-run-row \.menu_button \{[^\n]*min-width: 150px/);
 assert.match(css, /\[hidden\] \{ display: none !important; \}/);
+assert.match(css, /button \{[^\n]*writing-mode: horizontal-tb !important/);
+assert.match(css, /word-break: keep-all/);
+assert.match(css, /\.sr-action-row \{ display: grid; grid-template-columns: minmax\(0, 1fr\); width: 100%; \}/);
 const dialogIds = [...source.matchAll(/id="(sr-[^"]+)"/g)].map((match) => match[1]);
 assert.equal(new Set(dialogIds).size, dialogIds.length, 'dialog element ids must be unique');
 
