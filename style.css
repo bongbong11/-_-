@@ -1,0 +1,95 @@
+#scene-reader-dialog {
+    width: min(760px, calc(100vw - 24px));
+    height: min(820px, calc(100dvh - 24px));
+    max-width: none;
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    overflow: hidden;
+    color: var(--SmartThemeBodyColor);
+    background: var(--SmartThemeBlurTintColor, rgba(24, 24, 28, .98));
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 14px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .48);
+}
+
+#scene-reader-dialog::backdrop { background: rgba(0, 0, 0, .64); backdrop-filter: blur(3px); }
+#scene-reader-dialog .sr-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }
+#scene-reader-dialog .sr-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 15px 10px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+#scene-reader-dialog .sr-header h2,
+#scene-reader-dialog .sr-header p { margin: 0; }
+#scene-reader-dialog .sr-header h2 { font-size: 1.2rem; }
+#scene-reader-dialog .sr-header p { margin-top: 3px; opacity: .72; font-size: .84rem; }
+#scene-reader-dialog .sr-icon-button { width: 44px; height: 44px; flex: 0 0 44px; border: 0; border-radius: 50%; color: inherit; background: rgba(255,255,255,.08); cursor: pointer; }
+#scene-reader-dialog .sr-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; padding: 8px 11px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+#scene-reader-dialog .sr-tabs button { min-height: 44px; border: 0; border-radius: 9px; color: inherit; background: transparent; cursor: pointer; touch-action: manipulation; }
+#scene-reader-dialog .sr-tabs button.active { background: rgba(255,255,255,.12); font-weight: 700; }
+#scene-reader-dialog .sr-main { min-height: 0; overflow: hidden; }
+#scene-reader-dialog .sr-tab-panel { display: none; height: 100%; box-sizing: border-box; padding: 13px; overflow-y: auto; overscroll-behavior: contain; }
+#scene-reader-dialog .sr-tab-panel.active { display: block; }
+#scene-reader-dialog .sr-control-card,
+#scene-reader-dialog .sr-settings-card,
+#scene-reader-dialog .sr-summary-card,
+#scene-reader-dialog .sr-details { margin: 0 0 10px; padding: 12px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 11px; background: rgba(255,255,255,.045); }
+#scene-reader-dialog .sr-control-card > label:not(.checkbox_label),
+#scene-reader-dialog .sr-settings-card > label:not(.checkbox_label) { display: block; margin-bottom: 7px; font-weight: 700; }
+#scene-reader-dialog .sr-settings-card h3 { margin: 0 0 9px; font-size: 1rem; }
+#scene-reader-dialog .sr-help { margin: 7px 0 0; opacity: .72; font-size: .84rem; line-height: 1.45; }
+#scene-reader-dialog .sr-run-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0; }
+#scene-reader-dialog .sr-run-row > div { min-width: 0; opacity: .78; overflow-wrap: anywhere; }
+#scene-reader-dialog .sr-run-row .menu_button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 150px; min-height: 44px; padding: 9px 18px; flex: 0 0 auto; white-space: nowrap; writing-mode: horizontal-tb; }
+#scene-reader-dialog .sr-summary-card h3 { margin: 0 0 8px; font-size: 1rem; }
+#scene-reader-dialog .sr-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+#scene-reader-dialog .sr-summary-item { display: grid; gap: 2px; padding: 8px 9px; border-radius: 8px; background: rgba(0,0,0,.15); }
+#scene-reader-dialog .sr-summary-item span { opacity: .68; font-size: .78rem; }
+#scene-reader-dialog .sr-summary-item strong { font-size: .9rem; overflow-wrap: anywhere; }
+#scene-reader-dialog .sr-details summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 28px; cursor: pointer; font-weight: 700; }
+#scene-reader-dialog .sr-details summary small { max-width: 52%; opacity: .66; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-weight: 400; }
+#scene-reader-dialog .sr-criteria-note { margin: 5px 0 8px; opacity: .7; font-size: .82rem; line-height: 1.45; }
+#scene-reader-dialog .sr-section-divider { margin: 10px 0 5px; padding-top: 9px; border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, transparent); font-size: .84rem; font-weight: 700; opacity: .8; }
+#scene-reader-dialog .sr-decision-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, transparent); }
+#scene-reader-dialog .sr-decision-row:first-child { border-top: 0; }
+#scene-reader-dialog .sr-decision-row strong { text-align: right; }
+#scene-reader-dialog .sr-decision-row small { grid-column: 1 / -1; opacity: .65; text-align: right; }
+#scene-reader-dialog #sr-profile-status { display: grid; gap: 8px; }
+#scene-reader-dialog #sr-profile-status > div { display: grid; gap: 3px; }
+#scene-reader-dialog .sr-roll-card { padding: 9px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); border-radius: 9px; background: rgba(0,0,0,.14); }
+#scene-reader-dialog .sr-roll-card span { font-size: .88rem; line-height: 1.4; }
+#scene-reader-dialog .sr-empty-small { padding: 8px 0 2px; opacity: .65; }
+#scene-reader-dialog .sr-preview { min-height: 180px; max-height: 380px; margin: 8px 0 0; padding: 11px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; background: rgba(0,0,0,.25); border-radius: 9px; font: inherit; font-size: .84rem; line-height: 1.5; }
+#scene-reader-dialog .sr-settings-card { display: grid; gap: 8px; }
+#scene-reader-dialog [hidden] { display: none !important; }
+#scene-reader-dialog .sr-owner-unlock-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+#scene-reader-dialog #sr-owner-prompt { width: 100%; min-height: 150px; resize: vertical; }
+#scene-reader-dialog .sr-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#scene-reader-dialog .sr-grid-2 > div { display: grid; gap: 6px; }
+#scene-reader-dialog .sr-key-row { display: grid; grid-template-columns: minmax(0, 1fr) 46px; gap: 7px; }
+#scene-reader-dialog .sr-macro-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+#scene-reader-dialog .sr-macro-row code { min-width: 0; padding: 10px 12px; overflow-wrap: anywhere; user-select: text; border-radius: 8px; background: rgba(0,0,0,.24); }
+#scene-reader-dialog .sr-macro-row .menu_button { min-width: 72px; min-height: 42px; }
+#scene-reader-dialog .sr-key-status { min-height: 1.3em; opacity: .76; font-size: .83rem; overflow-wrap: anywhere; }
+#scene-reader-dialog .sr-action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+#scene-reader-dialog .sr-action-row .menu_button { min-height: 42px; }
+#scene-reader-dialog input,
+#scene-reader-dialog select,
+#scene-reader-dialog button { touch-action: manipulation; }
+
+@media (max-width: 600px) {
+    #scene-reader-dialog { width: calc(100vw - 12px); height: calc(100dvh - 12px); border-radius: 12px; }
+    #scene-reader-dialog .sr-header { padding: 10px 11px 8px; }
+    #scene-reader-dialog .sr-header p { font-size: .78rem; }
+    #scene-reader-dialog .sr-tabs { padding: 7px 8px; }
+    #scene-reader-dialog .sr-tabs button { padding-inline: 4px; font-size: .84rem; }
+    #scene-reader-dialog .sr-tab-panel { padding: 9px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+    #scene-reader-dialog .sr-grid-2 { grid-template-columns: 1fr; }
+    #scene-reader-dialog .sr-summary-grid { grid-template-columns: 1fr; }
+    #scene-reader-dialog .sr-details summary { grid-template-columns: 1fr; gap: 2px; }
+    #scene-reader-dialog .sr-details summary small { max-width: 100%; text-align: left; }
+    #scene-reader-dialog .sr-run-row { align-items: stretch; flex-direction: column; }
+    #scene-reader-dialog .sr-run-row .menu_button,
+    #scene-reader-dialog .sr-action-row .menu_button { flex: 1 1 auto; }
+    #scene-reader-dialog .sr-run-row .menu_button { width: 100%; }
+    #scene-reader-dialog .sr-decision-row { grid-template-columns: 1fr; }
+    #scene-reader-dialog .sr-decision-row strong,
+    #scene-reader-dialog .sr-decision-row small { text-align: left; }
+}

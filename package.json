@@ -1,0 +1,10 @@
+{
+  "name": "sillytavern-scene-reader",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "main": "server-plugin/index.cjs",
+  "scripts": {
+    "check": "node --check index.js && node --check prompt-library.js && node --check legacy-prompts.js && node --check server-plugin/index.cjs && node test.mjs"
+  }
+}
