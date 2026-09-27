@@ -18,7 +18,7 @@ const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.7.3');
+assert.equal(manifest.version, '0.7.4');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /return Number\.isFinite\(confidence\) \? confidence : p/);
 assert.match(source, /보수적은 애매하면 유지, 균형은 기존 흐름을 한 단계 진행/);
@@ -154,6 +154,9 @@ assert.ok(makeWorldHint('테스트', 'x'.repeat(800)).length <= 365);
 const advancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ADVANCED_DEFAULT_ELEMENTS, worldHint: 'campus', advancedEventTitle: '' }, hasVillain: false, hasNpc: false, hasEvent: false });
 for (const key of ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move']) assert.ok(advancedQuestions[key], `${key} question missing`);
 assert.equal(advancedQuestions.event_route, undefined, 'advanced mode must replace basic event routing');
+assert.match(advancedQuestions.advanced_element.instructions, /saved RP progression type is a soft routing preference/);
+assert.doesNotMatch(source, /progression\.disabled = prefs\.advancedEnabled/);
+assert.match(source, /eventChance\.disabled = prefs\.advancedEnabled/);
 const advancedEvent = rollAdvancedEvent('exploration', { random: () => 0, worldId: 'campus', worldName: '현대 대학·캠퍼스' });
 const advancedPayload = buildInjection({
     settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'natural', advancedEnabled: true, relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium' },

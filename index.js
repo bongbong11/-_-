@@ -1170,12 +1170,12 @@ function setFormValues() {
     updateStatus();
     const macroStatus = document.getElementById('sr-macro-status');
     if (macroStatus) macroStatus.textContent = macroAvailable ? '필요한 위치에 각 매크로를 한 번씩 넣으세요.' : '이 SillyTavern 버전에서는 사용자 매크로를 등록할 수 없습니다.';
-    const progression = document.getElementById('sr-progression-mode');
-    if (progression) progression.disabled = prefs.advancedEnabled;
     const eventChance = document.getElementById('sr-event-chance');
     if (eventChance) eventChance.disabled = prefs.advancedEnabled;
+    const eventChanceNote = document.getElementById('sr-event-chance-note');
+    if (eventChanceNote) eventChanceNote.textContent = prefs.advancedEnabled ? '고급 전개 사용 중에는 전개 개방도의 18% / 35% / 58% / 75% 추첨이 대신하므로 이 항목만 잠깁니다.' : 'Jev가 새 중심 사건을 넣어도 된다고 판정한 적합한 계기마다 한 번만 굴립니다. 같은 장면에서 실패 추첨을 반복하지 않습니다.';
     const advancedNote = document.getElementById('sr-basic-progression-note');
-    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled ? '고급 전개가 사건 생성을 대신 사용 중입니다. 저장된 기본 선택은 고급 전개를 끄면 다시 적용됩니다.' : '사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.';
+    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled ? '고급 전개가 기본 사건 생성은 대신하지만, 이 진행 유형은 고급 요소를 고르는 넓은 방향으로 계속 사용됩니다. 세계관·문체·분위기는 바꾸지 않습니다.' : '사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.';
     const advancedResults = document.getElementById('sr-advanced-results');
     if (advancedResults) advancedResults.hidden = !prefs.advancedEnabled;
     renderWorldControls();
@@ -1510,7 +1510,7 @@ function createDialog() {
                     <section class="sr-control-card"><label for="sr-roleplay-pace">전체 RP 호흡</label><select id="sr-roleplay-pace" class="text_pole">${optionsHtml(PACE_OPTIONS)}</select><p class="sr-help">관계나 사건의 속도와 별개입니다. 중요한 순간은 살리고 반복·연결부·사소한 반응을 얼마나 압축할지 정합니다.</p></section>
                     <section class="sr-control-card"><div class="sr-grid-2"><div><label for="sr-relationship-pace">관계 진전 속도</label><select id="sr-relationship-pace" class="text_pole">${optionsHtml(PACE_OPTIONS)}</select></div><div><label for="sr-resolution-pace">사건 해결 속도</label><select id="sr-resolution-pace" class="text_pole">${optionsHtml(PACE_OPTIONS)}</select></div></div><p class="sr-help">두 속도는 RP 진행 유형·전체 호흡·세계·관계 방향에서 독립적으로 판정됩니다.</p></section>
                     <section class="sr-control-card"><label for="sr-appearance-chance">공통 인물 등장 확률</label><select id="sr-appearance-chance" class="text_pole"><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="35">35%</option><option value="50">50%</option><option value="100">100% · 다음 적합한 기회에 확정</option></select><p class="sr-help">Jev가 새 인물이 필요하다고 판정한 경우에만 굴립니다. 새 빌런과 새 일반 NPC에 공통 적용하며, 기존 인물 유지에는 다시 굴리지 않습니다.</p></section>
-                    <section class="sr-control-card"><label for="sr-event-chance">새 사건 발생 확률</label><select id="sr-event-chance" class="text_pole"><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="35">35%</option><option value="50">50%</option><option value="100">100% · 다음 적합한 기회에 확정</option></select><p class="sr-help">Jev가 새 중심 사건을 넣어도 된다고 판정한 적합한 계기마다 한 번만 굴립니다. 같은 장면에서 실패 추첨을 반복하지 않습니다.</p></section>
+                    <section class="sr-control-card"><label for="sr-event-chance">새 사건 발생 확률</label><select id="sr-event-chance" class="text_pole"><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="35">35%</option><option value="50">50%</option><option value="100">100% · 다음 적합한 기회에 확정</option></select><p id="sr-event-chance-note" class="sr-help">Jev가 새 중심 사건을 넣어도 된다고 판정한 적합한 계기마다 한 번만 굴립니다. 같은 장면에서 실패 추첨을 반복하지 않습니다.</p></section>
                     <div class="sr-run-row"><div id="sr-live-status">판독 대기</div><button id="sr-run" class="menu_button"><i class="fa-solid fa-bolt"></i> 지금 판독</button></div>
                     <section class="sr-summary-card"><h3>이번 턴 최종 적용</h3><div id="sr-turn-summary" class="sr-summary-grid"></div></section>
                     <section class="sr-summary-card sr-active-dashboard"><h3>현재 사건·인물 현황</h3><p class="sr-criteria-note">추첨·감지된 항목의 이번 턴 실행 여부와 긍정·부정 방향을 항상 표시합니다.</p><div id="sr-profile-status"></div></section>
