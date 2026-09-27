@@ -63,6 +63,8 @@ export const DECISION_LABELS = {
     user_handoff: { no: '캐릭터가 자기 몫을 실행함', yes: '질문만 하며 진행을 유저에게 넘김' },
     action_evasion: { no: '필요한 행동이 구체적으로 실행됨', yes: '행동을 분위기·말로만 얼버무림' },
     input_echo: { no: '유저 입력을 되풀이하지 않음', yes: '유저 입력을 반복·바꿔 말함' },
+    repetitive_ending: { no: '종결 구조 반복 없음', yes: '비슷한 종결 구조 반복' },
+    npc_identity_route: { none: '선택 없음', reuse_existing: '기존 인물 재사용', canon_natural: '자연스러운 원작 인물', original_major: '주요 오리지널 인물', original_minor: '일시적 오리지널 인물', group: '군중·집단' },
     directive_followthrough: { not_applicable: '직전 필수 실행 없음', fulfilled: '직전 지시 이행됨', partial: '일부만 이행됨', missed: '필요한 지시가 이행되지 않음' },
     relationship_direction: RELATIONSHIP_DIRECTIONS,
     relationship_pacing: { hold: '관계 상태 유지', closer_incremental: '조금 가까워짐', closer_significant: '분명히 가까워짐', distant_incremental: '조금 멀어짐', distant_significant: '분명히 멀어짐' },
@@ -141,9 +143,10 @@ const EXECUTION_CORRECTIONS = {
     user_handoff: 'Do not substitute repeated questions, permission-seeking, or handing the next move to {{user}} for the non-user characters\' own conduct. Make one concrete character-driven statement, choice, or action now without writing {{user}}\'s response or actions.',
     action_evasion: 'When an established intent, threat, hostile pressure, or active directive has means and opportunity, execute it through concrete speech, action, or consequence. Do not reduce it to atmosphere, posture, vague implication, another warning, or a last-moment refusal without a concrete blocking cause.',
     input_echo: 'Treat {{user}}\'s input as already established. Do not repeat, translate, paraphrase, summarize, enumerate, reenact, recalculate, or answer its minor parts one by one. Begin from the resulting response, action, consequence, or next development.',
+    repetitive_ending: 'Do not reuse the recent closing architecture. End on a different kind of live consequence, action, decision, pressure, or materially necessary dialogue beat; avoid another question menu, countdown, passive wait, stare, pause, or equivalent handoff.',
     scene_cutoff: 'Do not summarize, time-skip, fade out, or end the scene before the selected immediate action, response, or consequence is materially executed. Complete the current beat and leave the next participant response open.',
 };
-export const EXECUTION_CORRECTION_PRIORITY = ['input_echo', 'user_handoff', 'scene_cutoff', 'action_evasion', 'circularity', 'refusal_stall', 'hesitation_drag'];
+export const EXECUTION_CORRECTION_PRIORITY = ['input_echo', 'user_handoff', 'repetitive_ending', 'scene_cutoff', 'action_evasion', 'circularity', 'refusal_stall', 'hesitation_drag'];
 
 const NPC_COMMON_PROMPT = 'Keep active NPCs consistent and self-directed: let the relevant NPC speak, choose, or act from established motives, knowledge, and immediate stakes—not merely answer {{user}}, deliver exposition, or wait—and do not replace {{char}} or take over unrelated parts of the scene. Suspicion, intuition, body-language reading, coincidence, and genre convention do not grant hidden knowledge: infer only broad surface states from cues this NPC actually observed, never an unavailable fact, cause, relationship, motive, plan, or location.';
 
@@ -389,7 +392,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     const uncertainProgressionRule = {
         conservative: 'When the scene is unclear or merely maintaining its state, prefer hold. Do not add movement only to avoid uncertainty.',
         balanced: 'When the scene is unclear or merely maintaining its state, advance an already available thread by one modest step when possible; otherwise hold. Do not manufacture a new incident.',
-        active: 'An unclear or stable scene is not by itself a reason to hold. Use the enabled progression mode actively: choose a causally plausible advance, complication, favorable development, reveal, or transition, while preserving current characterization and continuity.',
+        active: 'An unclear or stable scene is not by itself a reason to hold. If any established thread, desire, obligation, location, relationship pressure, or genre-compatible opportunity can move, choose exactly one concrete advance, complication, favorable development, reveal, consequence, or transition. Hold only when movement would require inventing a major unsupported cause.',
     }[preferences.judgmentStyle] || 'When the scene is unclear or merely maintaining its state, advance an already available thread by one modest step when possible; otherwise hold.';
     const uncertainNpcRule = {
         conservative: 'When need is unclear, select none and keep existing people in focus.',
@@ -536,6 +539,11 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             instructions: 'Detect whether the latest character output repeats the user input merely to prove recognition. Include quotation, translation, paraphrase, summary, reenactment, answering every minor point in order, repeated numbers or dates, recalculation, and indirect equivalents. Preserve necessary factual reference when it changes the response or consequence.',
             criteria: { no: 'The output begins from the response, action, consequence, or next development; any repeated detail is necessary to what changes now.', yes: 'The output spends material space quoting, translating, paraphrasing, enumerating, reenacting, recalculating, or individually acknowledging information already established by the user.' },
         },
+        repetitive_ending: {
+            type: 'choice',
+            instructions: 'Across the recent character outputs, detect repeated closing architecture rather than repeated wording alone: recurring question endings, either/or choices, countdowns, passive waiting, a final stare or pause, or the same action-then-question sequence. Judge only when at least two character outputs are available.',
+            criteria: { no: 'The recent endings vary naturally or only one comparable character output exists.', yes: 'At least two recent outputs use materially the same closing device and it makes the roleplay feel formulaic or repeatedly hands continuation back to the user.' },
+        },
         action_evasion: {
             type: 'choice',
             instructions: 'Detect whether established anger, violence, hostile pressure, negative-bias consequences, threats, or other active execution requirements are repeatedly softened into atmosphere, posture, vague implication, warnings, or aborted action despite means and opportunity. Do not demand unsupported violence or override a concrete blocking cause.',
@@ -632,7 +640,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
 
     questions.primary_focus = {
         type: 'choice',
-        instructions: 'Choose the single primary function for the next response. Immediate danger and already-started action outrank new material; a direct user question or choice outranks optional intervention. Do not let a new event or NPC interrupt a meaningful active relationship exchange without a concrete cause.',
+        instructions: `Choose the single primary function for the next response. Immediate danger and already-started action outrank new material; a direct user question or choice outranks optional intervention. Do not let a new event or NPC interrupt a meaningful active relationship exchange without a concrete cause. ${preferences.judgmentStyle === 'active' ? 'When several choices fit, prefer the one that produces a concrete genre-appropriate change now instead of passive maintenance; this still permits only one primary beat.' : ''}`,
         criteria: {
             direct: 'Respond to the user\'s immediate speech, choice, or already-started action.',
             relationship: 'The active relationship question or interpersonal change should receive the main development.',
@@ -776,13 +784,13 @@ ${profile.prompt}
 </RP_PRIMARY_EVENT>`;
 }
 
-export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '' }) {
+export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '' }) {
     const blocks = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
     if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
     const cadencePrompts = {
-        compress: 'Compress repetition, connective steps, minor remarks, and already-understood context. Continue through the single detail, action, or question that most changes the immediate scene.',
-        natural: 'Give ordinary space to one primary beat. Include a secondary reaction only when it follows directly; let incidental input pass implicitly.',
-        linger: 'Stay close to the one decisive action, revelation, sensation, or emotional turn that needs detail. Do not broaden the response into coverage of every input point.',
+        compress: 'Execute one primary beat; include at most one directly dependent secondary reaction. Compress repetition, connective steps, minor remarks, and already-understood context. Continue through the single detail, action, or question that most changes the immediate scene.',
+        natural: 'Give ordinary space to one primary beat. Include at most one secondary reaction and only when it follows directly; let incidental input pass implicitly.',
+        linger: 'Stay close to one decisive action, revelation, sensation, or emotional turn. Include at most one directly dependent secondary reaction; do not broaden the response into coverage of every input point.',
     };
     blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
     const selectedCorrections = EXECUTION_CORRECTION_PRIORITY.filter((key) => decisions[key] === 'yes').slice(0, 2);
@@ -791,6 +799,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     if (!corrections.length && ['partial', 'missed'].includes(decisions.npc_followthrough)) corrections.push('Carry out the selected NPC function now through one concrete NPC-driven statement, decision, action, condition, or consequence; do not replace it with passive observation, exposition, or another question.');
     if (decisions.npc_knowledge_fit === 'overreach' && corrections.length < 2) corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
+    if (String(characterBlock || '').trim()) blocks.push(String(characterBlock).trim());
 
     const relationshipMoves = {
         hold: 'Preserve the current relationship state in this response. Do not convert attraction, sex, proximity, jealousy, protection, conflict, or vulnerability into unearned trust, intimacy, romance, reconciliation, or rupture.',

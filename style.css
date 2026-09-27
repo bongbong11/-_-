@@ -25,9 +25,10 @@
 #scene-reader-dialog .sr-header p { margin: 0; }
 #scene-reader-dialog .sr-header h2 { font-size: 1.2rem; }
 #scene-reader-dialog .sr-header p { margin-top: 3px; opacity: .72; font-size: .84rem; }
+#scene-reader-dialog .sr-header-actions { display: flex; gap: 7px; }
 #scene-reader-dialog .sr-icon-button { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 50%; color: inherit; background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent); cursor: pointer; }
 #scene-reader-dialog .sr-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 8px 11px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
-#scene-reader-dialog .sr-tabs button { min-height: 44px; border: 0; border-radius: 9px; color: inherit; background: transparent; cursor: pointer; touch-action: manipulation; }
+#scene-reader-dialog .sr-tabs button { min-height: 34px; padding: 5px 7px; border: 0; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; touch-action: manipulation; font-size: .88rem; }
 #scene-reader-dialog .sr-tabs button.active { color: var(--SmartThemeBodyColor); background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent); outline: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 45%, var(--SmartThemeBorderColor)); font-weight: 700; }
 #scene-reader-dialog .sr-main { min-height: 0; overflow: hidden; }
 #scene-reader-dialog .sr-tab-panel { display: none; height: 100%; box-sizing: border-box; padding: 13px; overflow-y: auto; overscroll-behavior: contain; }
@@ -93,6 +94,18 @@
 #scene-reader-dialog .sr-chip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 #scene-reader-dialog .sr-world-list { display: grid; gap: 6px; }
 #scene-reader-dialog .sr-world-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 42px; padding: 8px 11px; color: inherit; background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; }
+#scene-reader-dialog .sr-character-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 42px; padding: 8px 11px; color: inherit; background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; }
+#scene-reader-dialog .sr-character-item span,
+#scene-reader-dialog .sr-backup-item > span { display: grid; gap: 2px; min-width: 0; text-align: left; }
+#scene-reader-dialog .sr-character-item small,
+#scene-reader-dialog .sr-backup-item small { opacity: .68; }
+#scene-reader-dialog #sr-character-editor { gap: 8px; }
+#scene-reader-dialog #sr-character-source { width: 100%; resize: vertical; }
+#scene-reader-dialog .sr-backup-list { display: grid; gap: 8px; }
+#scene-reader-dialog .sr-backup-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; }
+#scene-reader-dialog .sr-backup-item > div { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+#scene-reader-dialog .sr-backup-item .menu_button { min-height: 34px; padding: 5px 9px; font-size: .82rem; }
+#scene-reader-dialog .sr-file-button { cursor: pointer; }
 #scene-reader-dialog .sr-world-toolbar,
 #scene-reader-dialog .sr-world-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 #scene-reader-dialog .sr-world-toolbar .sr-help { margin: 0; }
@@ -127,4 +140,7 @@
     #scene-reader-dialog .sr-decision-row { grid-template-columns: 1fr; }
     #scene-reader-dialog .sr-decision-row strong,
     #scene-reader-dialog .sr-decision-row small { text-align: left; }
+    #scene-reader-dialog .sr-backup-item { grid-template-columns: 1fr; }
+    #scene-reader-dialog .sr-backup-item > div { justify-content: stretch; }
+    #scene-reader-dialog .sr-backup-item .menu_button { flex: 1 1 auto; }
 }

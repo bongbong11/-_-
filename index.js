@@ -33,6 +33,16 @@ import {
 import { allWorlds, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
 import { buildInputKey, buildRecentTranscript, generationCycleSalt, isVisibleRoleplayMessage, latestUserMessageText, pendingComposerText } from './runtime-utils.js';
 import { sha256Hex } from './security-utils.js';
+import {
+    PROFILE_LABELS,
+    buildProfileQuestions,
+    normalizeProfileAnalysis,
+    normalizeCharacterStore,
+    selectActiveEntries,
+    buildCharacterTurnQuestions,
+    characterContext,
+    buildCharacterInjection,
+} from './character-library.js';
 
 const MODULE = 'sceneReader';
 const INJECT_KEY = 'scene-reader-router';
@@ -41,6 +51,7 @@ const IN_CHAT = 1;
 const SYSTEM_ROLE = 0;
 const JEV_KEY_STORAGE = 'sceneReader.jevApiKey';
 const JEV_API_URL = '/api/plugins/scene-reader-jev/systemone';
+const STORAGE_API_URL = '/api/plugins/scene-reader-jev/storage';
 const JEV_MODEL = 'jev-latest';
 const PROMPT_MACRO = 'scene-reader';
 const WORLD_PROMPT_MACRO = 'scene-reader-world';
@@ -130,6 +141,7 @@ const FALLBACKS = {
     scene_cutoff: 'no',
     response_cadence: 'natural',
     input_echo: 'no',
+    repetitive_ending: 'no',
     advanced_entry: 'closed',
     advanced_route: 'none',
     advanced_cause: 'none',
@@ -180,6 +192,7 @@ const THRESHOLDS = {
     scene_cutoff: 0.62,
     response_cadence: 0.58,
     input_echo: 0.58,
+    repetitive_ending: 0.60,
     advanced_entry: 0.62,
     advanced_route: 0.70,
     advanced_cause: 0.62,
@@ -187,7 +200,7 @@ const THRESHOLDS = {
     advanced_move: 0.66,
 };
 
-const JUDGMENT_DELTAS = { conservative: 0.08, balanced: 0, active: -0.08 };
+const JUDGMENT_DELTAS = { conservative: 0.08, balanced: 0, active: -0.16 };
 const CHOICE_THRESHOLDS = { villain_route: { retire: 0.88, replace: 0.90 }, npc_route: { retire: 0.84, replace: 0.86 } };
 
 let settings;
@@ -203,6 +216,13 @@ let activityToast = null;
 let activityToastTimer = null;
 let stateDbPromise = null;
 let pendingGenerationType = '';
+let serverStoreAvailable = false;
+let serverKeyStatus = '확인 전';
+let backupList = [];
+let characterStore = normalizeCharacterStore(null);
+let characterEditorKind = '';
+let characterEditorId = '';
+let privateOwnerPrompt = '';
 const stateHistoryCache = new Map();
 
 function getContext() {
@@ -213,6 +233,87 @@ function stateChatKey() {
     const context = getContext();
     const owner = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? 'unknown'}`;
     return `${owner}|chat:${context.chatId || 'unsaved'}`;
+}
+
+async function storagePost(route, body = {}, { allowFailure = false } = {}) {
+    try {
+        const response = await fetch(`${STORAGE_API_URL}/${route}`, {
+            method: 'POST', headers: { ...getRequestHeaders(), 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body),
+        });
+        let data = null;
+        try { data = await response.json(); } catch { /* status below */ }
+        if (!response.ok) throw new Error(pluginError(response.status, data, `저장소 응답 오류 (${response.status})`));
+        serverStoreAvailable = true;
+        return data;
+    } catch (error) {
+        serverStoreAvailable = false;
+        if (allowFailure) return null;
+        throw error;
+    }
+}
+
+function settingsSnapshot() {
+    return {
+        global: { ...settings },
+        worlds: loadCustomWorlds(),
+        owner: { unlocked: ownerUnlocked(), prompt: ownerPrompt() },
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+async function saveServerSettings() {
+    if (!serverStoreAvailable) return;
+    await storagePost('settings', { settings: settingsSnapshot() }, { allowFailure: true });
+}
+
+async function saveServerChat(chatKey = stateChatKey(), value = record()) {
+    if (!serverStoreAvailable) return;
+    await storagePost('chat', { chatKey, value }, { allowFailure: true });
+}
+
+async function saveCharacterStore() {
+    characterStore.updatedAt = new Date().toISOString();
+    if (!serverStoreAvailable) throw new Error('씬판독기 서버 저장소에 연결되지 않았습니다.');
+    await storagePost('characters', { chatKey: stateChatKey(), value: characterStore });
+}
+
+async function hydrateServerState({ migrate = true } = {}) {
+    const data = await storagePost('bootstrap', { chatKey: stateChatKey() }, { allowFailure: true });
+    if (!data) return false;
+    serverKeyStatus = String(data.keyStatus || '저장된 키 없음');
+    const legacyKey = getSavedKey();
+    if (migrate && !serverKeyStatus.startsWith('저장됨') && legacyKey) {
+        const migrated = await storagePost('key', { key: legacyKey }, { allowFailure: true });
+        if (migrated?.keyStatus) {
+            serverKeyStatus = migrated.keyStatus;
+            try { localStorage.removeItem(JEV_KEY_STORAGE); } catch { /* server copy is authoritative */ }
+        }
+    }
+    backupList = Array.isArray(data.backups) ? data.backups : [];
+    const saved = data.settings && typeof data.settings === 'object' ? data.settings : {};
+    if (saved.global && typeof saved.global === 'object') {
+        settings = { ...DEFAULTS, ...saved.global };
+        for (const key of ['enabled', 'autoJudge', 'pauseOnOoc', 'showConfidence', 'ownerUnlocked']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
+        settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
+        extension_settings[MODULE] = settings;
+    } else if (migrate) await saveServerSettings();
+    if (Array.isArray(saved.worlds)) saveCustomWorlds(saved.worlds);
+    if (saved.owner?.unlocked) settings.ownerUnlocked = true;
+    if (saved.owner?.prompt) {
+        privateOwnerPrompt = String(saved.owner.prompt);
+        try { localStorage.removeItem(OWNER_PROMPT_STORAGE); } catch { /* legacy cache cleanup */ }
+    }
+    if (data.chat && typeof data.chat === 'object') chat_metadata[MODULE] = data.chat;
+    else if (migrate && chat_metadata[MODULE]) await saveServerChat();
+    const history = Array.isArray(data.history) ? data.history.slice(-STATE_HISTORY_LIMIT) : [];
+    if (history.length) stateHistoryCache.set(stateChatKey(), history);
+    else if (migrate) {
+        const localHistory = await loadStateHistory();
+        if (localHistory.length) await storagePost('history', { chatKey: stateChatKey(), value: localHistory }, { allowFailure: true });
+    }
+    characterStore = normalizeCharacterStore(data.characters);
+    return true;
 }
 
 function openStateDb() {
@@ -246,6 +347,7 @@ async function loadStateHistory(chatKey = stateChatKey()) {
 async function saveStateHistory(history, chatKey = stateChatKey()) {
     const limited = history.slice(-STATE_HISTORY_LIMIT);
     stateHistoryCache.set(chatKey, limited);
+    if (serverStoreAvailable) await storagePost('history', { chatKey, value: limited }, { allowFailure: true });
     const db = await openStateDb();
     if (!db) return;
     await new Promise((resolve) => {
@@ -256,6 +358,7 @@ async function saveStateHistory(history, chatKey = stateChatKey()) {
 
 async function clearStateHistory(chatKey = stateChatKey()) {
     stateHistoryCache.set(chatKey, []);
+    if (serverStoreAvailable) await storagePost('history', { chatKey, value: null }, { allowFailure: true });
     const db = await openStateDb();
     if (!db) return;
     await new Promise((resolve) => {
@@ -271,6 +374,7 @@ function ownerUnlocked() {
 }
 
 function ownerPrompt() {
+    if (privateOwnerPrompt) return privateOwnerPrompt;
     if (!ownerUnlocked()) return '';
     try { return String(localStorage.getItem(OWNER_PROMPT_STORAGE) || '').trim(); }
     catch { return ''; }
@@ -281,7 +385,7 @@ function renderOwnerMode() {
     const ownerCard = document.getElementById('sr-owner-card');
     const ownerStatus = document.getElementById('sr-owner-status');
     if (ownerCard) ownerCard.hidden = !unlocked;
-    if (ownerStatus) ownerStatus.textContent = unlocked ? '이 브라우저에서 제작자 모드가 열려 있습니다.' : '잠금 상태';
+    if (ownerStatus) ownerStatus.textContent = unlocked ? '이 SillyTavern 사용자에서 제작자 모드가 열려 있습니다.' : '잠금 상태';
     const promptInput = document.getElementById('sr-owner-prompt');
     if (promptInput && unlocked) promptInput.value = ownerPrompt();
 }
@@ -400,6 +504,7 @@ async function persistChat() {
     const context = getContext();
     if (typeof context.saveMetadata === 'function') await context.saveMetadata();
     else if (typeof context.saveChat === 'function') await context.saveChat();
+    await saveServerChat();
 }
 
 function getSavedKey() {
@@ -447,6 +552,17 @@ function fixedDecision(effective) {
     return { selected: effective, effective, certainty: 1, threshold: 1, adjusted: false, fixed: true };
 }
 
+function applyCharacterPolicy(key, answer, judgmentStyle, allowedChoices) {
+    const candidate = String(answer?.choice || '');
+    const selected = allowedChoices.includes(candidate) ? candidate : '';
+    const score = certainty(answer);
+    const threshold = judgmentStyle === 'active' ? 0.50 : judgmentStyle === 'conservative' ? 0.68 : 0.59;
+    const suffix = key.split('_').at(-1);
+    const fallback = key === 'npc_identity_route' ? 'none' : ({ presence: 'absent', knowledge: 'none', response: 'none', history: 'none' }[suffix] || allowedChoices[0]);
+    const effective = selected && score >= threshold ? selected : fallback;
+    return { selected, effective, certainty: score, threshold, adjusted: selected !== effective };
+}
+
 function apiError(data, fallback) {
     if (typeof data?.detail === 'string') return data.detail;
     if (typeof data?.error === 'string') return data.error;
@@ -461,13 +577,13 @@ function pluginError(status, data, fallback) {
 
 async function callJev(body, timeoutMs = 30000) {
     const key = getSavedKey();
-    if (!key) throw new Error('Jev API 키를 먼저 저장하세요.');
+    if (!key && !serverKeyStatus.startsWith('저장됨')) throw new Error('Jev API 키를 먼저 저장하세요.');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
         const response = await fetch(JEV_API_URL, {
             method: 'POST',
-            headers: { ...getRequestHeaders(), 'X-Jev-Key': key, 'Content-Type': 'application/json', Accept: 'application/json' },
+            headers: { ...getRequestHeaders(), ...(key ? { 'X-Jev-Key': key } : {}), 'Content-Type': 'application/json', Accept: 'application/json' },
             body: JSON.stringify(body),
             signal: controller.signal,
         });
@@ -930,6 +1046,9 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         pacingState: rec.pacingState,
         previousRoutes: rec.lastJudgment?.decisions || {},
     });
+    const activeCharacters = selectActiveEntries(characterStore, transcript, getContext().name2 || '');
+    if (characterStore.enabled) Object.assign(questions, buildCharacterTurnQuestions(activeCharacters, { franchiseWorld: world?.id === 'canon' || /canon|franchise|해리|마블/i.test(`${world?.id} ${world?.name} ${world?.hint}`) }));
+    const structuredCharacterContext = characterStore.enabled ? characterContext(activeCharacters, characterStore.persona, transcript) : null;
 
     judgeInFlight = true;
     judgeCompletionPromise = new Promise((resolve) => { resolveJudgeCompletion = resolve; });
@@ -940,24 +1059,34 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         const data = await callJev({
             model: JEV_MODEL,
             state: {
-                scope: 'Use only the recent roleplay transcript. Progression mode controls the kind of plot movement only. Roleplay pace controls selective attention and response granularity only; it does not advance in-world time, relationships, or events. Relationship pace controls relationship change only. Resolution pace controls event, goal, conflict, or mystery resolution only. World direction controls disposition toward the user only. These controls are independent and must not define or override preset genre, tone, setting, prose style, character voice, or world rules.',
+                scope: 'Use only the recent roleplay transcript. Choose one primary beat; do not pack every eligible route into one response. Active judgment means make one concrete supported move instead of passive maintenance, not faster time, relationship, or resolution. Progression mode controls plot movement only. Roleplay pace controls selective attention and granularity only. Relationship pace controls relationship change only. Resolution pace controls resolution only. These controls are independent and must not override preset genre, tone, setting, prose style, character voice, or world rules.',
                 recent_roleplay: transcript,
                 controls: { ...prefs, world: { id: world?.id, name: world?.name, hint: world?.hint } },
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, relationship: rec.relationshipState, background_events: rec.backgroundEvents },
                 previous_routes: rec.lastJudgment?.decisions || null,
+                character_profiles: structuredCharacterContext,
                 priority: prefs.negativePriority ? 'Enabled supplied negative-bias Quick Reply blocks are the highest-priority scene-reader constraints. Other progression must operate within them.' : 'Normal scene-reader priority.',
-                safety_policy: 'Uncertainty defaults to no new event, no new NPC, no escalation, and continued current interaction. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.',
+                safety_policy: prefs.judgmentStyle === 'active' ? 'Uncertainty blocks unsupported major invention, but it does not require passive holding when an established thread can move by one concrete genre-compatible beat. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.' : 'Uncertainty defaults to no unsupported new event, NPC, or escalation and continued current interaction. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.',
             },
             questions,
         });
         updateStatus('판독 완료 · 주입문 조립 중…');
         updateActivity('판독 완료 · 필요한 주입문을 조립하고 있습니다…');
         const details = {};
-        for (const key of Object.keys(questions)) details[key] = applyPolicy(key, data.answers[key], prefs.judgmentStyle, Object.keys(questions[key]?.criteria || {}));
+        for (const key of Object.keys(questions)) {
+            const choices = Object.keys(questions[key]?.criteria || {});
+            details[key] = key.startsWith('character_') || key === 'npc_identity_route'
+                ? applyCharacterPolicy(key, data.answers[key], prefs.judgmentStyle, choices)
+                : applyPolicy(key, data.answers[key], prefs.judgmentStyle, choices);
+        }
         const decisions = effectiveMap(details);
         const stateBefore = rec.pendingCommit?.inputKey === inputKey ? rec.pendingCommit.stateSnapshot : reversibleStateSnapshot(rec);
         coordinateDecisions(rec, details, decisions);
+        if (characterStore.enabled && decisions.npc_route === 'create' && ['reuse_existing', 'canon_natural', 'group'].includes(decisions.npc_identity_route)) {
+            overrideDecision(details, decisions, 'npc_route', 'reuse', `인물 판정 경로: ${decisions.npc_identity_route}`);
+        }
+        if (characterStore.enabled && !['create', 'reuse'].includes(decisions.npc_route)) overrideDecision(details, decisions, 'npc_identity_route', 'none', '이번 응답 NPC 실행 없음');
         if (rec.lastOpportunityInput !== inputKey && (['hours', 'next_day', 'days', 'weeks_months'].includes(decisions.time_relation) || decisions.progression_move === 'transition')) {
             rec.sceneOpportunity += 1;
             rec.lastOpportunityInput = inputKey;
@@ -977,7 +1106,8 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
             details.npc_autonomy = { selected: npcActive ? 'yes' : 'no', effective: npcActive ? 'yes' : 'no', certainty: 1, threshold: 1, adjusted: false, conditional: true };
             decisions.npc_autonomy = details.npc_autonomy.effective;
         }
-        const payload = buildInjection({ settings: prefs, decisions, villainProfile: rec.villainProfile, npcProfile: rec.npcProfile, eventProfile: rec.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '' });
+        const characterBlock = characterStore.enabled ? buildCharacterInjection(activeCharacters, decisions) : '';
+        const payload = buildInjection({ settings: prefs, decisions, villainProfile: rec.villainProfile, npcProfile: rec.npcProfile, eventProfile: rec.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '', characterBlock });
         rec.lastJudgment = { details, decisions, payload, inputKey, judgedAt: new Date().toISOString(), model: String(data.model || JEV_MODEL) };
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
@@ -1007,7 +1137,7 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         if (prefs.npcToUser) details.npc_guard = fixedDecision('yes');
         if (prefs.userMisfortune) details.misfortune = fixedDecision('yes');
         Object.assign(decisions, effectiveMap(details));
-        const payload = buildInjection({ settings: prefs, decisions, villainProfile: rec.villainProfile, npcProfile: rec.npcProfile, eventProfile: rec.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '' });
+        const payload = buildInjection({ settings: prefs, decisions, villainProfile: rec.villainProfile, npcProfile: rec.npcProfile, eventProfile: rec.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '', characterBlock: '' });
         rec.lastJudgment = { details, decisions, payload, inputKey, judgedAt: new Date().toISOString(), model: JEV_MODEL, error: error.message };
         await persistChat();
         await applyStoredInjection();
@@ -1028,15 +1158,15 @@ function decisionTitle(key) {
     const user = context.name1 || '유저';
     const character = context.name2 || '캐릭터';
     return {
-        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계',
+        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', repetitive_ending: '최근 응답의 종결 구조 반복', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', npc_identity_route: 'NPC 정체 경로', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계',
     }[key] || key;
 }
 
 const RESULT_GROUPS = {
     'sr-scene-relation': ['scene_state', 'conversation_tone', 'time_relation', 'response_cadence', 'continuity_change', 'ambiguity', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
-    'sr-event-npc': ['primary_focus', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
+    'sr-event-npc': ['primary_focus', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'npc_identity_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
     'sr-advanced-judgment': ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move'],
-    'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
+    'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'repetitive_ending', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
 };
 
 function resultLabel(key, value) {
@@ -1143,10 +1273,31 @@ function renderStoredState() {
     root.innerHTML = rows.join('');
 }
 
+function renderCharacterStore() {
+    const setList = (id, entries, kind) => {
+        const root = document.getElementById(id);
+        if (!root) return;
+        root.innerHTML = entries.map((entry) => `<button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}</strong><small>${entry.updatedAt ? '판독 저장됨' : '판독 필요'}</small></span><i class="fa-solid fa-pen"></i></button>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
+    };
+    const enabled = document.getElementById('sr-character-enabled');
+    if (enabled) enabled.checked = characterStore.enabled;
+    setList('sr-character-list', characterStore.characters, 'character');
+    setList('sr-npc-sheet-list', characterStore.npcs, 'npc');
+    setList('sr-persona-list', characterStore.persona ? [characterStore.persona] : [], 'persona');
+}
+
+function renderBackups() {
+    const root = document.getElementById('sr-backup-list');
+    if (!root) return;
+    root.innerHTML = backupList.map((item) => `<div class="sr-backup-item"><span><strong>${escapeHtml(new Date(item.createdAt).toLocaleString())}</strong><small>${escapeHtml(item.reason || 'manual')} · ${Number(item.fileCount) || 0}개 파일</small></span><div><button type="button" class="menu_button" data-backup-action="restore" data-backup-id="${escapeHtml(item.id)}">복원</button><button type="button" class="menu_button" data-backup-action="download" data-backup-id="${escapeHtml(item.id)}">다운로드</button><button type="button" class="menu_button" data-backup-action="delete" data-backup-id="${escapeHtml(item.id)}">삭제</button></div></div>`).join('') || '<div class="sr-empty-small">저장된 백업 없음</div>';
+}
+
 function renderAll() {
     renderJudgment();
     renderProfiles();
     renderStoredState();
+    renderCharacterStore();
+    renderBackups();
     const preview = document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = activeInjectionPayload || '현재 주입문 없음';
 }
@@ -1160,7 +1311,7 @@ function updateStatus(text = '') {
 
 function updateKeyStatus(text = '') {
     const root = document.getElementById('sr-jev-status');
-    if (root) root.textContent = text || maskKey(getSavedKey());
+    if (root) root.textContent = text || (serverStoreAvailable ? serverKeyStatus : maskKey(getSavedKey()));
 }
 
 function runUiTask(task, failureMessage = '설정을 저장하지 못했습니다.') {
@@ -1282,9 +1433,93 @@ function showWorldList() {
     renderWorldControls();
 }
 
+function characterEntries(kind) {
+    if (kind === 'persona') return characterStore.persona ? [characterStore.persona] : [];
+    return kind === 'npc' ? characterStore.npcs : characterStore.characters;
+}
+
+function showCharacterEditor(kind, entry = null) {
+    characterEditorKind = kind;
+    characterEditorId = entry?.id || '';
+    const editor = document.getElementById('sr-character-editor');
+    if (!editor) return;
+    editor.hidden = false;
+    document.getElementById('sr-character-editor-title').textContent = `${kind === 'persona' ? '페르소나' : kind === 'npc' ? 'NPC' : '캐릭터'} ${entry ? '수정' : '추가'}`;
+    document.getElementById('sr-character-name').value = entry?.name || (kind === 'persona' ? getContext().name1 || '페르소나' : '');
+    document.getElementById('sr-character-aliases').value = (entry?.aliases || []).join(', ');
+    document.getElementById('sr-character-source').value = entry?.source || '';
+    document.getElementById('sr-character-delete').hidden = !entry;
+    const analysis = document.getElementById('sr-character-analysis');
+    if (analysis) analysis.innerHTML = entry?.analysis
+        ? Object.entries(entry.analysis).map(([key, value]) => `<div class="sr-decision-row"><span>${escapeHtml({ knowledge_scope: '지식 범위', expertise_depth: '전문성', institutional_access: '기관 접근', practical_competence: '실무 능력', speech_register: '말투 수준', initiative: '능동성', disclosure_style: '정보 공개', memory_precision: '기억 정밀도', history_use: '과거 활용', canon_status: '원작 여부' }[key] || key)}</span><strong>${escapeHtml(PROFILE_LABELS[key]?.[value] || value)}</strong></div>`).join('')
+        : '<div class="sr-empty-small">저장하면 Jev 판독값이 표시됩니다.</div>';
+    editor.scrollIntoView?.({ block: 'nearest' });
+}
+
+function closeCharacterEditor() {
+    characterEditorKind = '';
+    characterEditorId = '';
+    const editor = document.getElementById('sr-character-editor');
+    if (editor) editor.hidden = true;
+}
+
+async function analyzeAndSaveCharacter() {
+    const kind = characterEditorKind;
+    const name = String(document.getElementById('sr-character-name')?.value || '').trim();
+    const source = String(document.getElementById('sr-character-source')?.value || '').trim();
+    const aliases = String(document.getElementById('sr-character-aliases')?.value || '').split(',').map((v) => v.trim()).filter(Boolean);
+    if (!kind || !name || !source) throw new Error('이름과 시트 원문을 입력하세요.');
+    updateActivity(`${name} 시트를 Jev가 구조화하고 있습니다…`);
+    const data = await callJev({
+        model: JEV_MODEL,
+        state: { task: 'Character sheet boundary classification only. Do not summarize prose or invent missing biography.', kind, name, sheet: source },
+        questions: buildProfileQuestions(kind),
+    });
+    const entry = { id: characterEditorId || `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, kind, name, aliases, source, sourceHash: await sha256Hex(source), analysis: normalizeProfileAnalysis(data), updatedAt: new Date().toISOString() };
+    const next = normalizeCharacterStore(characterStore);
+    if (kind === 'persona') next.persona = entry;
+    else {
+        const key = kind === 'npc' ? 'npcs' : 'characters';
+        const index = next[key].findIndex((item) => item.id === entry.id);
+        if (index >= 0) next[key][index] = entry; else next[key].push(entry);
+    }
+    // Replace the old analysis only after Jev and server persistence both succeed.
+    const old = characterStore;
+    characterStore = next;
+    try { await saveCharacterStore(); }
+    catch (error) { characterStore = old; throw error; }
+    closeCharacterEditor();
+    renderCharacterStore();
+    updateActivity(`${name} 판독을 저장했습니다.`, { done: true });
+}
+
+async function deleteCharacterEntry() {
+    if (!characterEditorKind || !characterEditorId) return;
+    const old = characterStore;
+    characterStore = normalizeCharacterStore(characterStore);
+    if (characterEditorKind === 'persona') characterStore.persona = null;
+    else {
+        const key = characterEditorKind === 'npc' ? 'npcs' : 'characters';
+        characterStore[key] = characterStore[key].filter((item) => item.id !== characterEditorId);
+    }
+    try { await saveCharacterStore(); }
+    catch (error) { characterStore = old; throw error; }
+    closeCharacterEditor();
+    renderCharacterStore();
+}
+
+function downloadJson(filename, value) {
+    const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = filename; document.body.append(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function saveGlobal(key, value) {
     settings[key] = value;
     saveSettingsDebounced();
+    void saveServerSettings();
 }
 
 async function savePreference(key, value) {
@@ -1339,6 +1574,10 @@ function bindForm() {
         dialog.querySelectorAll('[data-sr-tab]').forEach((item) => item.classList.toggle('active', item === button));
         dialog.querySelectorAll('.sr-tab-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `sr-tab-${target}`));
     }));
+    document.getElementById('sr-settings-button')?.addEventListener('click', () => {
+        dialog.querySelectorAll('[data-sr-tab]').forEach((item) => item.classList.remove('active'));
+        dialog.querySelectorAll('.sr-tab-panel').forEach((panel) => panel.classList.toggle('active', panel.id === 'sr-tab-settings'));
+    });
     document.getElementById('sr-run')?.addEventListener('click', () => {
         const pendingUserText = String(document.getElementById('send_textarea')?.value || '').trim();
         void runJudge({ force: true, pendingUserText }).catch(() => {});
@@ -1380,9 +1619,10 @@ function bindForm() {
         }
         try { localStorage.setItem(OWNER_UNLOCK_STORAGE, 'yes'); } catch { /* extension settings still persist unlock */ }
         saveGlobal('ownerUnlocked', true);
+        await saveServerSettings();
         if (input) input.value = '';
         renderOwnerMode();
-        window.toastr?.success?.('제작자 모드를 이 브라우저에서 열었습니다.', '씬판독기');
+        window.toastr?.success?.('제작자 모드를 이 SillyTavern 사용자에서 열었습니다.', '씬판독기');
     };
     document.getElementById('sr-owner-unlock')?.addEventListener('click', () => runUiTask(unlockOwner(), '잠금을 해제하지 못했습니다.'));
     document.getElementById('sr-owner-password')?.addEventListener('keydown', (event) => {
@@ -1393,20 +1633,16 @@ function bindForm() {
     document.getElementById('sr-owner-save')?.addEventListener('click', async () => {
         if (!ownerUnlocked()) return;
         const value = String(document.getElementById('sr-owner-prompt')?.value || '').trim();
-        try {
-            if (value) localStorage.setItem(OWNER_PROMPT_STORAGE, value);
-            else localStorage.removeItem(OWNER_PROMPT_STORAGE);
-        } catch {
-            window.toastr?.error?.('브라우저 저장소에 제작자 전용 원문을 저장하지 못했습니다.', '씬판독기');
-            return;
-        }
+        privateOwnerPrompt = value;
+        try { localStorage.removeItem(OWNER_PROMPT_STORAGE); } catch { /* legacy cache cleanup */ }
         const rec = record(true);
         if (!value) rec.preferences.privatePromptEnabled = false;
         rec.lastJudgment = null;
         await persistChat();
+        await storagePost('settings', { settings: settingsSnapshot() });
         await clearInjection();
         setFormValues();
-        window.toastr?.success?.(value ? '제작자 전용 원문을 이 브라우저에 저장했습니다.' : '제작자 전용 원문을 비웠습니다.', '씬판독기');
+        window.toastr?.success?.(value ? '제작자 전용 원문을 전용 저장소에 저장했습니다.' : '제작자 전용 원문을 비웠습니다.', '씬판독기');
     });
     document.getElementById('sr-villain-enabled')?.addEventListener('change', async (event) => {
         await savePreference('villainEnabled', event.target.checked);
@@ -1427,16 +1663,17 @@ function bindForm() {
     document.getElementById('sr-pause-ooc')?.addEventListener('change', (event) => saveGlobal('pauseOnOoc', event.target.checked));
     document.getElementById('sr-recent-turns')?.addEventListener('change', (event) => saveGlobal('recentTurns', Math.max(1, Math.min(5, Number(event.target.value) || 3))));
     document.getElementById('sr-confidence')?.addEventListener('change', (event) => { saveGlobal('showConfidence', event.target.checked); renderJudgment(); });
-    document.getElementById('sr-jev-save')?.addEventListener('click', () => {
+    document.getElementById('sr-jev-save')?.addEventListener('click', async () => {
         const input = document.getElementById('sr-jev-key');
         const key = String(input?.value || '').trim();
         try {
-            if (key) localStorage.setItem(JEV_KEY_STORAGE, key);
-            else localStorage.removeItem(JEV_KEY_STORAGE);
+            const data = await storagePost('key', { key });
+            serverKeyStatus = data.keyStatus;
+            localStorage.removeItem(JEV_KEY_STORAGE);
             input.value = '';
             updateKeyStatus();
-            window.toastr?.success?.(key ? 'Jev 키를 이 브라우저에 저장했습니다.' : '저장된 Jev 키를 삭제했습니다.', '씬판독기');
-        } catch { window.toastr?.error?.('브라우저 저장소에 키를 저장할 수 없습니다.', '씬판독기'); }
+            window.toastr?.success?.(key ? 'Jev 키를 전용 저장소에 저장했습니다.' : '저장된 Jev 키를 삭제했습니다.', '씬판독기');
+        } catch (error) { window.toastr?.error?.(`Jev 키를 저장하지 못했습니다. · ${error.message}`, '씬판독기'); }
     });
     document.getElementById('sr-jev-toggle')?.addEventListener('click', () => {
         const input = document.getElementById('sr-jev-key');
@@ -1483,6 +1720,7 @@ function bindForm() {
         const index = worlds.findIndex((world) => world.id === id);
         if (index >= 0) worlds[index] = next; else worlds.push(next);
         if (!saveCustomWorlds(worlds)) { window.toastr?.error?.('브라우저 저장소에 세계관을 저장하지 못했습니다.', '씬판독기'); return; }
+        await saveServerSettings();
         if (preferences().selectedWorldId === id) await applyStoredInjection();
         showWorldList();
         window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
@@ -1491,6 +1729,7 @@ function bindForm() {
         const id = String(document.getElementById('sr-world-edit-id')?.value || '');
         if (!id) return;
         if (!saveCustomWorlds(loadCustomWorlds().filter((world) => world.id !== id))) { window.toastr?.error?.('브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
+        await saveServerSettings();
         if (preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
         showWorldList();
     });
@@ -1503,6 +1742,7 @@ function bindForm() {
             if (!Array.isArray(parsed) || parsed.some((item) => !item?.name || !item?.prompt)) throw new Error();
             const imported = parsed.map((item, index) => ({ id: String(item.id || `custom-${Date.now()}-${index}`), name: String(item.name), hint: String(item.hint || makeWorldHint(item.name, item.prompt)), prompt: String(item.prompt) }));
             if (!saveCustomWorlds(imported)) throw new Error('storage');
+            await saveServerSettings();
             await applyStoredInjection();
             showWorldList(); window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
         } catch { window.toastr?.error?.('가져오기 JSON 형식을 확인하세요.', '씬판독기'); }
@@ -1565,6 +1805,52 @@ function bindForm() {
         renderAll();
         window.toastr?.success?.('확장이 저장한 관계 누적 상태를 초기화했습니다.', '씬판독기');
     });
+    document.getElementById('sr-character-enabled')?.addEventListener('change', async (event) => {
+        const previous = characterStore.enabled;
+        characterStore.enabled = event.target.checked;
+        try { await saveCharacterStore(); }
+        catch (error) { characterStore.enabled = previous; event.target.checked = previous; throw error; }
+        const rec = record(true); rec.lastJudgment = null; rec.pendingCommit = null;
+        await clearInjection(); await persistChat(); renderAll();
+    });
+    for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));
+    document.getElementById('sr-character-editor-cancel')?.addEventListener('click', closeCharacterEditor);
+    document.getElementById('sr-character-save')?.addEventListener('click', () => runUiTask(analyzeAndSaveCharacter(), '인물 시트를 판독·저장하지 못했습니다.'));
+    document.getElementById('sr-character-delete')?.addEventListener('click', () => runUiTask(deleteCharacterEntry(), '인물 시트를 삭제하지 못했습니다.'));
+    dialog.addEventListener('click', (event) => {
+        const item = event.target.closest('.sr-character-item');
+        if (item) {
+            const entry = characterEntries(item.dataset.characterKind).find((value) => value.id === item.dataset.characterId);
+            if (entry) showCharacterEditor(item.dataset.characterKind, entry);
+        }
+        const backupButton = event.target.closest('[data-backup-action]');
+        if (!backupButton) return;
+        const action = backupButton.dataset.backupAction;
+        const id = backupButton.dataset.backupId;
+        runUiTask((async () => {
+            if (action === 'restore') {
+                const data = await storagePost('backup/restore', { id }); backupList = data.backups || [];
+                await hydrateServerState({ migrate: false }); setFormValues(); renderAll();
+                window.toastr?.success?.('백업을 복원했습니다. 복원 직전 상태도 자동 백업했습니다.', '씬판독기');
+            } else if (action === 'download') {
+                const data = await storagePost('backup/export', { id }); downloadJson(`scene-reader-${id}.json`, data.snapshot);
+            } else if (action === 'delete') {
+                const data = await storagePost('backup/delete', { id }); backupList = data.backups || []; renderBackups();
+            }
+        })(), '백업 작업에 실패했습니다.');
+    });
+    document.getElementById('sr-backup-create')?.addEventListener('click', () => runUiTask((async () => {
+        await saveServerSettings(); await saveServerChat(); await saveCharacterStore();
+        const data = await storagePost('backup/create'); backupList = data.backups || []; renderBackups();
+        window.toastr?.success?.('현재 데이터를 날짜·시간 백업으로 저장했습니다.', '씬판독기');
+    })(), '백업을 만들지 못했습니다.'));
+    document.getElementById('sr-backup-import')?.addEventListener('change', (event) => runUiTask((async () => {
+        const file = event.target.files?.[0]; if (!file) return;
+        const snapshot = JSON.parse(await file.text());
+        const data = await storagePost('backup/import', { snapshot }); backupList = data.backups || [];
+        await hydrateServerState({ migrate: false }); setFormValues(); renderAll(); event.target.value = '';
+        window.toastr?.success?.('백업 파일을 가져와 복원했습니다.', '씬판독기');
+    })(), '백업 파일을 가져오지 못했습니다.'));
 }
 
 function optionsHtml(items) {
@@ -1578,9 +1864,9 @@ function createDialog() {
         <div class="sr-shell">
             <header class="sr-header">
                 <div><h2>씬판독기</h2><p>최근 장면을 Jev가 판독해 필요한 진행문만 넣습니다</p></div>
-                <button id="sr-close" class="sr-icon-button" aria-label="닫기"><i class="fa-solid fa-xmark"></i></button>
+                <div class="sr-header-actions"><button id="sr-settings-button" class="sr-icon-button" aria-label="설정"><i class="fa-solid fa-gear"></i></button><button id="sr-close" class="sr-icon-button" aria-label="닫기"><i class="fa-solid fa-xmark"></i></button></div>
             </header>
-            <nav class="sr-tabs" aria-label="씬판독기 메뉴"><button class="active" data-sr-tab="flow">자동 전개</button><button data-sr-tab="advanced">고급 전개</button><button data-sr-tab="conflict">갈등용 진행</button><button data-sr-tab="settings">설정</button></nav>
+            <nav class="sr-tabs" aria-label="씬판독기 메뉴"><button class="active" data-sr-tab="flow">자동 전개</button><button data-sr-tab="advanced">고급 전개</button><button data-sr-tab="conflict">갈등용 진행</button><button data-sr-tab="characters">인물 판정</button></nav>
             <main class="sr-main">
                 <div id="sr-tab-flow" class="sr-tab-panel active">
                     <section class="sr-control-card"><label for="sr-world-direction">세계 반응 방향</label><select id="sr-world-direction" class="text_pole">${optionsHtml(WORLD_DIRECTIONS)}</select><p class="sr-help">프리셋의 장르와 분위기를 바꾸지 않고, 유저를 향한 세계 반응의 기본 방향만 고정합니다.</p></section>
@@ -1610,7 +1896,14 @@ function createDialog() {
                     <section class="sr-settings-card"><h3>부정 편향 우선순위</h3><label class="checkbox_label"><input id="sr-negative-priority" type="checkbox"><span><strong>부정 편향을 최우선으로 사용</strong></span></label><p class="sr-help">켜면 이 탭에서 활성화한 원문 빠답을 씬판독기의 관계·사건·NPC·속도 지시보다 우선합니다. 다른 이야기는 이 기반을 무효화하지 않는 범위에서 진행됩니다.</p></section>
                     <section class="sr-settings-card"><h3>⚔️ 싸움조장</h3><label class="checkbox_label"><input id="sr-fight-sustain" type="checkbox"><span><strong>싸움 유지</strong></span></label><label class="checkbox_label"><input id="sr-villain-enabled" type="checkbox"><span><strong>빌런 자동</strong></span></label><label class="checkbox_label"><input id="sr-social-enabled" type="checkbox"><span><strong>갈등 속 NPC 활성화</strong></span></label><p class="sr-help">싸움 유지와 빌런은 Jev가 장면별로 판정합니다. 갈등 속 NPC는 NPC가 실제 참여하거나 이번 응답에 등장할 때 자동 적용됩니다.</p><div class="sr-action-row"><button id="sr-reset-villain" class="menu_button">현재 빌런 종료 · 새 추첨 대기</button></div></section>
                     <section class="sr-settings-card"><h3>🌍 세계·관계 편향</h3><label class="checkbox_label"><input id="sr-world-hostility" type="checkbox"><span><strong>세계 적대성</strong></span></label><label class="checkbox_label"><input id="sr-npc-user" type="checkbox"><span><strong>NPC 특별취급 방지</strong></span></label><label class="checkbox_label"><input id="sr-user-misfortune" type="checkbox"><span><strong>유저 불운</strong></span></label><p class="sr-help">켜진 항목은 사용자 고정 설정으로 매 IC 응답에 주입됩니다. OOC 입력에는 주입하지 않습니다.</p></section>
-                    <details id="sr-owner-card" class="sr-settings-card sr-owner-details" hidden><summary>🔒 제작자 전용 주입</summary><div class="sr-owner-body"><label class="checkbox_label"><input id="sr-private-prompt-enabled" type="checkbox"><span><strong>이 채팅에서 전용 원문 사용</strong></span></label><label for="sr-owner-prompt">로컬 전용 원문</label><textarea id="sr-owner-prompt" class="text_pole" rows="8" placeholder="전용 원문을 붙여 넣으세요."></textarea><div class="sr-action-row"><button id="sr-owner-save" class="menu_button">이 브라우저에 저장</button></div><p class="sr-help">원문은 브라우저 로컬 저장소에만 보관되며 채팅·GitHub·서버 플러그인으로 저장되지 않습니다.</p></div></details>
+                    <details id="sr-owner-card" class="sr-settings-card sr-owner-details" hidden><summary>🔒 제작자 전용 주입</summary><div class="sr-owner-body"><label class="checkbox_label"><input id="sr-private-prompt-enabled" type="checkbox"><span><strong>이 채팅에서 전용 원문 사용</strong></span></label><label for="sr-owner-prompt">전용 원문</label><textarea id="sr-owner-prompt" class="text_pole" rows="8" placeholder="전용 원문을 붙여 넣으세요."></textarea><div class="sr-action-row"><button id="sr-owner-save" class="menu_button">전용 저장소에 저장</button></div><p class="sr-help">원문은 SillyTavern 사용자 데이터의 씬판독기 전용 폴더에 저장되며 GitHub에는 포함되지 않습니다.</p></div></details>
+                </div>
+                <div id="sr-tab-characters" class="sr-tab-panel">
+                    <section class="sr-settings-card"><h3>인물 고급 판정</h3><label class="checkbox_label"><input id="sr-character-enabled" type="checkbox"><span><strong>인물 판정 사용</strong></span></label><p class="sr-help">저장한 시트를 Jev의 고정 선택값으로 구조화합니다. 매턴에는 현재 장면과 관련된 인물 최대 3명만 판정하고 필요한 한두 줄만 주입합니다.</p></section>
+                    <details class="sr-settings-card" open><summary>캐릭터</summary><div class="sr-world-toolbar"><p class="sr-help">주요 캐릭터 시트를 한 명씩 저장합니다.</p><button id="sr-character-new" type="button" class="menu_button sr-plus-button" aria-label="캐릭터 추가"><i class="fa-solid fa-plus"></i></button></div><div id="sr-character-list" class="sr-world-list"></div></details>
+                    <details class="sr-settings-card"><summary>페르소나</summary><div class="sr-world-toolbar"><p class="sr-help">이 채팅의 유저 페르소나 한 명을 저장합니다.</p><button id="sr-persona-new" type="button" class="menu_button sr-plus-button" aria-label="페르소나 추가"><i class="fa-solid fa-plus"></i></button></div><div id="sr-persona-list" class="sr-world-list"></div></details>
+                    <details class="sr-settings-card"><summary>NPC 시트</summary><div class="sr-world-toolbar"><p class="sr-help">시트 NPC도 한 명씩 저장합니다. 정보가 적으면 추측 대신 허용 범위를 좁게 저장합니다.</p><button id="sr-npc-sheet-new" type="button" class="menu_button sr-plus-button" aria-label="NPC 추가"><i class="fa-solid fa-plus"></i></button></div><div id="sr-npc-sheet-list" class="sr-world-list"></div></details>
+                    <section id="sr-character-editor" class="sr-settings-card" hidden><div class="sr-world-editor-head"><strong id="sr-character-editor-title">인물 추가</strong><button id="sr-character-editor-cancel" type="button" class="sr-icon-button" aria-label="편집 닫기"><i class="fa-solid fa-xmark"></i></button></div><label for="sr-character-name">이름</label><input id="sr-character-name" class="text_pole"><label for="sr-character-aliases">별칭</label><input id="sr-character-aliases" class="text_pole" placeholder="쉼표로 구분"><label for="sr-character-source">시트 원문</label><textarea id="sr-character-source" class="text_pole" rows="12" placeholder="이 인물 한 명의 시트를 붙여 넣으세요."></textarea><details><summary>저장된 판독값</summary><div id="sr-character-analysis"></div></details><div class="sr-action-row"><button id="sr-character-save" class="menu_button">Jev 판독 후 저장</button><button id="sr-character-delete" class="menu_button">삭제</button></div></section>
                 </div>
                 <div id="sr-tab-settings" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>기본 설정</h3><label class="checkbox_label"><input id="sr-enabled" type="checkbox"><span><strong>씬판독기 전체 사용</strong></span></label><p class="sr-help">끄면 Jev 판독, 기본 주입, 프리셋 매크로 출력을 모두 중단합니다.</p><label class="checkbox_label"><input id="sr-auto" type="checkbox"><span>생성 직전에 자동 판독</span></label><label class="checkbox_label"><input id="sr-pause-ooc" type="checkbox"><span><code>(OOC:</code>로 시작하는 입력에서는 판독·주입 일시정지</span></label><p class="sr-help">대소문자와 앞쪽 공백을 구분하지 않습니다. 감지된 생성에서는 Jev를 호출하지 않고 기존 주입도 비웁니다.</p><label class="checkbox_label"><input id="sr-confidence" type="checkbox"><span>화면에 확신도 표시</span></label><label for="sr-recent-turns">최근 채팅 범위</label><select id="sr-recent-turns" class="text_pole"><option value="1">최근 1턴</option><option value="2">최근 2턴</option><option value="3">최근 3턴</option><option value="4">최근 4턴</option><option value="5">최근 5턴</option></select><p class="sr-help">한 턴은 유저 입력에서 시작해 뒤따르는 캐릭터 출력까지입니다. 생성 직전에는 현재 유저 입력이 최신 미완성 턴으로 포함됩니다. 매우 긴 기록은 최신 내용을 우선해 자동으로 제한합니다.</p></section>
@@ -1618,6 +1911,7 @@ function createDialog() {
                     <section class="sr-settings-card"><h3>주입 위치</h3><label for="sr-injection-mode">1. 기본 판정·전개 주입</label><select id="sr-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader}}</code><button id="sr-copy-macro" class="menu_button">복사</button></div><label for="sr-world-injection-mode">2. 세계관 전문 주입</label><select id="sr-world-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader-world}}</code><button id="sr-copy-world-macro" class="menu_button">복사</button></div><p class="sr-help">각 매크로 방식은 기본 위치와 중복 주입하지 않습니다. 세계관 전문은 Jev 판독 요청에 보내지 않고 최종 프리셋에만 넣습니다.</p><div id="sr-macro-status" class="sr-key-status"></div></section>
                     <section class="sr-settings-card"><h3>Jev API</h3><p class="sr-help">공식 TypeSafe Jev 주소와 <code>jev-latest</code>는 동봉 서버 플러그인에 고정되어 있습니다. 화면에는 키만 입력합니다.</p><label for="sr-jev-key">API 키</label><div class="sr-key-row"><input id="sr-jev-key" class="text_pole" type="password" autocomplete="new-password" placeholder="새 키 입력 (빈 값 저장 시 삭제)"><button id="sr-jev-toggle" class="menu_button" aria-label="키 표시 전환"><i class="fa-solid fa-eye"></i></button></div><div id="sr-jev-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-jev-save" class="menu_button">키 저장</button><button id="sr-jev-test" class="menu_button">연결 확인</button></div></section>
                     <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>
+                    <section class="sr-settings-card"><h3>데이터 백업</h3><p class="sr-help">전용 저장소의 설정·채팅 상태·세계관·인물 시트와 Jev 키를 날짜·시간 기준으로 백업합니다. 복원 전 현재 상태도 자동 백업됩니다.</p><div class="sr-action-row"><button id="sr-backup-create" class="menu_button">지금 백업</button><label class="menu_button sr-file-button">백업 가져오기<input id="sr-backup-import" type="file" accept="application/json,.json" hidden></label></div><div id="sr-backup-list" class="sr-backup-list"></div></section>
                 </div>
             </main>
         </div>`;
@@ -1709,6 +2003,7 @@ async function onBeforeGeneration(type, data, dryRun) {
 
 async function onChatChanged() {
     await clearInjection();
+    await hydrateServerState();
     await loadStateHistory();
     setFormValues();
     renderAll();
@@ -1720,6 +2015,7 @@ async function init() {
     settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
     extension_settings[MODULE] = settings;
     saveSettingsDebounced();
+    await hydrateServerState();
     const macros = getContext().macros;
     if (typeof macros?.register === 'function') {
         try {

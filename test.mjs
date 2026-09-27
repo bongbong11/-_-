@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LEGACY_PROMPTS } from './legacy-prompts.js';
 import { buildInjection, buildQuestions, rollEventProfile, rollNpcProfile } from './prompt-library.js';
 import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvancedEvent } from './advanced-library.js';
 import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, loadCustomWorlds, makeWorldHint } from './world-library.js';
 import { appendPendingUserMessage, buildInputKey, buildRecentTranscript, generationCycleSalt, latestUserMessageText, pendingComposerText } from './runtime-utils.js';
 import { sha256Fallback, sha256Hex } from './security-utils.js';
+import { buildCharacterInjection, buildCharacterTurnQuestions, buildProfileQuestions, characterContext, chunkSheet, defaultCharacterStore, normalizeCharacterStore, normalizeProfileAnalysis, selectActiveEntries, selectRelevantChunks } from './character-library.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -16,11 +19,13 @@ const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url)
 const pluginPkg = JSON.parse(await readFile(new URL('./server-plugin/package.json', import.meta.url), 'utf8'));
 const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
 const library = await readFile(new URL('./prompt-library.js', import.meta.url), 'utf8');
+const characterLibrarySource = await readFile(new URL('./character-library.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
-await access(new URL('./downloads/scene-reader-jev-plugin-v0.3.1.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-jev-plugin-v0.4.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-sillytavern-v0.8.0.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.7.7');
+assert.equal(manifest.version, '0.8.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(source, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(source, /allowedChoices\.includes\(candidate\)/);
@@ -29,7 +34,7 @@ assert.match(library, /An unclear or stable scene is not by itself a reason to h
 assert.match(library, /an NPC may still be routed when the enabled progression mode has a plausible concrete function/);
 assert.equal(pkg.main, 'server-plugin/index.cjs');
 assert.equal(pluginPkg.main, 'index.cjs');
-assert.equal(pluginPkg.version, '0.3.1');
+assert.equal(pluginPkg.version, '0.4.0');
 assert.match(source, /GENERATION_AFTER_COMMANDS/);
 assert.match(source, /extensionsMenu/);
 assert.match(source, /id = 'scene-reader-quick-button'/);
@@ -44,7 +49,9 @@ assert.match(source, /최근 5턴/);
 assert.match(source, /자동 전개/);
 assert.match(source, /고급 전개/);
 assert.match(source, /갈등용 진행/);
-assert.match(source, /설정/);
+assert.match(source, /인물 판정/);
+assert.match(source, /id="sr-settings-button"/);
+assert.doesNotMatch(source, /data-sr-tab="settings"/);
 assert.match(source, /관계 진전 속도/);
 assert.match(source, /사건 해결 속도/);
 assert.match(source, /공통 인물 등장 확률/);
@@ -79,6 +86,9 @@ assert.match(source, /현재 빌런 종료 · 새 추첨 대기/);
 assert.match(source, /const STATE_DB_NAME = 'scene-reader-state'/);
 assert.match(source, /window\.indexedDB\.open\(STATE_DB_NAME, 1\)/);
 assert.match(source, /STATE_HISTORY_LIMIT = 12/);
+assert.match(source, /STORAGE_API_URL = '\/api\/plugins\/scene-reader-jev\/storage'/);
+assert.match(source, /storagePost\('characters'/);
+assert.match(source, /storagePost\('backup\/restore'/);
 assert.match(source, /event_types\.MESSAGE_SWIPED/);
 assert.match(source, /event_types\.MESSAGE_EDITED/);
 assert.match(source, /event_types\.MESSAGE_DELETED/);
@@ -152,7 +162,7 @@ for (const [name, expected] of Object.entries(expectedHashes)) {
 
 const preferences = { progressionMode: 'investigation', worldDirection: 'hostile', relationshipDirection: 'hostile', negativePriority: true, judgmentStyle: 'balanced', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', fightSustain: true, villainEnabled: true, socialEnabled: true, worldHostility: true, npcToUser: true, userMisfortune: true };
 const questions = buildQuestions({ preferences, hasVillain: false, hasNpc: false, hasEvent: false, pacingState: { relationship: { closer: 1, distant: 0 }, event: { qualifiedSteps: 1 } }, previousRoutes: { npc_route: 'reuse' } });
-for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_followthrough', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'action_evasion', 'directive_followthrough', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'resolution_pacing', 'fight_sustain', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
+for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_followthrough', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'repetitive_ending', 'action_evasion', 'directive_followthrough', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'resolution_pacing', 'fight_sustain', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
 for (const key of ['npc_autonomy', 'world_hostility', 'npc_guard', 'misfortune']) assert.equal(questions[key], undefined, `${key} must be fixed or conditionally connected, not Jev-gated`);
 const npc = rollNpcProfile('investigation', () => 0);
 assert.equal(npc.role, 'witness');
@@ -299,6 +309,75 @@ const npcOverreachPayload = buildInjection({
 assert.match(npcOverreachPayload, /Remove the NPC's leaked conclusion/);
 assert.match(npcOverreachPayload, /hunch, suspicion, intuition/);
 
+const emptyCharacterStore = defaultCharacterStore();
+assert.equal(emptyCharacterStore.enabled, false);
+assert.equal(selectActiveEntries(emptyCharacterStore, 'Alice is here.', 'Alice').length, 0, 'disabled character mode must select nothing');
+const profileQuestions = buildProfileQuestions('npc');
+assert.deepEqual(Object.keys(profileQuestions), ['knowledge_scope', 'expertise_depth', 'institutional_access', 'practical_competence', 'speech_register', 'initiative', 'disclosure_style', 'memory_precision', 'history_use', 'canon_status']);
+const normalizedAnalysis = normalizeProfileAnalysis({ answers: { knowledge_scope: { choice: 'ordinary' }, expertise_depth: { choice: 'invented' } } });
+assert.equal(normalizedAnalysis.knowledge_scope, 'ordinary');
+assert.equal(normalizedAnalysis.expertise_depth, 'none', 'invalid analysis must use the conservative fixed choice');
+const characterStoreFixture = normalizeCharacterStore({ enabled: true, characters: [{ id: 'alice', name: 'Alice', aliases: ['A'], source: 'Alice is a surgeon.\n\nShe grew up in London.', analysis: { knowledge_scope: 'specialist' } }], npcs: [{ id: 'bob', name: 'Bob', source: 'Bob runs the local shop.', analysis: {} }] });
+assert.equal(selectActiveEntries(characterStoreFixture, 'A entered. Bob stayed outside.', 'Alice').length, 2);
+assert.equal(selectActiveEntries(characterStoreFixture, 'No names here.', 'Alice')[0].name, 'Alice');
+assert.ok(chunkSheet('a'.repeat(3000), 1000).length >= 3);
+assert.match(selectRelevantChunks(characterStoreFixture.characters[0].source, 'London', 1)[0], /London/);
+const activeEntries = selectActiveEntries(characterStoreFixture, 'Alice spoke.', 'Alice');
+const turnQuestions = buildCharacterTurnQuestions(activeEntries, { franchiseWorld: true });
+assert.ok(turnQuestions.character_0_presence);
+assert.ok(turnQuestions.npc_identity_route);
+assert.match(turnQuestions.npc_identity_route.criteria.canon_natural, /canon person/);
+const contextFixture = characterContext(activeEntries, null, 'surgeon');
+assert.equal(contextFixture.active.length, 1);
+const charBlock = buildCharacterInjection(activeEntries, { character_0_presence: 'active', character_0_knowledge: 'role_based', character_0_response: 'act', character_0_history: 'influence', npc_identity_route: 'canon_natural' });
+assert.match(charBlock, /<CHARACTER_EXECUTION>/);
+assert.match(charBlock, /Alice: active/);
+assert.match(charBlock, /canon character only/);
+const noCharBlock = buildCharacterInjection([], { npc_identity_route: 'none' });
+assert.equal(noCharBlock, '');
+const charPayload = buildInjection({
+    settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'slow' },
+    decisions: { response_cadence: 'linger', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'direct', npc_route: 'none', villain_route: 'none', fight_sustain: 'no', repetitive_ending: 'yes', user_handoff: 'yes', input_echo: 'yes' },
+    characterBlock: charBlock,
+});
+assert.match(charPayload, /<CHARACTER_EXECUTION>/);
+assert.equal((charPayload.match(/Do not reuse the recent closing architecture/g) || []).length, 0, 'only the two highest-priority execution corrections may be injected');
+assert.equal((charPayload.match(/<EXECUTION_CORRECTION>/g) || []).length, 1);
+assert.match(charPayload, /Treat \{\{user\}\}'s input as already established/);
+assert.match(charPayload, /Do not substitute repeated questions/);
+assert.ok(charPayload.indexOf('<NARRATIVE_CADENCE') < charPayload.indexOf('<CHARACTER_EXECUTION>'));
+assert.match(charPayload, /one primary beat/);
+const repeatedEndingPayload = buildInjection({
+    settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium' },
+    decisions: { response_cadence: 'natural', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'direct', npc_route: 'none', villain_route: 'none', fight_sustain: 'no', repetitive_ending: 'yes' },
+});
+assert.match(repeatedEndingPayload, /Do not reuse the recent closing architecture/);
+assert.match(library, /At least two recent outputs use materially the same closing device/);
+assert.match(source, /active: -0\.16/);
+for (const advancedEnabled of [false, true]) {
+    for (const relationshipDirection of ['dynamic', 'hostile']) {
+        for (const characterEnabled of [false, true]) {
+            const matrixPayload = buildInjection({
+                settings: { worldDirection: 'natural', relationshipDirection, progressionMode: 'adventure', advancedEnabled, relationshipPace: 'slow', resolutionPace: 'slow', roleplayPace: 'slow', negativePriority: false },
+                decisions: { response_cadence: 'natural', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'direct', advanced_route: 'none', advanced_move: 'quiet', progression_move: 'hold', event_route: 'none', npc_route: 'none', villain_route: 'none', fight_sustain: 'no' },
+                characterBlock: characterEnabled ? charBlock : '',
+            });
+            assert.equal((matrixPayload.match(/^\(Meta:/gm) || []).length, 1, 'combined injection must keep one meta wrapper');
+            assert.equal(matrixPayload.includes('<CHARACTER_EXECUTION>'), characterEnabled, 'character toggle must control character injection');
+            assert.equal(matrixPayload.includes(LEGACY_PROMPTS.CHARACTER_TO_USER_DEFAULT), relationshipDirection === 'hostile', 'relationship toggle must control legacy source exactly');
+            assert.equal(matrixPayload.includes('<RP_PROGRESSION'), false, 'hold route must not inject plot movement');
+        }
+    }
+}
+for (const id of ['sr-settings-button', 'sr-character-enabled', 'sr-character-save', 'sr-character-delete', 'sr-backup-create', 'sr-backup-import']) {
+    assert.match(source, new RegExp(`getElementById\\('${id}'\\).*addEventListener`), `${id} must have a working event binding`);
+}
+assert.match(source, /\[\['sr-character-new', 'character'\], \['sr-persona-new', 'persona'\], \['sr-npc-sheet-new', 'npc'\]\].*addEventListener/);
+assert.match(source, /characterStore\.enabled \? buildCharacterInjection/);
+assert.match(source, /if \(characterStore\.enabled\) Object\.assign\(questions, buildCharacterTurnQuestions/);
+assert.match(source, /selectActiveEntries\(characterStore, transcript/);
+assert.match(characterLibrarySource, /return \[\.\.\.chars, \.\.\.npcs\]\.slice\(0, 3\)/);
+
 assert.equal(plugin.info.id, 'scene-reader-jev');
 const routes = {};
 await plugin.init({
@@ -307,6 +386,8 @@ await plugin.init({
 });
 assert.ok(routes['GET /health']);
 assert.ok(routes['POST /systemone']);
+assert.ok(routes['POST /storage/bootstrap']);
+assert.ok(routes['POST /storage/backup/restore']);
 
 const previousFetch = globalThis.fetch;
 let forwarded;
@@ -338,4 +419,55 @@ assert.equal(forwarded.options.headers.Authorization, 'Bearer secret-key');
 assert.equal(JSON.parse(forwarded.options.body).model, 'jev-latest');
 assert.equal(response.code, 200);
 
-console.log('씬판독기 검사 통과: UI, 라우팅, 서버 플러그인, 빠답 원문 해시');
+const storageRoot = await mkdtemp(join(tmpdir(), 'scene-reader-test-'));
+const makeResponse = () => ({
+    code: 200, value: null,
+    status(value) { this.code = value; return this; },
+    set() { return this; },
+    send(value) { this.value = value; return this; },
+    json(value) { this.value = value; return this; },
+});
+const user = { directories: { root: storageRoot } };
+let storageResponse = makeResponse();
+await routes['POST /storage/settings']({ user, body: { settings: { global: { enabled: true }, worlds: [{ id: 'w' }] } } }, storageResponse);
+assert.equal(storageResponse.value.ok, true);
+storageResponse = makeResponse();
+await routes['POST /storage/chat']({ user, body: { chatKey: 'chat-a', value: { preferences: { judgmentStyle: 'active' } } } }, storageResponse);
+storageResponse = makeResponse();
+await routes['POST /storage/history']({ user, body: { chatKey: 'chat-a', value: [{ assistantIndex: 2 }] } }, storageResponse);
+storageResponse = makeResponse();
+await routes['POST /storage/characters']({ user, body: { chatKey: 'chat-a', value: characterStoreFixture } }, storageResponse);
+storageResponse = makeResponse();
+await routes['POST /storage/key']({ user, body: { key: 'server-secret' } }, storageResponse);
+assert.match(storageResponse.value.keyStatus, /cret$/);
+let serverKeyForward;
+globalThis.fetch = async (_url, options) => {
+    serverKeyForward = options.headers.Authorization;
+    return { status: 200, headers: { get: () => 'application/json' }, text: async () => '{"answers":{}}' };
+};
+await routes['POST /systemone']({ user, get: () => '', body: { state: 'stored key test', questions: {} } }, makeResponse());
+globalThis.fetch = previousFetch;
+assert.equal(serverKeyForward, 'Bearer server-secret', 'saved server key must be used when the browser sends no key');
+storageResponse = makeResponse();
+await routes['POST /storage/bootstrap']({ user, body: { chatKey: 'chat-a' } }, storageResponse);
+assert.equal(storageResponse.value.settings.global.enabled, true);
+assert.equal(storageResponse.value.chat.preferences.judgmentStyle, 'active');
+assert.equal(storageResponse.value.history.length, 1);
+assert.equal(storageResponse.value.characters.characters[0].name, 'Alice');
+assert.match(storageResponse.value.keyStatus, /cret$/);
+storageResponse = makeResponse();
+await routes['POST /storage/backup/create']({ user, body: {} }, storageResponse);
+const backupId = storageResponse.value.backup.id;
+assert.ok(backupId);
+await routes['POST /storage/settings']({ user, body: { settings: { global: { enabled: false }, stale: true } } }, makeResponse());
+storageResponse = makeResponse();
+await routes['POST /storage/backup/restore']({ user, body: { id: backupId } }, storageResponse);
+storageResponse = makeResponse();
+await routes['POST /storage/bootstrap']({ user, body: { chatKey: 'chat-a' } }, storageResponse);
+assert.equal(storageResponse.value.settings.global.enabled, true, 'restore must replace modified settings');
+assert.equal(storageResponse.value.settings.stale, undefined, 'restore must remove stale data');
+const malicious = { schemaVersion: 1, files: [{ path: '../outside.json', text: '{}' }] };
+assert.throws(() => plugin._test.validateSnapshot(malicious), /Unsafe/);
+await rm(storageRoot, { recursive: true, force: true });
+
+console.log('씬판독기 검사 통과: UI, 인물 판정, 라우팅, 전용 저장소·백업, 서버 플러그인, 빠답 원문 해시');
