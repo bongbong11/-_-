@@ -119,7 +119,7 @@ export function fixedDecision(effective) {
 }
 
 export function applyCharacterPolicy(key, answer, judgmentStyle, allowedChoices) {
-    const isAccess = /^character_\d+_context_access_\d+$/.test(key);
+    const isAccess = /^character_\d+_(?:context_access_\d+|response_basis)$/.test(key);
     const fallback = key === 'npc_identity_route' ? 'none' : key.endsWith('_presence') ? 'absent' : 'none';
     // Active play may change routing, never the evidence standard for information access.
     const result = applyDecisionPolicy({ key, answer, style: isAccess ? 'balanced' : judgmentStyle, allowedChoices, fallback, baseThreshold: isAccess ? 0.75 : 0.59 });

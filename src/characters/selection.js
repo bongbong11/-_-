@@ -33,7 +33,7 @@ export function selectRelevantChunks(source, query, limit = 2) {
     return ranked.slice(0, safeLimit).map((v) => v.text);
 }
 
-export function selectActiveEntries(store, transcript, primaryCharacterName = '', carriedEntryIds = []) {
+export function selectActiveEntries(store, transcript, primaryCharacterName = '', carriedEntryIds = [], { allowUserImpersonation = false } = {}) {
     const normalized = normalizeCharacterStore(store);
     if (!normalized.enabled) return [];
     const haystack = String(transcript || '').toLocaleLowerCase();
@@ -51,18 +51,19 @@ export function selectActiveEntries(store, transcript, primaryCharacterName = ''
         return latest;
     };
     const latestMention = (entry) => Math.max(-1, ...names(entry).map(mentionIndex));
-    const all = [...normalized.characters, ...normalized.npcs];
+    const all = [...normalized.characters, ...normalized.npcs, ...(allowUserImpersonation && normalized.persona ? [normalized.persona] : [])];
     const scored = all.map((entry, order) => {
         const latest = latestMention(entry);
         let score = latest >= 0 ? 2000 + (latest / Math.max(1, haystack.length)) * 500 : 0;
         if (carried.has(entry.id)) score = Math.max(score, 1000);
         if (isPrimary(entry)) score = Math.max(score, 4000);
+        if (allowUserImpersonation && entry.kind === 'persona') score = Math.max(score, 3900);
         return { entry, order, score };
     }).filter((item) => item.score > 0);
     if (!scored.length && normalized.characters.length === 1) scored.push({ entry: normalized.characters[0], order: 0, score: 500 });
     return scored
         .sort((a, b) => b.score - a.score || b.order - a.order)
         .map((item) => item.entry)
-        .slice(0, 3);
+        .slice(0, allowUserImpersonation ? 4 : 3);
 }
 

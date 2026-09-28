@@ -44,19 +44,20 @@ function renderCharacterTurnResults() {
         const prefix = 'character_' + person.index + '_';
         const presence = judgment.details?.[prefix + 'presence'];
         const direction = judgment.details?.[prefix + 'response_direction'];
-        const status = person.presence === 'active' ? '이번 응답에 적용' : person.presence === 'background' ? '배경 참고' : '미적용';
+        const status = person.injected ? '이번 응답에 주입' : person.presence === 'active' ? '장면 판정만 · 별도 주입 없음' : person.presence === 'background' ? '배경 참고' : '미적용';
         const audit = [presence && ['장면 역할',presence],direction && ['반응 방향',direction]].filter(Boolean).map(([label,detail]) =>
             '<div class="sr-decision-row"><span>' + label + '</span><small>Jev ' + escapeHtml(String(detail.selected || '응답 없음')) + ' → 확신 ' + Math.round((Number(detail.certainty)||0)*100) + '% / 기준 ' + Math.round((Number(detail.threshold)||0)*100) + '% → 최종 ' + escapeHtml(String(detail.effective || '없음')) + ' · ' + escapeHtml(detail.rule || '선택 유지') + '</small></div>').join('');
-        const entry = [...characterStore.characters,...characterStore.npcs].find((item) => item.id === person.id);
-        const profileNames = (person.profileIds || []).map((id) => currentProfileItems(entry).find((item) => item.id === id)?.rule).filter(Boolean);
+        const entry = [...characterStore.characters,...characterStore.npcs,characterStore.persona].filter(Boolean).find((item) => item.id === person.id);
+        const profileNames = (person.injectedRuleIds || []).map((id) => currentProfileItems(entry).find((item) => item.id === id)?.rule).filter(Boolean);
         const rows = [
             ['이번 역할', characterTurnLabel('presence',person.presence)],
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
+            ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
             ['지식 접근 제외', (person.deniedIds || []).length ? person.deniedIds.length + '개 · 해당 정보만 제외' : '없음'],
             ['반응 방향', characterTurnLabel('direction',person.direction)],
         ].map(([label,value]) => '<div class="sr-decision-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>').join('');
-        return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : '캐릭터') + ' · ' + status + '</small></h4>' + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + '</details>' : '') + '</section>';
+        return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : person.kind === 'persona' ? '페르소나' : '캐릭터') + ' · ' + status + '</small></h4>' + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + '</details>' : '') + '</section>';
     }).join('');
 }
 
@@ -185,7 +186,7 @@ function renderCharacterStore() {
     const setList = (id, entries, kind) => {
         const root = document.getElementById(id);
         if (!root) return;
-        root.innerHTML = entries.map((entry) => `<button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}</strong><small>${entry.updatedAt ? '판독 저장됨' : '판독 필요'}</small></span><i class="fa-solid fa-pen"></i></button>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
+        root.innerHTML = entries.map((entry) => `<div class="sr-character-list-row"><button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}${entry.antagonist ? ' · 악역' : ''}</strong><small>${escapeHtml(profileStatus(entry))}</small></span><i class="fa-solid fa-pen"></i></button>${kind === 'npc' ? `<button type="button" class="menu_button" data-npc-generate-for="${escapeHtml(entry.id)}">${entry.source ? '다시 생성' : '시트 생성'}</button>` : ''}</div>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
     };
     const enabled = document.getElementById('sr-character-enabled');
     if (enabled) enabled.checked = characterStore.enabled;
@@ -210,11 +211,12 @@ function renderCharacterAnalysisBrowser() {
     list.innerHTML = entries.map((entry) => `<button type="button" class="sr-character-view${selected?.id === entry.id && selected?.kind === entry.kind ? ' active' : ''}" data-character-view-kind="${entry.kind}" data-character-view-id="${escapeHtml(entry.id)}" aria-pressed="${selected?.id === entry.id && selected?.kind === entry.kind}"><span>${escapeHtml(entry.name)}</span><small>${entry.kind === 'npc' ? 'NPC' : entry.kind === 'persona' ? '페르소나' : '캐릭터'}</small></button>`).join('') || '<div class="sr-empty-small">저장된 인물 없음</div>';
     if (!selected) { result.innerHTML = '<div class="sr-empty-small">시트를 저장하면 여기서 판독 기준을 확인할 수 있습니다.</div>'; return; }
     const items = currentProfileItems(selected);
-    const rejected = selected.profile?.rejected || [];
+    const rejected = selected.profile?.sourceHash === selected.sourceHash ? selected.profile?.rejected || [] : [];
     const rows = items.map((item) => '<div class="sr-decision-row"><span>' + escapeHtml(ITEM_LABELS[item.kind] || item.kind) + (item.target ? ' · ' + escapeHtml(item.target) : '') + '</span><strong>' + escapeHtml(item.rule) + '</strong></div>').join('');
     const rejectedRows = rejected.map((item) => '<div class="sr-decision-row"><span>제외 · ' + escapeHtml(item.id) + '</span><strong>' + escapeHtml(item.reason) + '</strong></div>').join('');
     result.innerHTML = '<div class="sr-character-analysis-head"><strong>' + escapeHtml(selected.name) + '</strong><button type="button" class="menu_button" data-character-edit-kind="' + selected.kind + '" data-character-edit-id="' + escapeHtml(selected.id) + '">시트 수정</button></div>'
-        + '<p class="sr-help">' + escapeHtml(profileStatus(selected)) + ' · 원본 시트는 메인 모델에 ' + (selected.sourceVisibleToMain ? '이미 보입니다.' : '자동으로 보이지 않습니다.') + '</p>'
+        + '<p class="sr-help">' + escapeHtml(profileStatus(selected)) + ' · 원본 시트는 메인 모델에 ' + (selected.sourceVisibleToMain ? '이미 보입니다.' : '자동으로 보이지 않습니다.') + (selected.antagonist ? ' · 악역 설정' : '') + '</p>'
+        + '<p class="sr-help">아래 규칙은 상시 주입되지 않습니다. Jev가 다음 응답에 실제로 필요한 항목만 최대 두 개 고릅니다.</p>'
         + (rows || '<p class="sr-help">이번 시트에서 저장할 만한 개별 규칙이 없습니다.</p>')
         + (rejectedRows ? '<details class="sr-trace"><summary>제외된 후보와 이유</summary>' + rejectedRows + '</details>' : '');
 

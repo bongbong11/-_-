@@ -11,7 +11,8 @@ import { createResults } from '../ui/results.js';
 import { dialogTemplate } from '../ui/dialog-template.js';
 
 import { PROFILE_SYSTEM, CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
-import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
+import { NPC_NAME_SYSTEM, NPC_SHEET_PROMPT, NPC_CORE_SYSTEM, parseNpcCandidates, parseNpcSheet, parseNpcCore, deriveEnglishCore } from '../characters/npc-sheet.js';
+import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders, generateQuietPrompt } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
 import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, PACE_OPTIONS, buildQuestions, buildInjection } from '../../prompt-library.js';
 import { ADVANCED_STYLES, ADVANCED_ELEMENTS, ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS } from '../../advanced-library.js';
@@ -82,6 +83,7 @@ const CHAT_DEFAULTS = {
     relationshipPace: 'medium',
     resolutionPace: 'medium',
     roleplayPace: 'medium',
+    allowUserImpersonation: false,
     fightSustain: false,
     villainEnabled: true,
     appearanceChance: 10,
@@ -107,6 +109,7 @@ let stateDbPromise = null;
 let pendingGenerationType = '';
 let generationMode = 'rp';
 let debugInjectionArmed = false;
+let lastDebugFrame = null;
 let activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
 const handledOocMarkers = [];
 let serverStoreAvailable = false;
@@ -296,7 +299,7 @@ function record(create = false) {
         value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;
         value.preferences.advancedElements = [...new Set((Array.isArray(value.preferences.advancedElements) ? value.preferences.advancedElements : []).filter((key) => ADVANCED_ELEMENTS[key]))];
         if (!value.preferences.advancedElements.length) value.preferences.advancedElements = [...ADVANCED_DEFAULT_ELEMENTS];
-        for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune']) value.preferences[key] = Boolean(value.preferences[key]);
+        for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune', 'allowUserImpersonation']) value.preferences[key] = Boolean(value.preferences[key]);
         for (const key of ['appearanceChance', 'eventChance']) value.preferences[key] = Math.max(1, Math.min(100, Number(value.preferences[key]) || CHAT_DEFAULTS[key]));
         const pacing = value.pacingState && typeof value.pacingState === 'object' ? value.pacingState : {};
         const relation = pacing.relationship && typeof pacing.relationship === 'object' ? pacing.relationship : {};
@@ -577,6 +580,7 @@ let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalC
     get reversibleStateSnapshot() { return reversibleStateSnapshot; }, set reversibleStateSnapshot(value) { reversibleStateSnapshot = value; },
     get saveStateHistory() { return saveStateHistory; }, set saveStateHistory(value) { saveStateHistory = value; },
     get selectActionPlan() { return selectActionPlan; },
+    get lastDebugFrame() { return lastDebugFrame; }, set lastDebugFrame(value) { lastDebugFrame = value; },
     get selectActiveEntries() { return selectActiveEntries; },
     get selectContinuityContext() { return selectContinuityContext; },
     get selectedWorld() { return selectedWorld; }, set selectedWorld(value) { selectedWorld = value; },
@@ -651,6 +655,17 @@ async function testConnection() {
 }
 
 let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, saveCharacterEntry, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm} = createUiController({
+    get NPC_NAME_SYSTEM() { return NPC_NAME_SYSTEM; },
+    get NPC_SHEET_PROMPT() { return NPC_SHEET_PROMPT; },
+    get NPC_CORE_SYSTEM() { return NPC_CORE_SYSTEM; },
+    get parseNpcCandidates() { return parseNpcCandidates; },
+    get parseNpcSheet() { return parseNpcSheet; },
+    get parseNpcCore() { return parseNpcCore; },
+    get deriveEnglishCore() { return deriveEnglishCore; },
+    get splitOocText() { return splitOocText; },
+    get generateQuietPrompt() { return generateQuietPrompt; },
+    get linkedCharacterBooks() { return linkedCharacterBooks; },
+    get worldInfoModule() { return worldInfoModule; },
     get saveSession() { return saveSession; },
     get ADVANCED_ELEMENTS() { return ADVANCED_ELEMENTS; },
     get PROFILE_SYSTEM() { return PROFILE_SYSTEM; },
@@ -678,6 +693,7 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get connectionRequestService() { return connectionRequestService; }, set connectionRequestService(value) { connectionRequestService = value; },
     get copyText() { return copyText; }, set copyText(value) { copyText = value; },
     get debugInjectionArmed() { return debugInjectionArmed; }, set debugInjectionArmed(value) { debugInjectionArmed = value; },
+    get lastDebugFrame() { return lastDebugFrame; },
     get dialog() { return dialog; }, set dialog(value) { dialog = value; },
     get document() { return document; },
     get escapeHtml() { return escapeHtml; }, set escapeHtml(value) { escapeHtml = value; },

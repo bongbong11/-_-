@@ -753,12 +753,11 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         if (decisions[key] === 'yes' && EXECUTION_CORRECTIONS[key]) corrections.push(EXECUTION_CORRECTIONS[key]);
     }
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
-    if (String(characterBlock || '').trim()) blocks.push(String(characterBlock).trim());
     if (String(continuityBlock || '').trim()) blocks.push(String(continuityBlock).trim());
     const castNames = new Set(sheetCastNames.map(name => String(name || '').trim().toLocaleLowerCase()).filter(Boolean));
     const generatedName = String(npcProfile?.name || npcProfile?.identityName || npcProfile?.characterName || '').trim().toLocaleLowerCase();
     const npcIsSheetCast = Boolean(generatedName && castNames.has(generatedName));
-    if (castNames.size && ['create','replace','reuse'].includes(decisions.npc_route)) blocks.push('<NPC_CAST_SCOPE>Registered Sheet Cast retain their established identity, knowledge, and relationships. Generated Cast instructions apply only to other people; do not duplicate a registered person.</NPC_CAST_SCOPE>');
+    if (castNames.size && (['create','replace','reuse'].includes(decisions.npc_route) || settings.npcToUser || decisions.npc_autonomy === 'yes')) blocks.push('<NPC_CAST_SCOPE>Registered Sheet Cast retain their established identity, knowledge, and relationships even when their optional analysis is off or selects no rule. Generated Cast defaults and generic NPC execution apply only to other people; do not recreate an existing person.</NPC_CAST_SCOPE>');
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
 Continue the active exchange through one concrete, character-consistent response, decision, refusal, action, or immediate consequence. Do not recap the input, stop at intention or warning when a supported step can be executed, or end on a question merely to hand back the turn. Leave {{user}}'s response and any outcome that depends on it open.
@@ -824,6 +823,8 @@ Continue the active exchange through one concrete, character-consistent response
         const priority = settings.negativePriority ? '[Priority: enabled negative-bias constraints cannot be cancelled by positive world or event routing. They do not rewrite a registered person\'s established knowledge, relationships, or characterization.]\n' : '';
         blocks.push(`<CONFLICT_PROGRESSION>\n${priority}${conflictBlocks.join('\n\n')}\n</CONFLICT_PROGRESSION>`);
     }
+
+    if (String(characterBlock || '').trim()) blocks.push('<SHEET_CAST_SCOPE>Apply the following specific boundaries to their named people within the selected scene, event, conflict, and world constraints. Those broader constraints do not rewrite their established knowledge, relationships, or characterization; these individual boundaries do not cancel valid scene progression.</SHEET_CAST_SCOPE>', String(characterBlock).trim());
 
     return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n)`;
 }

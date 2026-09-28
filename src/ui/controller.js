@@ -1,6 +1,10 @@
 // User actions and form state; dependencies are explicit and supplied by the application.
+import { parseReasonerReply } from '../../st-profile-reasoner.js';
+import { debugReportText } from './debug-report.js';
 export function createUiController(deps) {
 let characterEditorRevision = 0;
+let npcCandidates = [];
+let pendingNpcGenerated = null;
 function invalidatePreparedJudgment() {
     deps.invalidateReasonerJobs();
     const rec = deps.record(true);
@@ -8,7 +12,7 @@ function invalidatePreparedJudgment() {
     if (!rec.pendingPlan?.outputText) rec.pendingPlan = null;
 }
 function characterFormSignature() {
-    return JSON.stringify(['sr-character-name', 'sr-character-aliases', 'sr-character-source'].map(id => deps.document.getElementById(id)?.value || '').concat(Boolean(deps.document.getElementById('sr-character-source-visible')?.checked)));
+    return JSON.stringify(['sr-character-name', 'sr-character-aliases', 'sr-character-source'].map(id => deps.document.getElementById(id)?.value || '').concat(Boolean(deps.document.getElementById('sr-character-source-visible')?.checked), Boolean(deps.document.getElementById('sr-character-antagonist')?.checked)));
 }
 function setFormValues() {
     const prefs = deps.preferences();
@@ -39,6 +43,7 @@ function setFormValues() {
     setChecked('sr-user-misfortune', prefs.userMisfortune);
     setChecked('sr-enabled', deps.settings.enabled);
     setChecked('sr-auto', deps.settings.autoJudge);
+    setChecked('sr-user-impersonation', prefs.allowUserImpersonation);
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) setChecked(id, prefs[key]);
     setChecked('sr-continuity-enabled', deps.settings.continuityEnabled);
     deps.renderReasonerProfiles();
@@ -113,6 +118,7 @@ function characterEntries(kind) {
 
 function showCharacterEditor(kind, entry = null) {
     characterEditorRevision++;
+    pendingNpcGenerated = null;
     deps.characterEditorKind = kind;
     deps.characterEditorId = entry?.id || '';
     const editor = deps.document.getElementById('sr-character-editor');
@@ -124,6 +130,18 @@ function showCharacterEditor(kind, entry = null) {
     deps.document.getElementById('sr-character-source').value = entry?.source || '';
     const visibleToggle = deps.document.getElementById('sr-character-source-visible');
     if (visibleToggle) visibleToggle.checked = entry ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc';
+    const antagonistRow = deps.document.getElementById('sr-character-antagonist-row');
+    if (antagonistRow) antagonistRow.hidden = kind !== 'npc';
+    const antagonistToggle = deps.document.getElementById('sr-character-antagonist');
+    if (antagonistToggle) antagonistToggle.checked = kind === 'npc' && Boolean(entry?.antagonist);
+    const generationActions = deps.document.getElementById('sr-npc-generate-actions');
+    if (generationActions) generationActions.hidden = kind !== 'npc';
+    const generateButton = deps.document.getElementById('sr-npc-generate-sheet');
+    const regenerateButton = deps.document.getElementById('sr-npc-regenerate-sheet');
+    if (generateButton) generateButton.hidden = kind !== 'npc' || Boolean(entry?.source);
+    if (regenerateButton) regenerateButton.hidden = kind !== 'npc' || !entry?.source;
+    const generatedPreview = deps.document.getElementById('sr-npc-generated-preview');
+    if (generatedPreview) generatedPreview.hidden = true;
     deps.document.getElementById('sr-character-delete').hidden = !entry;
     const status = deps.document.getElementById('sr-character-task-status');
     if (status) status.textContent = entry ? deps.profileStatus(entry) : '시트를 저장한 뒤 인물 판정을 실행할 수 있습니다.';
@@ -132,6 +150,7 @@ function showCharacterEditor(kind, entry = null) {
 
 function closeCharacterEditor() {
     characterEditorRevision++;
+    pendingNpcGenerated = null;
     deps.characterEditorKind = '';
     deps.characterEditorId = '';
     const editor = deps.document.getElementById('sr-character-editor');
@@ -143,7 +162,8 @@ function characterForm() {
         name: String(deps.document.getElementById('sr-character-name')?.value || '').trim(),
         source: String(deps.document.getElementById('sr-character-source')?.value || '').trim(),
         aliases: String(deps.document.getElementById('sr-character-aliases')?.value || '').split(',').map(v => v.trim()).filter(Boolean),
-        sourceVisibleToMain: Boolean(deps.document.getElementById('sr-character-source-visible')?.checked) };
+        sourceVisibleToMain: Boolean(deps.document.getElementById('sr-character-source-visible')?.checked),
+        antagonist: deps.characterEditorKind === 'npc' && Boolean(deps.document.getElementById('sr-character-antagonist')?.checked) };
 }
 function taskStatus(message, error = false) {
     const node = deps.document.getElementById('sr-character-task-status');
@@ -155,7 +175,10 @@ async function saveCharacterEntry() {
     const targetId = deps.characterEditorId;
     const current = characterEntries(form.kind).find(item => item.id === targetId);
     const sourceHash = form.source ? await deps.sha256Hex(form.source) : '';
-    const entry = { ...current, ...form, id: targetId || `${form.kind}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, sourceHash, updatedAt: new Date().toISOString() };
+    const generatedDraft = pendingNpcGenerated?.applied && form.kind === 'npc';
+    const entry = { ...current, ...form, id: targetId || `${form.kind}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, sourceHash, updatedAt: new Date().toISOString(),
+        coreEnglish: form.kind === 'npc' && current?.source === form.source ? current.coreEnglish || '' : form.kind === 'npc' ? deps.deriveEnglishCore(form.source, form.name) : '',
+        provenance: generatedDraft ? { ...pendingNpcGenerated.provenance, userEdited: pendingNpcGenerated.source !== form.source } : current?.provenance || null };
     const next = deps.normalizeCharacterStore(deps.characterStore);
     if (form.kind === 'persona') next.persona = entry;
     else {
@@ -195,7 +218,7 @@ async function analyzeAndSaveCharacter() {
     };
     try {
     const { name, source } = characterForm();
-    if (source !== original.source || name !== original.name || characterForm().sourceVisibleToMain !== original.sourceVisibleToMain || characterForm().aliases.join('|') !== (original.aliases || []).join('|')) throw new Error('수정한 시트를 먼저 저장하세요.');
+    if (source !== original.source || name !== original.name || characterForm().sourceVisibleToMain !== original.sourceVisibleToMain || characterForm().aliases.join('|') !== (original.aliases || []).join('|') || characterForm().antagonist !== Boolean(original.antagonist)) throw new Error('수정한 시트를 먼저 저장하세요.');
     taskStatus('연결 모델이 인물 시트를 해석하고 있습니다…');
     deps.updateActivity(`${name} 인물 시트 해석 중…`, { owner: activityOwner });
     await deps.loadReasonerProfiles(); job.assert();
@@ -203,6 +226,13 @@ async function analyzeAndSaveCharacter() {
         { kind, name, sheet: source }, { maxTokens: 2200 });
     assertEditor();
     const prepared = deps.prepareProfileItems(extraction.result);
+    let coreEnglish = kind === 'npc' && !original.sourceVisibleToMain ? deps.deriveEnglishCore(source, name) : '';
+    if (kind === 'npc' && !original.sourceVisibleToMain && !coreEnglish) {
+        const coreResult = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.NPC_CORE_SYSTEM,
+            { canonicalName: name, sheet: source }, { maxTokens: 260 });
+        assertEditor();
+        coreEnglish = deps.parseNpcCore(coreResult.result, name);
+    }
     taskStatus(`시트 해석 완료 · 영어 규칙 ${prepared.items.length}개`);
     deps.updateActivity(`${name} · 규칙 저장 중…`, { owner: activityOwner });
     const sourceHash = await deps.sha256Hex(source);
@@ -212,7 +242,7 @@ async function analyzeAndSaveCharacter() {
     if (targetId && (!currentEntry || deps.stableFingerprint(currentEntry) !== originalHash)) throw new deps.StaleRunError();
     if (deps.characterEditorKind === kind && deps.characterEditorId === targetId && String(deps.document.getElementById('sr-character-source')?.value || '').trim() !== source) throw new deps.StaleRunError();
     const profile = deps.createProfile(prepared.items, { characterId: targetId, sourceHash, source, analysisId, rejected: prepared.rejected });
-    const entry = { ...original, profile, sourceHash, updatedAt: new Date().toISOString() };
+    const entry = { ...original, profile, coreEnglish, sourceHash, updatedAt: new Date().toISOString() };
     const next = deps.normalizeCharacterStore(deps.characterStore);
     if (kind === 'persona') next.persona = entry;
     else {
@@ -256,6 +286,119 @@ async function deleteCharacterEntry() {
     closeCharacterEditor();
     deps.renderCharacterStore();
     deps.window.toastr?.success?.('인물 시트를 삭제했습니다.', '씬판독기');
+}
+
+async function npcSourceMaterial() {
+    const context = deps.getContext();
+    const character = context.characters?.[context.characterId] || {};
+    const card = character.data || character;
+    const cardText = [card.name, card.description, card.personality, card.scenario, card.first_mes, card.mes_example]
+        .map(value => String(value || '').trim()).filter(Boolean).join('\n\n');
+    const personaText = String(deps.characterStore.persona?.source || context.personaDescription || context.persona?.description || '').trim();
+    const world = deps.worldInfoModule;
+    const bookNames = world?.loadWorldInfo ? deps.linkedCharacterBooks(context, world.world_info) : [];
+    const bookResults = await Promise.allSettled(bookNames.map(name => world.loadWorldInfo(name)));
+    const bookText = bookResults.flatMap((result, index) => result.status === 'fulfilled'
+        ? Object.values(result.value?.entries || {}).filter(entry => entry && !entry.disable && typeof entry.content === 'string')
+            .map(entry => `[${bookNames[index]}] ${entry.content}`) : []).join('\n\n');
+    return { card: cardText.slice(0, 12000), persona: personaText.slice(0, 6000), linkedLorebooks: bookText.slice(0, 18000) };
+}
+
+function renderNpcCandidates() {
+    const panel = deps.document.getElementById('sr-npc-candidates');
+    const list = deps.document.getElementById('sr-npc-candidate-list');
+    if (!panel || !list) return;
+    panel.hidden = !npcCandidates.length;
+    list.innerHTML = npcCandidates.map((item, index) => `<label class="checkbox_label"><input type="checkbox" data-npc-candidate="${index}"><span><strong>${deps.escapeHtml(item.name)}</strong>${item.hint ? ` · ${deps.escapeHtml(item.hint)}` : ''}</span></label>`).join('');
+}
+
+async function readNpcNames() {
+    if (!deps.settings.reasonerProfileId) throw new Error('설정에서 시트 분석용 연결 프로필을 먼저 선택하세요.');
+    const chatKey = deps.stateChatKey();
+    const job = deps.jobs.begin('npc-name-candidates');
+    const owner = `npc-names:${job.id || Date.now()}`;
+    try {
+        deps.updateActivity('캐릭터 카드와 연결 로어북에서 NPC 이름을 찾는 중…', { owner });
+        const source = await npcSourceMaterial(); job.assert();
+        if (!source.card && !source.persona && !source.linkedLorebooks) throw new Error('읽을 캐릭터 카드·페르소나·연결 로어북 자료가 없습니다.');
+        const answer = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId,
+            deps.NPC_NAME_SYSTEM, source, { maxTokens: 900 });
+        job.assert();
+        if (chatKey !== deps.stateChatKey()) throw new deps.StaleRunError();
+        const context = deps.getContext();
+        npcCandidates = deps.parseNpcCandidates(answer.result, { characterName: context.name2, userName: context.name1,
+            existing: deps.characterStore.npcs.flatMap(entry => [entry.name, ...(entry.aliases || [])]) });
+        renderNpcCandidates();
+        deps.updateActivity(npcCandidates.length ? `NPC 이름 후보 ${npcCandidates.length}명 · 등록할 사람을 선택하세요.` : '등록할 새 NPC 이름을 찾지 못했습니다.', { done: true, owner });
+    } catch (error) {
+        deps.updateActivity(error.message, { error: !(error instanceof deps.StaleRunError), done: error instanceof deps.StaleRunError, owner });
+        if (!(error instanceof deps.StaleRunError)) { error.activityReported = true; throw error; }
+    } finally { job.finish(); }
+}
+
+async function addSelectedNpcCandidates() {
+    const checked = [...deps.document.querySelectorAll('[data-npc-candidate]:checked')]
+        .map(input => npcCandidates[Number(input.dataset.npcCandidate)]).filter(Boolean);
+    if (!checked.length) throw new Error('등록할 NPC를 먼저 선택하세요.');
+    const next = deps.normalizeCharacterStore(deps.characterStore);
+    const existing = new Set(next.npcs.map(entry => entry.name.toLocaleLowerCase()));
+    for (const candidate of checked) {
+        if (existing.has(candidate.name.toLocaleLowerCase())) continue;
+        existing.add(candidate.name.toLocaleLowerCase());
+        next.npcs.push({ id: `npc-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, kind: 'npc', name: candidate.name,
+            aliases: candidate.aliases, source: '', sourceHash: '', sourceVisibleToMain: false, antagonist: false,
+            provenance: { origin: 'named_in_sources', hint: candidate.hint }, updatedAt: new Date().toISOString() });
+    }
+    await deps.saveCharacterStore(deps.stateChatKey(), next);
+    deps.characterStore = deps.normalizeCharacterStore(next);
+    npcCandidates = [];
+    renderNpcCandidates();
+    invalidatePreparedJudgment();
+    await deps.persistChat(); await deps.clearInjection();
+    deps.renderCharacterStore();
+    deps.window.toastr?.success?.('선택한 NPC 이름을 등록했습니다. 필요한 시트를 생성하거나 직접 작성하세요.', '씬판독기');
+}
+
+async function generateNpcSheet() {
+    if (deps.characterEditorKind !== 'npc') return;
+    const name = String(deps.document.getElementById('sr-character-name')?.value || '').trim();
+    if (!name) throw new Error('NPC 이름을 먼저 입력하세요.');
+    if (typeof deps.generateQuietPrompt !== 'function') throw new Error('이 SillyTavern 버전은 조용한 모델 생성을 지원하지 않습니다.');
+    const chatKey = deps.stateChatKey();
+    const revision = characterEditorRevision;
+    const signature = characterFormSignature();
+    const owner = `npc-sheet:${Date.now()}`;
+    const job = deps.jobs.begin(`npc-sheet:${deps.characterEditorId || name}`);
+    try {
+        deps.updateActivity(`${name} · 현재 RP 모델이 NPC 시트를 작성 중…`, { owner });
+        const reference = await npcSourceMaterial(); job.assert();
+        const prompt = `${deps.NPC_SHEET_PROMPT}\n\n${JSON.stringify({ canonicalName: name, aliases: characterForm().aliases,
+            reference, currentScene: (deps.getContext().chat || []).slice(-8).map(message => ({ speaker: message.name || (message.is_user ? 'USER' : 'CHARACTER'),
+                text: message.extra?.ooc_chat === true ? '' : deps.splitOocText(String(message.mes || '')).rpText.slice(0, 1600) })).filter(item => item.text) })}`;
+        await deps.clearInjection();
+        const output = await deps.generateQuietPrompt({ quietPrompt: prompt, quietToLoud: false, skipWIAN: false, responseLength: 2300 });
+        job.assert();
+        if (chatKey !== deps.stateChatKey() || revision !== characterEditorRevision || signature !== characterFormSignature()) throw new deps.StaleRunError();
+        const generated = deps.parseNpcSheet(parseReasonerReply(output), name);
+        const existingSource = String(deps.document.getElementById('sr-character-source')?.value || '').trim();
+        pendingNpcGenerated = { ...generated, applied: !existingSource };
+        if (existingSource) {
+            deps.document.getElementById('sr-npc-generated-source').value = generated.source;
+            deps.document.getElementById('sr-npc-generated-preview').hidden = false;
+            taskStatus('새 생성본을 기존 시트와 비교한 뒤 적용하세요.');
+        } else {
+            deps.document.getElementById('sr-character-source').value = generated.source;
+            deps.document.getElementById('sr-character-aliases').value = generated.aliases.join(', ');
+            taskStatus('시트 초안을 입력칸에 채웠습니다. 확인한 뒤 저장하세요.');
+        }
+        deps.updateActivity(`${name} · 시트 초안 생성 완료`, { done: true, owner });
+    } catch (error) {
+        deps.updateActivity(error.message, { error: !(error instanceof deps.StaleRunError), done: error instanceof deps.StaleRunError, owner });
+        if (!(error instanceof deps.StaleRunError)) { error.activityReported = true; throw error; }
+    } finally {
+        try { if (chatKey === deps.stateChatKey()) await deps.applyStoredInjection({ exactSnapshot: true }); }
+        finally { job.finish(); }
+    }
 }
 
 function downloadJson(filename, value) {
@@ -328,6 +471,27 @@ async function endActiveEvent() {
 }
 
 function bindForm() {
+    deps.document.getElementById('sr-debug-open')?.addEventListener('click', () => {
+        const judgment = deps.record()?.lastJudgment;
+        if (!judgment) { deps.window.toastr?.warning?.('검토할 판정이 없습니다.', '씬판독기'); return; }
+        const frame = deps.lastDebugFrame?.chatKey === deps.stateChatKey() && deps.lastDebugFrame?.inputKey === judgment.inputKey ? deps.lastDebugFrame : null;
+        const preview = deps.document.getElementById('sr-debug-preview');
+        if (!preview) return;
+        preview.value = debugReportText({
+            judgedAt: judgment.judgedAt, model: judgment.model,
+            request: frame?.request || '원문 요청은 재시작 또는 다른 채팅으로 전환되어 메모리에 남아 있지 않습니다.',
+            rawJevAnswers: frame?.answers || judgment.rawChoices,
+            decisions: judgment.details, actionPlan: judgment.actionPlan, rolls: judgment.rolls,
+            verification: judgment.priorVerification, finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
+        }, deps.ownerPrompt());
+        preview.hidden = false;
+    });
+    deps.document.getElementById('sr-debug-copy')?.addEventListener('click', () => deps.runUiTask((async () => {
+        const preview = deps.document.getElementById('sr-debug-preview');
+        if (!preview || preview.hidden || !preview.value.trim()) throw new Error('먼저 전체 판정을 열고 개인정보를 확인하세요.');
+        await deps.copyText(preview.value);
+        deps.window.toastr?.success?.('검토한 판정 기록을 복사했습니다.', '씬판독기');
+    })(), '판정 기록을 복사하지 못했습니다.'));
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) deps.document.getElementById(id)?.addEventListener('change', event => deps.runUiTask(savePreference(key,event.target.checked)));
 
     deps.document.getElementById('sr-close')?.addEventListener('click', () => deps.dialog.close());
@@ -663,12 +827,36 @@ function bindForm() {
         invalidatePreparedJudgment();
         await deps.clearInjection(); await deps.persistChat(); deps.renderAll();
     })(), '인물 판정 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-user-impersonation')?.addEventListener('change', event => deps.runUiTask(savePreference('allowUserImpersonation', event.target.checked), '사칭 허용 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-npc-read-names')?.addEventListener('click', () => deps.runUiTask(readNpcNames(), 'NPC 이름 후보를 읽지 못했습니다.'));
+    deps.document.getElementById('sr-npc-add-selected')?.addEventListener('click', () => deps.runUiTask(addSelectedNpcCandidates(), '선택한 NPC를 등록하지 못했습니다.'));
+    deps.document.getElementById('sr-npc-candidates-close')?.addEventListener('click', () => { npcCandidates = []; renderNpcCandidates(); });
     for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) deps.document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));
+    for (const id of ['sr-npc-generate-sheet', 'sr-npc-regenerate-sheet']) deps.document.getElementById(id)?.addEventListener('click', () => deps.runUiTask(generateNpcSheet(), 'NPC 시트를 생성하지 못했습니다.'));
+    deps.document.getElementById('sr-npc-apply-generated')?.addEventListener('click', () => {
+        if (!pendingNpcGenerated) return;
+        pendingNpcGenerated.applied = true;
+        deps.document.getElementById('sr-character-source').value = pendingNpcGenerated.source;
+        deps.document.getElementById('sr-character-aliases').value = pendingNpcGenerated.aliases.join(', ');
+        deps.document.getElementById('sr-npc-generated-preview').hidden = true;
+        taskStatus('새 생성본을 입력칸에 적용했습니다. 확인 후 저장하세요.');
+    });
+    deps.document.getElementById('sr-npc-discard-generated')?.addEventListener('click', () => {
+        pendingNpcGenerated = null;
+        deps.document.getElementById('sr-npc-generated-preview').hidden = true;
+        taskStatus('새 생성본을 버렸습니다. 기존 시트는 유지됩니다.');
+    });
     deps.document.getElementById('sr-character-editor-cancel')?.addEventListener('click', closeCharacterEditor);
     deps.document.getElementById('sr-character-save')?.addEventListener('click', () => deps.runUiTask(saveCharacterEntry(), '시트를 저장하지 못했습니다.'));
     deps.document.getElementById('sr-character-analyze')?.addEventListener('click', () => deps.runUiTask(analyzeAndSaveCharacter(), '인물 판정을 완료하지 못했습니다.'));
     deps.document.getElementById('sr-character-delete')?.addEventListener('click', () => deps.runUiTask(deleteCharacterEntry(), '인물 시트를 삭제하지 못했습니다.'));
     deps.dialog.addEventListener('click', (event) => {
+        const npcGenerate = event.target.closest('[data-npc-generate-for]');
+        if (npcGenerate) {
+            const entry = characterEntries('npc').find((value) => value.id === npcGenerate.dataset.npcGenerateFor);
+            if (entry) { showCharacterEditor('npc', entry); deps.runUiTask(generateNpcSheet(), 'NPC 시트를 생성하지 못했습니다.'); }
+            return;
+        }
         const view = event.target.closest('[data-character-view-id]');
         if (view) {
             deps.characterAnalysisSelection = { kind: view.dataset.characterViewKind, id: view.dataset.characterViewId };

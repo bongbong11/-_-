@@ -5,7 +5,7 @@ import { CHARACTER_LIVE_SYSTEM, PROFILE_SELECT, CONTEXT_SELECT, DIRECTION_SELECT
 
 const DIRECTIONS = { none: 'No separate direction is needed.', speak: 'Let a direct line lead.', act: 'Let concrete conduct lead.', selective: 'Respond only to what matters to this person.', withhold: 'Withhold information for an established motive.', evade: 'Evade for an established motive.', deceive: 'Deceive only if the person has an established motive and knows what is being concealed.', withdraw: 'Withdraw when the person can actually do so.', confront: 'Confront a supported live issue.' };
 const ACCESS_LABELS = { observed: 'Directly perceived', reported: 'Was told', public: 'Publicly available', stored_knowledge: 'Previously established for this person', profile_supported: 'Within supported lived or role knowledge', private_access: 'Has established private access' };
-const MAX_INJECTION_CHARS = 1800;
+const MAX_INJECTION_CHARS = 2200;
 
 function relevant(text, query) {
     const terms = String(query).toLocaleLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) || [];
@@ -48,7 +48,7 @@ export function buildLiveCharacterPlan(entries = [], { selected = [], transcript
         const profileCandidates = currentProfileItems(entry).map(item => ({
             id: item.id, kind: item.kind, topic: item.topic, target: item.target, rule: item.rule,
         }));
-        return { index, id: entry.id, name: entry.name, kind: entry.kind, sourceVisibleToMain: entry.sourceVisibleToMain, core: buildCore(entry),
+        return { index, id: entry.id, name: entry.name, kind: entry.kind, antagonist: Boolean(entry.antagonist), sourceVisibleToMain: entry.sourceVisibleToMain, core: buildCore(entry), coreEnglish: entry.coreEnglish || '',
             profileCandidates, contextCandidates: contextItems(entry, selected, knowledge, memory, transcript),
             sourceExcerpt: profileIsCurrent(entry) ? selectRelevantChunks(entry.source, transcript, 1)[0] || '' : '',
             // Persona stays a reference and is never an autonomous response target.
@@ -69,6 +69,8 @@ export function buildCharacterTurnQuestions(plan = []) {
             questions[`${prefix}_context_access_${ordinal}`] = { type:'choice', instructions: `${ACCESS_INSTRUCTION}\nPerson: ${person.name}. Candidate: ${item.id}.`, criteria: ACCESS_CHOICES };
         });
         questions[`${prefix}_response_direction`] = { type: 'choice', instructions: DIRECTION_SELECT, criteria: DIRECTIONS };
+        questions[`${prefix}_response_basis`] = { type: 'choice', instructions: 'Identify the evidence needed for the proposed response direction independently of the other answers. Choose scene for an action supported by the visible exchange alone; choose an information ID only when the direction actually depends on that information. Do not assume the person has access to a selected item.',
+            criteria: { none: 'No supported independent basis is established.', scene: 'The visible present exchange alone supports the direction.', ...Object.fromEntries(person.contextCandidates.map(item => [item.id, `The direction requires ${item.id}.`])) } };
     }
     return questions;
 }
@@ -92,7 +94,12 @@ export function resolveLiveCharacterPlan(plan, decisions) {
             else accepted.push({ ...item, access });
         }
         let direction = presence === 'active' && Object.hasOwn(DIRECTIONS, decisions[`${prefix}_response_direction`]) ? decisions[`${prefix}_response_direction`] : 'none';
-        if (denied.length && !accepted.length && ['deceive', 'withhold'].includes(direction)) direction = 'none';
+        // The Jev questions are parallel; validate the chosen action against access here.
+        const basis = decisions[`${prefix}_response_basis`] || 'none';
+        const basisItem = person.contextCandidates.find(item => item.id === basis);
+        if ((basis === 'none' && ['deceive', 'withhold', 'confront'].includes(direction)) ||
+            (basisItem && !accepted.some(item => item.id === basis)) ||
+            (denied.length && !accepted.length && ['deceive', 'withhold'].includes(direction))) direction = 'none';
         return { ...person, presence, profileIds, profileItems: profileIds.map(id => person.profileCandidates.find(item => item.id === id)), contextIds,
             contextItems: accepted, denied, direction, excludedReason: denied.length ? '접근 근거 없는 정보는 제외 · 독립적인 직접 반응은 유지' : '' };
     });
@@ -109,19 +116,21 @@ function contextLine(person, item) {
     const source = ACCESS_LABELS[item.access] || 'Has bounded access to';
     return `${person.name} · ${source} this reference${item.occurredAt ? ` (${item.occurredAt})` : ''}; its truth and present validity are not established by access alone: ${item.text}`;
 }
-export function buildCharacterInjection(plan = []) {
+export function buildCharacterInjection(plan = [], { conflictActive = false } = {}) {
     const selections = [], traces = [];
     for (const person of plan) {
         traces.push({ index: person.index, id: person.id, name: person.name, kind: person.kind, presence: person.presence,
             profileIds: person.profileIds, contextIds: person.contextIds, deniedIds: person.denied.map(item => item.id), direction: person.direction, excludedReason: person.excludedReason });
         if (person.presence !== 'active') continue;
         const chosen = [];
-        if (!person.sourceVisibleToMain) {
+        if (!person.sourceVisibleToMain && person.kind === 'npc') {
             const excerpt = person.core.excerpts.map(item => item.text).filter(text => !/[가-힣]/u.test(text)).join(' · ');
-            chosen.push({ priority: 100, mandatory: true, text: `${person.name}: ${excerpt || 'Registered NPC; use only the identity established in this scene.'}` });
+            const core = person.coreEnglish || (excerpt ? `${person.name}: ${excerpt}` : '');
+            if (core) chosen.push({ priority: 100, mandatory: true, text: core });
         }
+        if (person.kind === 'npc' && person.antagonist && conflictActive) chosen.push({ priority: 85, text: `${person.name}: Enact supported opposition through this person's own motives and limits; do not grant hidden knowledge or flatten every response into hostility.` });
         if (person.denied.length) chosen.push({ priority: 90, mandatory: true, text: `${person.name}: Do not treat unshared scene or reference material as this person's knowledge.` });
-        for (const item of person.profileItems) chosen.push({ priority: 70, mandatory: true, text: `${person.name}: ${item.rule}` });
+        for (const item of person.profileItems) chosen.push({ priority: 70, personIndex: person.index, ruleId: item.id, text: `${person.name}: ${item.rule}` });
         for (const item of person.contextItems) {
             // Source text remains available to Jev. Do not copy non-English
             // reference prose into the English execution prompt.
@@ -130,13 +139,21 @@ export function buildCharacterInjection(plan = []) {
         }
         if (person.direction !== 'none') chosen.push({ priority: 50, text: `${person.name} · Direction: ${DIRECTIONS[person.direction]}` });
         chosen.sort((a,b)=>b.priority-a.priority);
-        selections.push(...chosen);
+        selections.push(...chosen.map(item => ({ ...item, personIndex: person.index })));
     }
     const selected = selections.sort((a,b)=>b.priority-a.priority);
-    const lines = selected.filter(item => item.mandatory).map(item => item.text);
-    for (const item of selected.filter(item => !item.mandatory)) {
-        if (lines.length >= 8) break;
-        if (`<CHARACTER_EXECUTION>\n${[...lines,item.text].join('\n')}\n</CHARACTER_EXECUTION>`.length <= MAX_INJECTION_CHARS) lines.push(item.text);
+    const lines = [], includedRules = new Set(), injectedPeople = new Set();
+    for (const item of selected) {
+        if (lines.length >= 8 && !item.mandatory) continue;
+        if (`<CHARACTER_EXECUTION>\n${[...lines,item.text].join('\n')}\n</CHARACTER_EXECUTION>`.length > MAX_INJECTION_CHARS) continue;
+        lines.push(item.text);
+        if (Number.isInteger(item.personIndex)) injectedPeople.add(item.personIndex);
+        if (item.ruleId) includedRules.add(item.ruleId);
+    }
+    for (const trace of traces) {
+        trace.injected = injectedPeople.has(trace.index);
+        trace.injectedRuleIds = trace.profileIds.filter(id => includedRules.has(id));
+        trace.omittedRuleIds = trace.profileIds.filter(id => !includedRules.has(id));
     }
     return { text: lines.length ? `<CHARACTER_EXECUTION>\n${lines.join('\n')}\n</CHARACTER_EXECUTION>` : '', traces };
 }

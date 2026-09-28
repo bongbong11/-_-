@@ -10,7 +10,8 @@ function sourceRevisionKey(rec, world) {
             caseSensitive: deps.worldInfoModule?.world_info_case_sensitive,
             wholeWords: deps.worldInfoModule?.world_info_match_whole_words,
         } : null,
-        characters: deps.characterStore.enabled ? [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, profile: entry.profile })) : [],
+        characters: [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases,
+            ...(deps.characterStore.enabled ? { sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, antagonist: entry.antagonist, coreEnglish: entry.coreEnglish, profile: entry.profile } : {}) })),
     });
 }
 
@@ -300,14 +301,14 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const carriedCharacterIds = (rec.lastJudgment?.characterTrace || [])
         .filter((item) => item?.final?.presence && item.final.presence !== 'absent')
         .map((item) => item.id);
-    const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds);
+    const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds, { allowUserImpersonation: prefs.allowUserImpersonation });
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
         transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona,
     }) : [];
     if (deps.characterStore.enabled) Object.assign(questions, deps.buildCharacterTurnQuestions(liveCharacters));
     // The common scene router chooses who may enter; the sheet system owns how a registered person behaves.
-    if (deps.characterStore.enabled && deps.isFranchiseWorld(world)) questions.npc_identity_route = {
+    if (deps.isFranchiseWorld(world)) questions.npc_identity_route = {
         type: 'choice', instructions: 'If a new NPC is needed, choose a naturally present canon person, a setting-compatible original, an existing person, or a group. Presence must follow location, time, role, access, and continuity. Do not create a duplicate of a registered sheet character.',
         criteria: { none: 'No NPC route.', reuse_existing: 'An established NPC fits.', canon_natural: 'A canon character naturally occupies the role.', original_major: 'A lasting original NPC fits.', original_minor: 'A temporary original NPC fits.', group: 'A group fits.' },
     };
@@ -319,7 +320,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     deps.updateStatus('Jev 판독 중…');
     deps.updateActivity(mixedOoc ? 'OOC 지시 확인 · Jev가 RP 장면을 판독하고 있습니다…' : 'Jev가 최근 장면을 판독하고 있습니다…');
     try {
-        const data = await deps.callJev({
+        const jevRequest = {
             model: deps.JEV_MODEL,
             state: {
                 scope: 'Observe established scene facts from recent_roleplay only. A character\'s claim, belief, suspicion, promise, intention, or proposed action is not automatically a world fact or completed action.\n\nUse current OOC only as guidance or constraints for this routing decision. Use past OOC only for continuity facts or constraints that remain applicable; never re-execute an expired one-turn or scene-specific direction. Do not treat OOC as an event witnessed by characters. Do not pass raw OOC into the final scene injection.\n\nAnswer each question from the supplied evidence; do not assume another question has already been answered. The extension will validate dependencies after receiving all answers.\n\nChoose a supported Primary route and report other plausible routes independently. The extension will retain one Primary and at most one directly dependent Secondary. Active mode favors an executable step among supported routes; it does not lower fact, knowledge, or diagnostic standards, and does not require a new incident.\n\nRoleplay pace governs narrative granularity. Relationship pace governs the amount of relationship change permitted. Resolution pace governs event resolution. Advanced progression governs eligible event activity. None of these controls rewrites the preset\'s genre, world rules, characterization, or prose style.',
@@ -334,6 +335,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
+                registered_sheet_cast: [...deps.characterStore.characters, ...deps.characterStore.npcs].map(entry => ({ name: entry.name, aliases: entry.aliases || [], antagonist: Boolean(entry.antagonist) })),
                 pending_verification: rec.pendingPlan?.outputText ? { plan: { effects: rec.pendingPlan.effects, decisions: rec.pendingPlan.decisions }, source_user_rp: sourceUserRpForOutput(rec.pendingPlan.outputIndex), character_output: rec.pendingPlan.outputText } : null,
                 continuity_context: deps.settings.continuityEnabled ? { items: continuityContext.items, knowledge: continuityContext.knowledge, dependencies: continuityContext.dependencies } : null,
                 pending_continuity_candidates: pendingCandidates.map((candidate) => ({ id: candidate.id, type: candidate.type, label: candidate.label, evidence: candidate.evidence, data: candidate.data, sourceIdentity: candidate.sourceIdentity })),
@@ -341,9 +343,11 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 safety_policy: prefs.judgmentStyle === 'active' ? 'Uncertainty blocks unsupported major invention, but it does not require passive holding when an established thread can move by one concrete genre-compatible beat. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.' : 'Uncertainty defaults to no unsupported new event, NPC, or escalation and continued current interaction. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.',
             },
             questions,
-        }, 30000, run.controller.signal);
+        };
+        const data = await deps.callJev(jevRequest, 30000, run.controller.signal);
         run.assert();
         if (!deps.settings.enabled || deps.currentInputKey(pendingUserText, cycleSalt) !== inputKey || deps.recentContext(pendingUserText).contextKey !== context.contextKey || sourceRevisionKey(deps.record(), deps.selectedWorld()) !== sourceKey) throw new deps.StaleRunError();
+        deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: jevRequest, answers: data.answers || {}, model: String(data.model || deps.JEV_MODEL) };
         deps.updateStatus('판독 완료 · 주입문 조립 중…');
         deps.updateActivity(mixedOoc ? 'OOC 지시 확인 · 필요한 주입문을 조립하고 있습니다…' : '판독 완료 · 필요한 주입문을 조립하고 있습니다…');
         const details = {};
@@ -363,10 +367,10 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         deps.commitObservedState(rec, decisions, context.observationKey);
         if (['user_established', 'both'].includes(decisions.context_change_source)) registerSceneOpportunity(rec, `user:${context.contextKey}`);
         deps.coordinateDecisions(rec, details, decisions);
-        if (deps.characterStore.enabled && ['create', 'replace'].includes(decisions.npc_route) && ['reuse_existing', 'canon_natural', 'group'].includes(decisions.npc_identity_route)) {
+        if (['create', 'replace'].includes(decisions.npc_route) && ['reuse_existing', 'canon_natural', 'group'].includes(decisions.npc_identity_route)) {
             deps.overrideDecision(details, decisions, 'npc_route', 'reuse', `인물 판정 경로: ${decisions.npc_identity_route}`);
         }
-        if (deps.characterStore.enabled && !['create', 'replace', 'reuse'].includes(decisions.npc_route)) deps.overrideDecision(details, decisions, 'npc_identity_route', 'none', '이번 응답 NPC 실행 없음');
+        if (!['create', 'replace', 'reuse'].includes(decisions.npc_route)) deps.overrideDecision(details, decisions, 'npc_identity_route', 'none', '이번 응답 NPC 실행 없음');
         const currentEventRelevant = Boolean(rec.eventProfile && rec.eventProfile.phase !== 'aftermath')
             && (['active', 'turning', 'resolution_ready'].includes(decisions.event_state)
                 || ((rec.progressionState?.turnsSinceMeaningfulProgress || 0) > 0 && ['goal', 'information', 'danger', 'multiple'].includes(decisions.unresolved)));
@@ -440,7 +444,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             decisions.npc_autonomy = details.npc_autonomy.effective;
         }
         const resolvedCharacters = deps.characterStore.enabled ? deps.resolveLiveCharacterPlan(liveCharacters, decisions) : [];
-        const characterExecution = deps.buildCharacterInjection(resolvedCharacters);
+        const characterExecution = deps.buildCharacterInjection(resolvedCharacters, { conflictActive: ['tension', 'active'].includes(decisions.conflict_state) || decisions.fight_sustain === 'yes' });
         const characterTrace = characterExecution.traces;
         const characterBlock = characterExecution.text;
         const continuityBlock = deps.settings.continuityEnabled

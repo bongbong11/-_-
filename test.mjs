@@ -32,10 +32,10 @@ const stateEngineSource = await readFile(new URL('./state-engine.js', import.met
 const runtimeSource = await readFile(new URL('./runtime-utils.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.meta.url));
-await access(new URL('./downloads/scene-reader-sillytavern-v0.15.0.zip', import.meta.url));
+await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.15.0');
+assert.equal(manifest.version, '0.16.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -593,7 +593,7 @@ const noSelection=resolveLiveCharacterPlan(live,{character_0_presence:'active',c
 assert.equal(noSelection[0].profileItems.length,0);
 const secret=live[0].contextCandidates.find(item=>item.text==='Perhaps he is the culprit.');
 const secretOrdinal=live[0].contextCandidates.indexOf(secret);
-const denied=resolveLiveCharacterPlan(live,{character_0_presence:'active',character_0_context_slot_1:secret.id,['character_0_context_access_'+secretOrdinal]:'none',character_0_response_direction:'confront'});
+const denied=resolveLiveCharacterPlan(live,{character_0_presence:'active',character_0_context_slot_1:secret.id,['character_0_context_access_'+secretOrdinal]:'none',character_0_response_direction:'confront',character_0_response_basis:'scene'});
 assert.equal(denied[0].contextItems.length,0);
 assert.equal(denied[0].direction,'confront','an independent direct response survives an unrelated denied item');
 const accepted=resolveLiveCharacterPlan(live,{character_0_presence:'active',character_0_profile_slot_1:live[0].profileCandidates[0].id,character_0_response_direction:'act'});
@@ -675,7 +675,7 @@ assert.match(source, /이번 시트에서 저장할 만한 개별 규칙이 없�
 assert.doesNotMatch(source, /id="sr-character-analysis"/, 'the old editor-bound analysis panel must be removed');
 assert.match(source, /id="sr-world-edit-franchise"/);
 assert.match(await readFile(new URL('./src/characters/selection.js', import.meta.url), 'utf8'), /carried\.has\(entry\.id\)/);
-assert.match(await readFile(new URL('./src/characters/selection.js', import.meta.url), 'utf8'), /\.slice\(0, 3\)/);
+assert.ok(selectActiveEntries(characterStoreFixture,'Alice and Wade speak.','Alice').length<=3);
 
 const continuitySource = 'USER:\nI told Wade about the letter.\nCHARACTER:\nWade said, "I will handle the meeting."';
 const continuityIdentity = { chatKey: 'chat-a', assistantIndex: 2, outputFingerprint: stableFingerprint('Wade said, "I will handle the meeting."'), sourceRevision: 'source-a' };

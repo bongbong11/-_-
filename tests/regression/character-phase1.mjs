@@ -8,6 +8,8 @@ import {
 } from '../../character-library.js';
 import { applyCharacterPolicy } from '../../src/scene/policy.js';
 import { buildInjection } from '../../prompt-library.js';
+import { parseNpcCandidates, parseNpcSheet } from '../../src/characters/npc-sheet.js';
+import { debugReportText } from '../../src/ui/debug-report.js';
 
 assert.match(PROFILE_SYSTEM, /A sparse sheet may produce 0–3 items/);
 assert.match(CHARACTER_LIVE_SYSTEM, /Choose at most two distinct rule IDs/);
@@ -45,11 +47,17 @@ const accessSlot = plan[0].contextCandidates.indexOf(rumor);
 const denied = resolveLiveCharacterPlan(plan, {
     character_0_presence: 'active', character_0_context_slot_1: rumor.id,
     [`character_0_context_access_${accessSlot}`]: 'none',
-    character_0_response_direction: 'confront',
+    character_0_response_direction: 'confront', character_0_response_basis: rumor.id,
 });
 assert.equal(denied[0].contextItems.length, 0);
-assert.equal(denied[0].direction, 'confront', 'unrelated direct action survives a denied information item');
+assert.equal(denied[0].direction, 'none', 'an action depending on denied information is removed');
 assert.doesNotMatch(buildCharacterInjection(denied).text, /Marcus stole it/);
+const independent = resolveLiveCharacterPlan(plan, {
+    character_0_presence: 'active', character_0_context_slot_1: rumor.id,
+    [`character_0_context_access_${accessSlot}`]: 'none',
+    character_0_response_direction: 'confront', character_0_response_basis: 'scene',
+});
+assert.equal(independent[0].direction, 'confront', 'a separately grounded live response survives an unrelated denied item');
 const accessPolicy = applyCharacterPolicy(
     `character_0_context_access_${accessSlot}`,
     { choice: 'private_access', confidence: .7 }, 'active',
@@ -71,6 +79,15 @@ const castPayload = buildInjection({
 });
 assert.match(castPayload, /NPC_CAST_SCOPE/);
 assert.doesNotMatch(castPayload, /<RP_NPC_ROUTING|<NPC_SCENE_EXECUTION/);
+const castOffPayload = buildInjection({
+    settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'off', roleplayPace: 'medium', npcToUser: true },
+    decisions: { response_cadence: 'natural', npc_route: 'none', npc_autonomy: 'no' }, sheetCastNames: ['Wade'],
+});
+assert.match(castOffPayload, /Registered Sheet Cast retain their established identity/, 'ownership survives disabled individual analysis');
+assert.equal(parseNpcCandidates({npcs:[{name:'Wade',aliases:['Mr. Wade']},{name:'Rosa',aliases:[]}]},{existing:['Wade']}).length,1);
+assert.throws(() => parseNpcSheet({source:'ROLE / BACKGROUND: Wade is a businessman.'},'Wade'), /일곱 항목/);
+const debugText = debugReportText({finalInjection:'Secret private text',request:{state:{recent_roleplay:'Contact me@example.com or 010-1234-5678; key sk-abcdefghijk12345.'}}},'Secret private text');
+assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|Secret private text/);
 
 // A saved sheet is not replaced by a stale analysis response.
 {
@@ -93,5 +110,38 @@ assert.doesNotMatch(castPayload, /<RP_NPC_ROUTING|<NPC_SCENE_EXECUTION/);
     assert.equal(modelCalls, 1, 'saving rules needs one normal-model call and no Jev save validation');
     assert.equal(f.run('currentProfileItems(characterStore.npcs[0]).length'), 1);
 }
+
+// Korean-only hidden NPC material needs a separate, bounded English identity,
+// while the approved profile-extraction prompt remains unchanged.
+{
+    const f = fixture();
+    const fields = new Map();
+    f.sandbox.document.getElementById = id => {
+        if (!fields.has(id)) fields.set(id, { value: '', checked: false, hidden: false, textContent: '', dataset: {}, scrollIntoView() {} });
+        return fields.get(id);
+    };
+    f.sandbox.window.toastr = { success() {}, error() {} };
+    f.run('renderCharacterStore=()=>{}; persistChat=async()=>{}; clearInjection=async()=>{}; loadReasonerProfiles=async()=>{}; saveCharacterStore=async()=>{}; record(true); showCharacterEditor("npc")');
+    fields.get('sr-character-name').value = '웨이드';
+    fields.get('sr-character-source').value = '이름: 웨이드\n역할: 유저의 아버지이자 사업가.';
+    let calls = 0;
+    f.sandbox.mockExtract = async (_service, _profile, prompt) => {
+        calls++;
+        return { result: prompt.includes('minimum identity') ? { core: 'The user persona\'s father and a businessman.' } : { items: [] } };
+    };
+    f.run('requestWithConnectionProfile=mockExtract; settings.reasonerProfileId="p"; connectionRequestService={}');
+    await f.run('saveCharacterEntry()');
+    await f.run('analyzeAndSaveCharacter()');
+    assert.equal(calls, 2);
+    assert.match(f.run('characterStore.npcs[0].coreEnglish'), /father and a businessman/);
+}
+
+const longPeople = Array.from({length:4},(_,index)=>({index,id:`p${index}`,name:`Person${index}`,kind:'npc',presence:'active',sourceVisibleToMain:true,
+    core:{excerpts:[]},coreEnglish:'',antagonist:false,denied:[],profileIds:[`p${index}a`,`p${index}b`],contextIds:[],contextItems:[],direction:'none',
+    profileItems:[{id:`p${index}a`,rule:'A'.repeat(350)},{id:`p${index}b`,rule:'B'.repeat(350)}]}));
+const bounded = buildCharacterInjection(longPeople);
+assert.ok(bounded.text.length<=2200);
+assert.ok(bounded.traces.some(item=>item.omittedRuleIds.length>0));
+assert.ok(!bounded.text.includes('B'.repeat(175)) || bounded.text.includes('B'.repeat(350)), 'long rules are included or omitted whole');
 
 console.log('Character rule extraction and live-selection regression passed.');

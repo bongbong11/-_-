@@ -105,6 +105,8 @@
 #scene-reader-dialog .sr-world-list { display: grid; gap: 6px; }
 #scene-reader-dialog .sr-world-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 42px; padding: 8px 11px; color: inherit; background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; }
 #scene-reader-dialog .sr-character-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 42px; padding: 8px 11px; color: inherit; background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; }
+#scene-reader-dialog .sr-character-list-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 6px; min-width: 0; }
+#scene-reader-dialog .sr-character-list-row .menu_button { min-width: 88px; white-space: normal; padding-inline: 8px; }
 #scene-reader-dialog .sr-character-item span,
 #scene-reader-dialog .sr-backup-item > span { display: grid; gap: 2px; min-width: 0; text-align: left; }
 #scene-reader-dialog .sr-character-item small,
