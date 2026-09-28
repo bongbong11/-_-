@@ -52,6 +52,7 @@ export const DECISION_LABELS = {
     unresolved: { none: '뚜렷한 미해결 없음', relationship: '관계 문제', conflict: '갈등', goal: '목표·행동', information: '정보·비밀', danger: '위협·위기', multiple: '여러 요소', unclear: '불명확' },
     time_relation: { first_scene: '비교할 이전 장면 없음', immediate: '직전 장면에서 즉시 연속', minutes: '수분~수십 분 후', hours: '몇 시간 후', next_day: '다음날', days: '며칠 후', weeks_months: '수주~수개월 후', unclear: '실제로 판별 불가' },
     context_change_source: { none: '새 장면 기회 없음', user_established: '유저가 새 상황 확정', character_established: '캐릭터 출력이 새 상황 확정', both: '양쪽에서 새 상황 확정', unclear: '변화 출처 불명확' },
+    continuity_trigger: { none: '연결 변화 없음', commitment: '약속·일정·의무', delegation: '위임·책임', knowledge_transfer: '중요 정보 전달', major_status_change: '중요 상태 변화' },
     event_state: { none: '진행 중인 중심 사건 없음', introduced: '사건 도입', active: '사건 진행 중', turning: '전환점', resolution_ready: '해결 조건 마련됨', aftermath: '해결 후 여파', unclear: '불명확' },
     event_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립', unclear: '불명확' },
     event_blocker: { none: '뚜렷한 방해 없음', information: '정보·단서 부족', action: '실제 행동 필요', choice: '결정·선택 필요', resource: '시간·자원 부족', resistance: '인물·세력의 저항', external: '외부 방해', unclear: '불명확' },
@@ -764,7 +765,7 @@ ${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or
 </RP_EVENT_BEAT>`;
 }
 
-export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '' }) {
+export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '' }) {
     const blocks = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
     if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
     const cadencePrompts = {
@@ -787,6 +788,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     }
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
     if (String(characterBlock || '').trim()) blocks.push(String(characterBlock).trim());
+    if (String(continuityBlock || '').trim()) blocks.push(String(continuityBlock).trim());
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
 Respond from the current character and scene rather than explaining or recapping the input. When supported, perform one concrete response, decision, refusal, action, next step, or immediate consequence. Do not repeat every input detail or append a generic question merely to hand continuation back. If further progress genuinely requires {{user}}'s unresolved response, stop on a live in-character action, pressure, attempt, or natural question without deciding {{user}}'s response or the outcome.

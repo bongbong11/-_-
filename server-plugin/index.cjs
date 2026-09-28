@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { registerReasonerRoutes } = require('./reasoner.cjs');
 
 const UPSTREAM = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
@@ -128,6 +129,7 @@ function storageHandler(handler) {
 
 async function init(router) {
     router.get('/health', (_request, response) => response.json({ ok: true, service: 'scene-reader-jev', model: MODEL, storage: true }));
+    registerReasonerRoutes(router, { rootFor: (request) => pathsFor(request).root, storageHandler });
 
     router.post('/storage/bootstrap', storageHandler(async (request, response) => {
         const chatKey = String(request.body?.chatKey || 'unsaved');

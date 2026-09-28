@@ -2,7 +2,7 @@ export const OBSERVATION_KEYS = new Set([
     'scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal',
     'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity',
     'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker',
-    'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'context_change_source',
+    'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'context_change_source', 'continuity_trigger',
 ]);
 
 export const DIAGNOSTIC_KEYS = new Set([
@@ -66,6 +66,7 @@ export function pendingPlanEffects(decisions = {}) {
         || ['create', 'continue', 'retire', 'replace'].includes(decisions.villain_route)) effects.push('npc');
     if (decisions.fight_sustain === 'yes' || decisions.primary_focus === 'conflict') effects.push('conflict');
     if (decisions.direct_execution === 'yes' || decisions.primary_focus === 'direct') effects.push('direct');
+    if (decisions.selected_continuity_id) effects.push('continuity');
     return [...new Set(effects)];
 }
 
@@ -76,6 +77,7 @@ const EFFECT_LABELS = {
     npc: 'NPC or antagonist route',
     conflict: 'active confrontation route',
     direct: 'direct response, decision, refusal, action, or immediate consequence',
+    continuity: 'the selected continuity follow-up, without inventing completion beyond the actual output',
 };
 
 export function buildVerificationQuestions(pendingPlan) {

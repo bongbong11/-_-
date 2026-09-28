@@ -15,9 +15,11 @@ import { applyDecisionPolicy, buildVerificationQuestions, decisionPolicyKind, pe
 import { commitObservedState, commitVerifiedPlan, updateProgressionPressure } from './state-engine.js';
 import { selectActionPlan } from './action-coordinator.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
+import { applyContinuityVerdicts, buildContinuityInjection, emptyContinuity, selectContinuityContext, validateReasonerResult } from './continuity-engine.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
+const reasonerModule = require('./server-plugin/reasoner.cjs');
 const manifest = JSON.parse(await readFile(new URL('./manifest.json', import.meta.url), 'utf8'));
 const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
 const pluginPkg = JSON.parse(await readFile(new URL('./server-plugin/package.json', import.meta.url), 'utf8'));
@@ -28,11 +30,11 @@ const decisionEngineSource = await readFile(new URL('./decision-engine.js', impo
 const stateEngineSource = await readFile(new URL('./state-engine.js', import.meta.url), 'utf8');
 const runtimeSource = await readFile(new URL('./runtime-utils.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
-await access(new URL('./downloads/scene-reader-jev-plugin-v0.4.0.zip', import.meta.url));
-await access(new URL('./downloads/scene-reader-sillytavern-v0.10.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-jev-plugin-v0.5.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-sillytavern-v0.11.0.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.10.0');
+assert.equal(manifest.version, '0.11.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -41,7 +43,7 @@ assert.match(library, /An unclear or stable scene is not by itself a reason to h
 assert.match(library, /an NPC may still be routed when the enabled progression mode has a plausible concrete function/);
 assert.equal(pkg.main, 'server-plugin/index.cjs');
 assert.equal(pluginPkg.main, 'index.cjs');
-assert.equal(pluginPkg.version, '0.4.0');
+assert.equal(pluginPkg.version, '0.5.0');
 assert.match(source, /GENERATION_AFTER_COMMANDS/);
 assert.match(source, /extensionsMenu/);
 assert.match(source, /id = 'scene-reader-quick-button'/);
@@ -71,8 +73,10 @@ assert.match(source, /장면·관계 판독/);
 assert.match(source, /사건·NPC 진행/);
 assert.match(source, /갈등·실행 점검/);
 assert.match(source, /저장 상태·실제 주입문/);
-assert.equal((source.match(/<details class="sr-details"/g) || []).length, 4, 'automatic progression result UI must use four accordions');
+assert.equal((source.match(/<details class="sr-details"/g) || []).length, 5, 'automatic progression result UI must group results into five accordions');
 assert.match(source, /id="sr-pause-ooc"/);
+for (const id of ['sr-continuity-enabled', 'sr-reasoner-profile', 'sr-reasoner-save', 'sr-reasoner-test', 'sr-continuity-results']) assert.match(source, new RegExp(`id="${id}"`));
+for (const id of ['sr-continuity-enabled', 'sr-reasoner-profile', 'sr-reasoner-new', 'sr-reasoner-edit', 'sr-reasoner-save', 'sr-reasoner-delete', 'sr-reasoner-test']) assert.match(source, new RegExp(`getElementById\\('${id}'\\)\\?\\.addEventListener`), `${id} requires an event handler`);
 assert.match(source, /id="sr-reset-current-npc"/);
 assert.match(source, /pauseOnOoc/);
 assert.match(runtimeSource, /ooc\|out\\s\+of\\s\+character\|오오씨\|사담/);
@@ -672,6 +676,41 @@ assert.match(source, /id="sr-world-edit-franchise"/);
 assert.match(characterLibrarySource, /carried\.has\(entry\.id\)/);
 assert.match(characterLibrarySource, /\.slice\(0, 3\)/);
 
+const continuitySource = 'USER:\nI told Wade about the letter.\nCHARACTER:\nWade said, "I will handle the meeting."';
+const continuityIdentity = { chatKey: 'chat-a', assistantIndex: 2, outputFingerprint: stableFingerprint('Wade said, "I will handle the meeting."'), sourceRevision: 'source-a' };
+const reasonerCandidates = validateReasonerResult({
+    new_items: [{ kind: 'delegation', label: 'Wade handles the meeting', source_type: 'delegation', evidence: 'I will handle the meeting.', owners: ['Wade'] }],
+    affected: [],
+    knowledge_updates: [{ fact_id: 'letter', character: 'Wade', source: 'told', source_type: 'claim', evidence: 'I told Wade about the letter.', summary: 'The letter exists' }],
+    possible_followups: [],
+}, { sourceText: continuitySource, continuity: emptyContinuity(), sourceIdentity: continuityIdentity });
+assert.equal(reasonerCandidates.length, 2);
+assert.equal(validateReasonerResult({ new_items: [{ kind: 'plan', label: 'Already called the family', source_type: 'intention', evidence: 'I will handle the meeting.' }] }, { sourceText: continuitySource, continuity: emptyContinuity(), sourceIdentity: continuityIdentity }).length, 0, 'an intention cannot become a completed continuity item');
+const committedContinuity = applyContinuityVerdicts(emptyContinuity(), reasonerCandidates, { continuity_candidate_0: 'accept_changed', continuity_candidate_1: 'supported' }, { opportunity: 2 });
+assert.equal(committedContinuity.continuity.items.length, 1);
+assert.equal(committedContinuity.continuity.knowledge[0].character, 'Wade');
+const itemId = committedContinuity.continuity.items[0].id;
+const pressuredCandidate = validateReasonerResult({ affected: [{ state_id: itemId, relation: 'pressured', pressure: 'at_risk', source_type: 'world_fact', evidence: 'I told Wade about the letter.' }] }, { sourceText: continuitySource, continuity: committedContinuity.continuity, sourceIdentity: continuityIdentity })[0];
+const pressuredState = applyContinuityVerdicts(committedContinuity.continuity, [pressuredCandidate], { continuity_candidate_0: 'accept_pressured' }, { opportunity: 3 }).continuity;
+assert.equal(pressuredState.items[0].lifecycle, 'active', 'causal pressure must not overwrite a confirmed lifecycle');
+assert.equal(pressuredState.items[0].pressure, 'at_risk');
+const visibleContinuity = selectContinuityContext(pressuredState, 'Wade handles the meeting', { opportunity: 3 });
+assert.match(buildContinuityInjection(visibleContinuity), /pressure=at_risk/);
+const followupCandidate = validateReasonerResult({ possible_followups: [{ related_state_id: itemId, action: 'Wade may contact the other family.', source_type: 'delegation', evidence: 'I will handle the meeting.' }] }, { sourceText: continuitySource, continuity: pressuredState, sourceIdentity: continuityIdentity })[0];
+const followupQuestions = buildPendingCandidateQuestions([followupCandidate]);
+assert.ok(followupQuestions.continuity_candidate_0.criteria.followup_only);
+const followupState = applyContinuityVerdicts(pressuredState, [followupCandidate], { continuity_candidate_0: 'followup_only' }, { opportunity: 3 }).continuity;
+assert.equal(followupState.followups[0].executed, false, 'a possible follow-up is not an executed RP fact');
+const routedFollowup = verifiedSecondaryCandidates([followupCandidate], { continuity_candidate_0: 'followup_only' });
+const continuityPlan = selectActionPlan({ decisions: { primary_focus: 'direct', event_route: 'none', progression_move: 'hold' }, settings: actionSettings, externalCandidates: routedFollowup });
+assert.equal(continuityPlan.primary.kind, 'direct');
+assert.equal(continuityPlan.secondary.kind, 'continuity');
+assert.match(buildContinuityInjection(selectContinuityContext(followupState, 'Wade may contact the family', { opportunity: 3 }), followupCandidate), /Optional secondary beat/);
+followupState.followups[0].lastOffered = 3;
+assert.equal(selectContinuityContext(followupState, 'Wade may contact the family', { opportunity: 3 }).followups.length, 0, 'the same scene opportunity cannot repeatedly offer a follow-up');
+assert.equal(reasonerModule._test.apiEndpoint(reasonerModule._test.safeProfile({ id: 'gemini-1', name: 'Gemini', adapter: 'gemini', model: 'gemini-flash' })), 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash:generateContent');
+assert.throws(() => reasonerModule._test.safeProfile({ id: 'bad-1', name: 'Bad', adapter: 'openai_compatible', baseUrl: 'http://example.com/v1', model: 'x' }), /HTTPS/);
+
 assert.equal(plugin.info.id, 'scene-reader-jev');
 const routes = {};
 await plugin.init({
@@ -682,6 +721,9 @@ assert.ok(routes['GET /health']);
 assert.ok(routes['POST /systemone']);
 assert.ok(routes['POST /storage/bootstrap']);
 assert.ok(routes['POST /storage/backup/restore']);
+assert.ok(routes['POST /reasoner/profile/save']);
+assert.ok(routes['POST /reasoner/test']);
+assert.ok(routes['POST /reasoner/run']);
 
 const previousFetch = globalThis.fetch;
 let forwarded;
@@ -760,6 +802,36 @@ storageResponse = makeResponse();
 await routes['POST /storage/bootstrap']({ user, body: { chatKey: 'chat-a' } }, storageResponse);
 assert.equal(storageResponse.value.settings.global.enabled, true, 'restore must replace modified settings');
 assert.equal(storageResponse.value.settings.stale, undefined, 'restore must remove stale data');
+storageResponse = makeResponse();
+await routes['POST /reasoner/profile/save']({ user, body: { profile: { id: 'reasoner-test', name: 'Fast model', adapter: 'openai_compatible', baseUrl: 'https://example.com/v1', model: 'fast-model' }, apiKey: 'private-reasoner-key' } }, storageResponse);
+assert.equal(storageResponse.value.profiles[0].keyStatus.endsWith('key'), true);
+assert.equal(JSON.stringify(storageResponse.value).includes('private-reasoner-key'), false, 'profile listings must not reveal the secret');
+storageResponse = makeResponse();
+await routes['POST /storage/backup/create']({ user, body: {} }, storageResponse);
+const reasonerBackup = storageResponse.value.backup.id;
+storageResponse = makeResponse();
+await routes['POST /storage/backup/export']({ user, body: { id: reasonerBackup } }, storageResponse);
+assert.ok(storageResponse.value.snapshot.files.some((item) => item.path === 'reasoner-profiles.json'));
+assert.ok(storageResponse.value.snapshot.files.some((item) => item.path === 'reasoner-secrets.json'), 'local backups must include the saved reasoner key');
+globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'https://example.com/v1/chat/completions');
+    assert.equal(options.headers.Authorization, 'Bearer private-reasoner-key');
+    return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+};
+storageResponse = makeResponse();
+await routes['POST /reasoner/test']({ user, body: { profileId: 'reasoner-test' } }, storageResponse);
+assert.equal(storageResponse.value.ok, true);
+await routes['POST /reasoner/profile/save']({ user, body: { profile: { id: 'reasoner-gemini', name: 'Gemini', adapter: 'gemini', model: 'gemini-flash' }, apiKey: 'gemini-test-key' } }, makeResponse());
+globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash:generateContent');
+    assert.equal(options.headers['x-goog-api-key'], 'gemini-test-key');
+    assert.equal(JSON.parse(options.body).generationConfig.responseMimeType, 'application/json');
+    return { ok: true, status: 200, text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"new_items":[],"affected":[],"knowledge_updates":[],"possible_followups":[]}' }] } }] }) };
+};
+storageResponse = makeResponse();
+await routes['POST /reasoner/run']({ user, body: { profileId: 'reasoner-gemini', state: { source_rp: 'brief' }, system: 'Return JSON only.' } }, storageResponse);
+assert.equal(storageResponse.value.result.new_items.length, 0);
+globalThis.fetch = previousFetch;
 const malicious = { schemaVersion: 1, files: [{ path: '../outside.json', text: '{}' }] };
 assert.throws(() => plugin._test.validateSnapshot(malicious), /Unsafe/);
 await rm(storageRoot, { recursive: true, force: true });

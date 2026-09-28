@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.10.0-4c78ff">
+  <img alt="version" src="https://img.shields.io/badge/version-0.11.0-4c78ff">
   <img alt="SillyTavern" src="https://img.shields.io/badge/SillyTavern-1.18.0%2B-8b5cf6">
   <img alt="Jev" src="https://img.shields.io/badge/Jev-SystemOne-0ea5e9">
   <img alt="mobile" src="https://img.shields.io/badge/mobile-friendly-22c55e">
@@ -25,7 +25,8 @@
 - 🧠 **Jev 판독** — 최근 RP를 직접 읽고 관찰·라우팅·실행 문제를 분리 판정
 - 🔄 **실제 이행 확인** — “하라고 한 것”이 아니라 실제 출력에서 수행된 변화만 상태에 누적
 - 🧍 **캐릭터 / NPC 판독** — 과잉 전문성, 전지적 지식, 비밀 점프, 단일 특성 클리셰화를 억제
-- 💬 **OOC 분리** — RP와 OOC를 구분하고, OOC-only 일시정지를 켠 경우 씬 판독과 주입을 중단
+- 💬 **OOC 분리** — RP와 OOC를 구분하고, OOC-only 입력에서는 씬 판독과 주입을 건너뜀
+- 🧭 **선택형 연속성 추론** — 별도 빠른 모델이 약속·일정·위임·중요 지식의 후보를 찾고 Jev가 검증
 - 🌍 **세계관 / 고급 전개** — 발견·수사·위협·사건·관계 등 필요한 전개 요소를 선택적으로 추가
 - ⚔️ **갈등 제어** — 싸움 유지, 빌런, 갈등 NPC, 세계 적대성, 유저 불운 등을 별도 관리
 - 💾 **채팅별 상태 / 백업** — 관계·사건·인물 상태와 설정을 저장하고 백업·복원
@@ -72,7 +73,7 @@ https://github.com/bongbong11/-_-.git
 
 ### 2. Jev 서버 플러그인 설치
 
-[서버 플러그인 ZIP](downloads/scene-reader-jev-plugin-v0.4.0.zip)을 받아 압축을 풉니다.
+[서버 플러그인 ZIP](downloads/scene-reader-jev-plugin-v0.5.0.zip)을 받아 압축을 풉니다.
 
 안의 <code>scene-reader-jev</code> 폴더를 다음 위치에 넣습니다.
 
@@ -110,9 +111,9 @@ enableServerPlugins: true
 ~~~bash
 cd ~/SillyTavern
 pkg install curl unzip
-curl -L "https://raw.githubusercontent.com/bongbong11/-_-/main/downloads/scene-reader-jev-plugin-v0.4.0.zip" -o "$HOME/scene-reader-jev-plugin-v0.4.0.zip"
+curl -L "https://raw.githubusercontent.com/bongbong11/-_-/main/downloads/scene-reader-jev-plugin-v0.5.0.zip" -o "$HOME/scene-reader-jev-plugin-v0.5.0.zip"
 mkdir -p plugins
-unzip -o "$HOME/scene-reader-jev-plugin-v0.4.0.zip" -d plugins
+unzip -o "$HOME/scene-reader-jev-plugin-v0.5.0.zip" -d plugins
 ls plugins/scene-reader-jev
 ~~~
 
@@ -124,7 +125,7 @@ Android 브라우저로 ZIP을 이미 내려받았다면 직접 다운로드 명
 termux-setup-storage
 cd ~/SillyTavern
 mkdir -p plugins
-unzip -o "$HOME/storage/downloads/scene-reader-jev-plugin-v0.4.0.zip" -d plugins
+unzip -o "$HOME/storage/downloads/scene-reader-jev-plugin-v0.5.0.zip" -d plugins
 ~~~
 
 처음 `termux-setup-storage`를 실행하면 Android의 파일 접근 권한을 허용해야 합니다.
@@ -319,6 +320,14 @@ flowchart TD
 - 별도 로어북 등에 넣은 자료는 필요에 따라 설정할 수 있습니다.
 
 ---
+
+## 🧭 Continuity Reasoner (선택 기능)
+
+설정의 **Continuity Reasoner**에서 기능을 켜고 연결 프로필을 만듭니다. **OpenAI 호환 API** 또는 **Gemini**를 선택하고 주소·모델·키를 저장한 뒤 **연결 확인**을 누르세요. 키는 Jev 키처럼 SillyTavern 서버의 사용자별 씬판독기 폴더에만 저장되며 채팅 메타데이터나 주입문에 들어가지 않습니다. 이 기능을 끄거나 프로필 연결이 실패해도 기본 Jev 판독과 RP 생성은 계속됩니다.
+
+Reasoner는 매턴 실행되지 않습니다. Jev가 이미 출력된 RP에서 중요한 약속·일정·위임·정보 전달·상태 변화를 감지했을 때만 후보를 찾습니다. **후보를 즉시 사실로 저장하지 않고, 다음 정상 Jev 판독에서 검증**합니다. 빠른 연속성 보정보다는 잘못된 사실 확정을 막는 쪽에 무게를 둔 구조라, 방금 끝난 출력의 후보는 다음 판독 이후에 반영될 수 있습니다. 같은 응답에서 기존 사건과 독립된 새 사건을 무리하게 만들지 않습니다.
+
+저장하는 정보는 중요한 약속·일정·위임, 인물별 정보 전달, 기존 상태에 걸린 압력과 가능한 후속 행동의 소수 후보입니다. `확정됨`과 `위태로움`은 별개로 유지하며, 아직 실행되지 않은 후속 행동은 사실로 저장하지 않습니다. 기능을 켜기 전의 전체 과거 채팅이나 로어북을 자동 재분석하지 않습니다. 자동 전개 탭의 **연속성 추론** 접이식에서 호출·후보·Jev 검증 결과를 확인할 수 있습니다.
 
 ## 💬 OOC 처리
 
@@ -649,7 +658,7 @@ npm run check
 
 ## 📌 버전
 
-현재 배포 버전: **v0.10.0**
+현재 배포 버전: **v0.11.0**
 
 SillyTavern 최소 버전: **1.18.0**
 

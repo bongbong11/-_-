@@ -31,7 +31,7 @@ import {
     rollAdvancedEntity,
 } from './advanced-library.js';
 import { allWorlds, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
-import { buildInputKey, buildRecentContext, filterNonRpHistory, generationCycleSalt, isVisibleRoleplayMessage, pendingComposerText } from './runtime-utils.js';
+import { buildInputKey, buildRecentContext, filterNonRpHistory, generationCycleSalt, isVisibleRoleplayMessage, pendingComposerText, splitOocText } from './runtime-utils.js';
 import {
     applyDecisionPolicy,
     buildVerificationQuestions,
@@ -42,6 +42,7 @@ import {
 import { archiveCurrentEvent, commitObservedState, commitVerifiedPlan, updateProgressionPressure } from './state-engine.js';
 import { actionPlanSummary, selectActionPlan } from './action-coordinator.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
+import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from './continuity-engine.js';
 import { sha256Hex } from './security-utils.js';
 import {
     PROFILE_LABELS,
@@ -81,6 +82,8 @@ const DEFAULTS = {
     recentTurns: 3,
     showConfidence: true,
     ownerUnlocked: false,
+    continuityEnabled: false,
+    reasonerProfileId: '',
 };
 
 const CHAT_DEFAULTS = {
@@ -123,6 +126,7 @@ const FALLBACKS = {
     unresolved: 'unclear',
     time_relation: 'unclear',
     context_change_source: 'none',
+    continuity_trigger: 'none',
     event_state: 'unclear',
     event_valence: 'unclear',
     event_blocker: 'unclear',
@@ -176,6 +180,7 @@ const THRESHOLDS = {
     unresolved: 0.52,
     time_relation: 0.58,
     context_change_source: 0.60,
+    continuity_trigger: 0.72,
     event_state: 0.55,
     event_valence: 0.55,
     event_blocker: 0.55,
@@ -232,6 +237,14 @@ const handledOocMarkers = [];
 let serverStoreAvailable = false;
 let serverKeyStatus = '확인 전';
 let backupList = [];
+let reasonerProfiles = [];
+const reasonerJobs = new Map();
+let reasonerGeneration = 0;
+
+function invalidateReasonerJobs() {
+    reasonerGeneration += 1;
+    reasonerJobs.delete(stateChatKey());
+}
 let characterStore = normalizeCharacterStore(null);
 let characterEditorKind = '';
 let characterEditorId = '';
@@ -263,6 +276,22 @@ async function storagePost(route, body = {}, { allowFailure = false } = {}) {
         if (allowFailure) return null;
         throw error;
     }
+}
+
+async function reasonerPost(route, body = {}) {
+    const response = await fetch(`/api/plugins/scene-reader-jev/reasoner/${route}`, {
+        method: 'POST', headers: { ...getRequestHeaders(), 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body),
+    });
+    let data;
+    try { data = await response.json(); } catch { data = {}; }
+    if (!response.ok) throw new Error(data?.error ? apiError(data, `Reasoner 응답 오류 (${response.status})`) : pluginError(response.status, data, `Reasoner 응답 오류 (${response.status})`));
+    return data;
+}
+
+async function loadReasonerProfiles() {
+    try { reasonerProfiles = (await reasonerPost('profiles')).profiles || []; }
+    catch { reasonerProfiles = []; }
+    renderReasonerProfiles();
 }
 
 function settingsSnapshot() {
@@ -307,7 +336,7 @@ async function hydrateServerState({ migrate = true } = {}) {
     const saved = data.settings && typeof data.settings === 'object' ? data.settings : {};
     if (saved.global && typeof saved.global === 'object') {
         settings = { ...DEFAULTS, ...saved.global };
-        for (const key of ['enabled', 'autoJudge', 'pauseOnOoc', 'showConfidence', 'ownerUnlocked']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
+        for (const key of ['enabled', 'autoJudge', 'pauseOnOoc', 'showConfidence', 'ownerUnlocked', 'continuityEnabled']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
         settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
         extension_settings[MODULE] = settings;
     } else if (migrate) await saveServerSettings();
@@ -326,6 +355,7 @@ async function hydrateServerState({ migrate = true } = {}) {
         if (localHistory.length) await storagePost('history', { chatKey: stateChatKey(), value: localHistory }, { allowFailure: true });
     }
     characterStore = normalizeCharacterStore(data.characters);
+    await loadReasonerProfiles();
     return true;
 }
 
@@ -525,12 +555,7 @@ function record(create = false) {
         };
         value.observedOpportunityKeys = Array.isArray(value.observedOpportunityKeys) ? value.observedOpportunityKeys.slice(-12) : [];
         const continuity = value.continuity && typeof value.continuity === 'object' ? value.continuity : {};
-        value.continuity = {
-            items: Array.isArray(continuity.items) ? continuity.items : [],
-            knowledge: Array.isArray(continuity.knowledge) ? continuity.knowledge : [],
-            followups: Array.isArray(continuity.followups) ? continuity.followups : [],
-            revision: Math.max(0, Number(continuity.revision) || 0),
-        };
+        value.continuity = normalizeContinuity(continuity);
         value.pendingContinuityCandidates = Array.isArray(value.pendingContinuityCandidates) ? value.pendingContinuityCandidates : [];
         value.nonRpOutputIndices = Array.isArray(value.nonRpOutputIndices) ? value.nonRpOutputIndices.filter(Number.isInteger).slice(-20) : [];
     }
@@ -848,6 +873,8 @@ function reversibleStateSnapshot(rec) {
         observedOpportunityKeys: rec.observedOpportunityKeys || [],
         continuity: rec.continuity || { items: [], knowledge: [], followups: [], revision: 0 },
         pendingContinuityCandidates: rec.pendingContinuityCandidates || [],
+        lastReasonerSource: rec.lastReasonerSource || null,
+        lastContinuityTrace: rec.lastContinuityTrace || null,
         lastOpportunityInput: rec.lastOpportunityInput || null,
         lastStateInput: rec.lastStateInput || null,
     }));
@@ -1038,6 +1065,7 @@ async function onUserMessageSent(messageId) {
 }
 
 async function rollbackChangedOutput(messageId, kind = 'changed') {
+    invalidateReasonerJobs();
     const rec = record();
     if (!rec) return;
     const history = [...await loadStateHistory()];
@@ -1148,6 +1176,7 @@ async function clearInjection() {
 function sourceRevisionKey(rec, world) {
     return stableFingerprint({
         world: { id: world?.id || '', hint: world?.hint || '', franchise: Boolean(world?.franchise) },
+        reasoner: settings.reasonerProfileId || '',
         characters: characterStore.enabled ? [...characterStore.characters, characterStore.persona, ...characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, analysis: entry.analysis })) : [],
     });
 }
@@ -1159,6 +1188,7 @@ function stagedRecord(rec) {
 function sourceIdentityForPending(pending) {
     return {
         chatKey: stateChatKey(),
+        inputKey: String(pending?.inputKey || ''),
         assistantIndex: Number(pending?.outputIndex),
         outputFingerprint: String(pending?.outputFingerprint || ''),
         sourceRevision: String(pending?.sourceKey || ''),
@@ -1173,14 +1203,61 @@ function pendingExternalCandidates(rec, sourceRevision) {
     });
 }
 
-async function postVerifiedCharacterOutput(rec, pending, verification) {
-    // Continuity Reasoner v1 integration point. The first refactor keeps this a
-    // strict no-op while preserving source identity and reversible namespaces.
-    // A later optional reasoner may append candidates only after checking this
-    // identity again at both request completion and commit time.
-    void rec;
-    void verification;
-    return { sourceIdentity: sourceIdentityForPending(pending), candidates: [] };
+function sourceUserRpForOutput(outputIndex) {
+    const chat = getContext().chat || [];
+    for (let index = Number(outputIndex) - 1; index >= 0; index -= 1) {
+        if (!chat[index]?.is_user) continue;
+        return chat[index]?.extra?.ooc_chat === true ? '' : splitOocText(chat[index].mes).rpText;
+    }
+    return '';
+}
+
+async function postVerifiedCharacterOutput(rec, pending, verification, trigger) {
+    const identity = sourceIdentityForPending(pending);
+    if (!settings.continuityEnabled || !settings.reasonerProfileId || !trigger || trigger === 'none' || !pending.outputText) return;
+    if (rec.lastReasonerSource?.outputFingerprint === identity.outputFingerprint
+        && rec.lastReasonerSource?.assistantIndex === identity.assistantIndex
+        && rec.lastReasonerSource?.sourceRevision === identity.sourceRevision) return;
+    const userText = sourceUserRpForOutput(identity.assistantIndex);
+    const sourceText = `USER:\n${userText}\nCHARACTER:\n${pending.outputText}`.slice(-9000);
+    const chatKey = identity.chatKey;
+    if (reasonerJobs.has(chatKey)) return;
+    const generationToken = reasonerGeneration;
+    rec.lastReasonerSource = identity;
+    rec.lastContinuityTrace = { status: 'analyzing', trigger, profileId: settings.reasonerProfileId, sourceIdentity: identity, candidates: [] };
+    const job = (async () => {
+        try {
+            const data = await reasonerPost('run', {
+                profileId: settings.reasonerProfileId, system: REASONER_SYSTEM,
+                state: {
+                    trigger,
+                    source_rp: sourceText,
+                    active_continuity: {
+                        items: normalizeContinuity(rec.continuity).items.map(({ id, kind, label, lifecycle, pressure, owners }) => ({ id, kind, label, lifecycle, pressure, owners })),
+                        knowledge: normalizeContinuity(rec.continuity).knowledge.map(({ factId, character, source, summary }) => ({ factId, character, source, summary })),
+                        dependencies: normalizeContinuity(rec.continuity).dependencies.map(({ stateId, pressure, reason }) => ({ stateId, pressure, reason })),
+                    },
+                    existing_state_refs: { event: rec.eventProfile ? { id: 'event:current', title: rec.eventProfile.title } : null, relationship: rec.relationshipState ? { id: 'relationship:current', ...rec.relationshipState } : null },
+                },
+            });
+            const current = record(true);
+            const output = (getContext().chat || [])[identity.assistantIndex];
+            if (generationToken !== reasonerGeneration || !settings.continuityEnabled || settings.reasonerProfileId !== rec.lastContinuityTrace?.profileId
+                || stateChatKey() !== chatKey || sourceRevisionKey(current, selectedWorld(current)) !== identity.sourceRevision
+                || !output || stableFingerprint(String(output.mes || '')) !== identity.outputFingerprint) return;
+            const candidates = validateReasonerResult(data.result, { sourceText, continuity: current.continuity, sourceIdentity: identity });
+            current.pendingContinuityCandidates = candidates;
+            current.lastContinuityTrace = { status: candidates.length ? 'pending_jev' : 'empty', trigger, profileId: settings.reasonerProfileId, sourceIdentity: identity, candidates: candidates.map((item) => ({ type: item.type, label: item.label, evidence: item.evidence })) };
+            await persistChat();
+            renderAll();
+        } catch (error) {
+            if (generationToken !== reasonerGeneration || stateChatKey() !== chatKey) return;
+            rec.lastContinuityTrace = { status: 'error', trigger, profileId: settings.reasonerProfileId, error: error.message, candidates: [] };
+            try { await persistChat(); renderAll(); }
+            catch (storageError) { console.error('[씬판독기] Reasoner 실패 상태 저장 오류', storageError); }
+        } finally { if (reasonerJobs.get(chatKey) === job) reasonerJobs.delete(chatKey); }
+    })();
+    reasonerJobs.set(chatKey, job);
 }
 
 function registerSceneOpportunity(rec, key) {
@@ -1201,6 +1278,15 @@ async function commitPriorVerification(rec, decisions) {
     const verification = verificationSummary(pending, decisions);
     const before = JSON.parse(JSON.stringify(pending.stateSnapshot || reversibleStateSnapshot(rec)));
     const result = commitVerifiedPlan(rec, pending, verification);
+    const followed = rec.continuity?.followups?.find((item) => item.id === pending.decisions?.selected_continuity_id);
+    if (followed) {
+        followed.lastOffered = rec.sceneOpportunity;
+        if (['fulfilled', 'partial'].includes(verification.continuity)) {
+            followed.executed = true;
+            followed.status = 'executed';
+        }
+        rec.continuity.revision += 1;
+    }
     const activeThread = Boolean(rec.eventProfile)
         || ['active', 'turning', 'resolution_ready'].includes(decisions.event_state)
         || !['none', 'unclear', undefined].includes(decisions.unresolved)
@@ -1210,7 +1296,6 @@ async function commitPriorVerification(rec, decisions) {
         && ['fulfilled', 'partial'].includes(verification.progress)) {
         registerSceneOpportunity(rec, `character:${pending.outputFingerprint}`);
     }
-    await postVerifiedCharacterOutput(rec, pending, verification);
     const history = [...await loadStateHistory()];
     history.push({
         inputKey: pending.inputKey,
@@ -1225,9 +1310,42 @@ async function commitPriorVerification(rec, decisions) {
         committedAt: new Date().toISOString(),
     });
     await saveStateHistory(history);
+    await postVerifiedCharacterOutput(rec, pending, verification, decisions.continuity_trigger);
     rec.lastVerification = { inputKey: pending.inputKey, outputIndex: pending.outputIndex, verification, committed: result.committed, committedEffects: result.committedEffects, at: new Date().toISOString() };
     rec.pendingPlan = null;
     return rec.lastVerification;
+}
+
+async function commitContinuityCandidates(rec, candidates, decisions, details) {
+    if (!settings.continuityEnabled || !candidates.length) return [];
+    const result = applyContinuityVerdicts(rec.continuity, candidates, decisions, { opportunity: rec.sceneOpportunity });
+    const processed = new Set(candidates.map((item) => item.id));
+    rec.pendingContinuityCandidates = (rec.pendingContinuityCandidates || []).filter((item) => !processed.has(item.id));
+    rec.lastContinuityTrace = { ...(rec.lastContinuityTrace || {}), status: 'verified', verdicts: candidates.map((item, index) => {
+        const detail = details[`continuity_candidate_${index}`] || {};
+        return { label: item.label, type: item.type, selected: detail.selected || '응답 없음', certainty: detail.certainty || 0, threshold: detail.threshold || 0, verdict: decisions[`continuity_candidate_${index}`] || 'reject', reason: detail.fallbackApplied ? '확신도 부족·기본값 적용' : 'Jev 선택 유지' };
+    }) };
+    if (!result.accepted.length) return [];
+    rec.continuity = result.continuity;
+    const sourceIndex = Math.min(...result.accepted.map((item) => Number(item.sourceIdentity?.assistantIndex)));
+    const history = [...await loadStateHistory()];
+    const applyToSnapshot = (snapshot) => {
+        if (!snapshot) return;
+        snapshot.continuity = applyContinuityVerdicts(snapshot.continuity, candidates, decisions, { opportunity: rec.sceneOpportunity }).continuity;
+    };
+    for (const entry of history) {
+        if (Number(entry.assistantIndex) === sourceIndex) {
+            entry.after ||= {};
+            applyToSnapshot(entry.after);
+        } else if (Number(entry.assistantIndex) > sourceIndex) {
+            entry.before ||= {}; entry.after ||= {};
+            applyToSnapshot(entry.before);
+            applyToSnapshot(entry.after);
+        }
+    }
+    applyToSnapshot(rec.pendingPlan?.stateSnapshot);
+    await saveStateHistory(history);
+    return result.accepted;
 }
 
 async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } = {}) {
@@ -1251,15 +1369,21 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         }
         return;
     }
-    if (context.metaGuidance.current) updateActivity('OOC 지시 확인 · RP와 분리해 판독 중…');
+    const mixedOoc = Boolean(context.metaGuidance.current);
+    if (mixedOoc) updateActivity('OOC 지시 확인 · RP와 분리해 판독 중…');
 
+    const waitingReasoner = settings.continuityEnabled ? reasonerJobs.get(stateChatKey()) : null;
+    if (waitingReasoner) await Promise.race([waitingReasoner, new Promise((resolve) => setTimeout(resolve, 180))]).catch((error) => console.warn('[씬판독기] Reasoner 결과 대기 실패', error));
     const rec = record(true);
     const prefs = rec.preferences;
     const inputKey = currentInputKey(pendingUserText, cycleSalt);
     const world = selectedWorld(rec);
     const sourceKey = sourceRevisionKey(rec, world);
+    const continuityCacheKey = settings.continuityEnabled
+        ? stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
+        : '';
     if (rec.pendingPlan && rec.pendingPlan.inputKey !== inputKey && !rec.pendingPlan.outputText) rec.pendingPlan = null;
-    if (!force && rec.lastJudgment?.inputKey === inputKey && rec.lastJudgment?.contextKey === context.contextKey && rec.lastJudgment?.sourceKey === sourceKey) {
+    if (!force && rec.lastJudgment?.inputKey === inputKey && rec.lastJudgment?.contextKey === context.contextKey && rec.lastJudgment?.sourceKey === sourceKey && rec.lastJudgment?.continuityCacheKey === continuityCacheKey) {
         await applyStoredInjection();
         updateStatus('같은 입력 · 기존 판정과 추첨 재사용');
         updateActivity('기존 판정 재사용 · 주입 적용 완료', { done: true });
@@ -1285,7 +1409,22 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         pacingState: rec.pacingState,
     });
     Object.assign(questions, buildVerificationQuestions(rec.pendingPlan));
-    const pendingCandidates = pendingExternalCandidates(rec, sourceKey);
+    if (settings.continuityEnabled && rec.pendingPlan?.outputText) questions.continuity_trigger = {
+        type: 'choice',
+        instructions: 'Read only the just-completed USER RP and following CHARACTER output. Is there a newly established, durable promise, schedule, delegation, important information transfer, obligation, status change, or a direct causal pressure on one? A character merely planning or claiming to have acted is not completed action. Ignore OOC and routine conversation. This is only a high-value Reasoner trigger, not a fact commit.',
+        criteria: {
+            none: 'No newly established high-value continuity change or direct pressure.',
+            commitment: 'A durable promise, plan, schedule, or obligation was explicitly established or changed.',
+            delegation: 'Responsibility or authority was explicitly accepted or delegated.',
+            knowledge_transfer: 'Important information was actually conveyed to a specific person.',
+            major_status_change: 'An important personal or institutional status changed or was directly pressured.',
+        },
+    };
+    const continuityContext = settings.continuityEnabled ? selectContinuityContext(rec.continuity, transcript, { opportunity: rec.sceneOpportunity }) : { items: [], knowledge: [], followups: [] };
+    const storedFollowupCandidates = continuityContext.followups.map((item) => ({ id: item.id, type: 'followup', label: item.action, evidence: item.reason, data: { relatedStateId: item.relatedStateId, action: item.action, reason: item.reason }, sourceIdentity: item.sourceRefs?.[0] }));
+    const pendingCandidates = settings.continuityEnabled
+        ? [...pendingExternalCandidates(rec, sourceKey), ...storedFollowupCandidates.filter((item) => !(rec.pendingContinuityCandidates || []).some((pending) => pending.id === item.id))].slice(0, 5)
+        : [];
     Object.assign(questions, buildPendingCandidateQuestions(pendingCandidates));
     const carriedCharacterIds = (rec.lastJudgment?.characterTrace || [])
         .filter((item) => item?.final?.presence && item.final.presence !== 'absent')
@@ -1298,12 +1437,12 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
     judgeCompletionPromise = new Promise((resolve) => { resolveJudgeCompletion = resolve; });
     setBusy(true);
     updateStatus('Jev 판독 중…');
-    updateActivity('Jev가 최근 장면을 판독하고 있습니다…');
+    updateActivity(mixedOoc ? 'OOC 지시 확인 · Jev가 RP 장면을 판독하고 있습니다…' : 'Jev가 최근 장면을 판독하고 있습니다…');
     try {
         const data = await callJev({
             model: JEV_MODEL,
             state: {
-                scope: 'Use only the recent roleplay transcript. Select the best primary function and independently report each supported routing candidate; the extension will keep one Primary beat plus at most one directly dependent Secondary beat. Active judgment means make a concrete supported move instead of passive maintenance, not weaker fact standards or automatic new incidents. Progression mode controls plot movement only. Roleplay pace controls selective attention and granularity only. Relationship pace controls relationship change only. Resolution pace controls resolution only. These controls are independent and must not override preset genre, tone, setting, prose style, character voice, or world rules.',
+                scope: 'Use recent_roleplay for current scene observations and routing. Use pending_verification only to verify the preceding output and identify a high-value continuity trigger; it is not evidence that the current turn has already happened. Use pending_continuity_candidates only to validate existing proposals. Select the best primary function and independently report each supported routing candidate; the extension will keep one Primary beat plus at most one directly dependent Secondary beat. Active judgment means make a concrete supported move instead of passive maintenance, not weaker fact standards or automatic new incidents. Progression mode controls plot movement only. Roleplay pace controls selective attention and granularity only. Relationship pace controls relationship change only. Resolution pace controls resolution only. These controls are independent and must not override preset genre, tone, setting, prose style, character voice, or world rules.',
                 recent_roleplay: transcript,
                 meta_guidance: {
                     current: context.metaGuidance.current,
@@ -1314,15 +1453,16 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
-                pending_verification: rec.pendingPlan?.outputText ? { plan: { effects: rec.pendingPlan.effects, decisions: rec.pendingPlan.decisions }, character_output: rec.pendingPlan.outputText } : null,
-                pending_continuity_candidates: pendingCandidates.map((candidate) => ({ id: candidate.id, label: candidate.label, evidence: candidate.evidence, compatibleWith: candidate.compatibleWith })),
+                pending_verification: rec.pendingPlan?.outputText ? { plan: { effects: rec.pendingPlan.effects, decisions: rec.pendingPlan.decisions }, source_user_rp: sourceUserRpForOutput(rec.pendingPlan.outputIndex), character_output: rec.pendingPlan.outputText } : null,
+                continuity_context: settings.continuityEnabled ? { items: continuityContext.items, knowledge: continuityContext.knowledge, dependencies: continuityContext.dependencies } : null,
+                pending_continuity_candidates: pendingCandidates.map((candidate) => ({ id: candidate.id, type: candidate.type, label: candidate.label, evidence: candidate.evidence, data: candidate.data, sourceIdentity: candidate.sourceIdentity })),
                 priority: prefs.negativePriority ? 'Enabled supplied negative-bias Quick Reply blocks are the highest-priority scene-reader constraints. Other progression must operate within them.' : 'Normal scene-reader priority.',
                 safety_policy: prefs.judgmentStyle === 'active' ? 'Uncertainty blocks unsupported major invention, but it does not require passive holding when an established thread can move by one concrete genre-compatible beat. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.' : 'Uncertainty defaults to no unsupported new event, NPC, or escalation and continued current interaction. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.',
             },
             questions,
         });
         updateStatus('판독 완료 · 주입문 조립 중…');
-        updateActivity('판독 완료 · 필요한 주입문을 조립하고 있습니다…');
+        updateActivity(mixedOoc ? 'OOC 지시 확인 · 필요한 주입문을 조립하고 있습니다…' : '판독 완료 · 필요한 주입문을 조립하고 있습니다…');
         const details = {};
         for (const key of Object.keys(questions)) {
             const choices = Object.keys(questions[key]?.criteria || {});
@@ -1333,6 +1473,7 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         const decisions = effectiveMap(details);
         const verifiedExternalCandidates = verifiedSecondaryCandidates(pendingCandidates, decisions);
         const priorVerification = await commitPriorVerification(rec, decisions);
+        await commitContinuityCandidates(rec, pendingCandidates, decisions, details);
         deriveDependentDecisions(rec, details, decisions);
         commitObservedState(rec, decisions, context.observationKey);
         if (['user_established', 'both'].includes(decisions.context_change_source)) registerSceneOpportunity(rec, `user:${context.contextKey}`);
@@ -1396,6 +1537,8 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         for (const selectedCandidate of [finalPlan.primary, finalPlan.secondary]) if (selectedCandidate) excludedById.delete(selectedCandidate.id);
         finalPlan.excluded = [...excludedById.values()];
         decisions.action_plan = actionPlanSummary(finalPlan);
+        const chosenContinuity = verifiedExternalCandidates.find((item) => finalPlan.secondary?.id === `external:${item.id}`) || null;
+        if (chosenContinuity) decisions.selected_continuity_id = chosenContinuity.id;
         coordinateCharacterDecisions(activeCharacters, details, decisions);
         if (!['create', 'replace', 'reuse'].includes(decisions.npc_route)) {
             for (const key of ['npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) overrideDecision(details, decisions, key, 'none', decisions.npc_route === 'waiting' ? '인물 등장 추첨 대기' : '이번 응답 NPC 실행 없음');
@@ -1413,8 +1556,14 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         }
         const characterTrace = characterStore.enabled ? buildCharacterTrace(activeCharacters, decisions) : [];
         const characterBlock = characterStore.enabled ? buildCharacterInjection(activeCharacters, decisions, transcript) : '';
-        const payload = buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: staged.npcProfile, eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '', characterBlock });
-        rec.lastJudgment = { details, decisions, characterTrace, actionPlan: actionPlanSummary(finalPlan), payload, worldPayload: String(world?.prompt || ''), inputKey, contextKey: context.contextKey, sourceKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || JEV_MODEL) };
+        const continuityBlock = settings.continuityEnabled
+            ? buildContinuityInjection(selectContinuityContext(rec.continuity, transcript, { opportunity: rec.sceneOpportunity }), chosenContinuity)
+            : '';
+        const payload = buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: staged.npcProfile, eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? ownerPrompt() : '', characterBlock, continuityBlock });
+        const finalContinuityCacheKey = settings.continuityEnabled
+            ? stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
+            : '';
+        rec.lastJudgment = { details, decisions, characterTrace, actionPlan: actionPlanSummary(finalPlan), payload, worldPayload: String(world?.prompt || ''), inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || JEV_MODEL) };
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
             rec.pendingPlan = {
@@ -1438,7 +1587,7 @@ async function runJudge({ force = false, pendingUserText = '', cycleSalt = '' } 
         await applyStoredInjection();
         renderAll();
         updateStatus('판독 완료 · 이번 응답에 적용');
-        updateActivity('판독·주입 적용 완료', { done: true });
+        updateActivity(mixedOoc ? 'OOC 지시 반영 · 판독·주입 적용 완료' : '판독·주입 적용 완료', { done: true });
         return rec.lastJudgment;
     } catch (error) {
         const decisions = { ...FALLBACKS };
@@ -1472,12 +1621,12 @@ function decisionTitle(key) {
     const user = context.name1 || '유저';
     const character = context.name2 || '캐릭터';
     return {
-        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', context_change_source: '새 장면 기회의 확정 출처', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', repetitive_ending: '최근 응답의 종결 구조 반복', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', secondary_focus: '이번 응답의 보조 진행', direct_execution: '현재 장면 직접 실행', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', npc_identity_route: 'NPC 정체 경로', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계', verification_progress: '직전 출력의 실질 진행', verification_relationship: '직전 관계 계획 이행', verification_event: '직전 사건 계획 이행', verification_npc: '직전 NPC 계획 이행', verification_conflict: '직전 갈등 계획 이행', verification_direct: '직전 직접 실행 이행',
+        scene_state: '현재 장면의 진행 상태', conversation_tone: '현재 대화의 주된 결', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, continuity_change: '직전 상태 대비 실제 변화', counterevidence: '긍정·격화 해석의 반대 근거', ambiguity: '현재 장면의 해석 모호성', unresolved: '현재 남은 핵심 문제', time_relation: '직전 장면→현재 장면 시간', context_change_source: '새 장면 기회의 확정 출처', continuity_trigger: '연속성 추론 호출 근거', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', repetitive_ending: '최근 응답의 종결 구조 반복', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', secondary_focus: '이번 응답의 보조 진행', direct_execution: '현재 장면 직접 실행', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', npc_identity_route: 'NPC 정체 경로', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계', verification_progress: '직전 출력의 실질 진행', verification_relationship: '직전 관계 계획 이행', verification_event: '직전 사건 계획 이행', verification_npc: '직전 NPC 계획 이행', verification_conflict: '직전 갈등 계획 이행', verification_direct: '직전 직접 실행 이행',
     }[key] || key;
 }
 
 const RESULT_GROUPS = {
-    'sr-scene-relation': ['scene_state', 'conversation_tone', 'time_relation', 'context_change_source', 'response_cadence', 'continuity_change', 'ambiguity', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
+    'sr-scene-relation': ['scene_state', 'conversation_tone', 'time_relation', 'context_change_source', 'continuity_trigger', 'response_cadence', 'continuity_change', 'ambiguity', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
     'sr-event-npc': ['primary_focus', 'secondary_focus', 'direct_execution', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'npc_identity_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
     'sr-advanced-judgment': ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move'],
     'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'repetitive_ending', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
@@ -1670,6 +1819,54 @@ function renderBackups() {
     root.innerHTML = backupList.map((item) => `<div class="sr-backup-item"><span><strong>${escapeHtml(new Date(item.createdAt).toLocaleString())}</strong><small>${escapeHtml(item.reason || 'manual')} · ${Number(item.fileCount) || 0}개 파일</small></span><div><button type="button" class="menu_button" data-backup-action="restore" data-backup-id="${escapeHtml(item.id)}">복원</button><button type="button" class="menu_button" data-backup-action="download" data-backup-id="${escapeHtml(item.id)}">다운로드</button><button type="button" class="menu_button" data-backup-action="delete" data-backup-id="${escapeHtml(item.id)}">삭제</button></div></div>`).join('') || '<div class="sr-empty-small">저장된 백업 없음</div>';
 }
 
+function renderReasonerProfiles() {
+    const select = document.getElementById('sr-reasoner-profile');
+    if (!select) return;
+    select.innerHTML = `<option value="">연결 프로필 선택</option>${reasonerProfiles.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(item.adapter)}</option>`).join('')}`;
+    select.value = settings.reasonerProfileId || '';
+    const active = reasonerProfiles.find((item) => item.id === settings.reasonerProfileId);
+    const status = document.getElementById('sr-reasoner-status');
+    if (status) status.textContent = active ? `${active.name} · ${active.keyStatus || '키 상태 미확인'}` : '연결 프로필을 선택하면 Reasoner를 사용할 수 있습니다.';
+}
+
+function renderContinuity() {
+    const root = document.getElementById('sr-continuity-results');
+    if (!root) return;
+    if (!settings.continuityEnabled) { root.innerHTML = '<p class="sr-help">연속성 추론이 꺼져 있습니다.</p>'; return; }
+    const rec = record();
+    const trace = rec?.lastContinuityTrace || {};
+    const state = normalizeContinuity(rec?.continuity);
+    const status = { analyzing: '보조 모델 분석 중', pending_jev: 'Jev 검증 대기', empty: '연결할 후속 상태 없음', verified: 'Jev 검증 완료', error: '보조 모델 실패 · 기본 판독은 계속 실행' }[trace.status] || '새 변화 대기';
+    const profile = reasonerProfiles.find((item) => item.id === trace.profileId);
+    const rows = [`<div class="sr-decision-row"><span>상태</span><strong>${escapeHtml(status)}</strong></div>`,
+        `<div class="sr-decision-row"><span>연결 프로필</span><strong>${escapeHtml(profile?.name || '미선택')}</strong></div>`,
+        `<div class="sr-decision-row"><span>호출 근거</span><strong>${escapeHtml(trace.trigger || '없음')}</strong></div>`];
+    if (trace.error) rows.push(`<p class="sr-help">${escapeHtml(trace.error)}</p>`);
+    if (trace.verdicts?.length) rows.push(...trace.verdicts.map((item) => `<div class="sr-decision-row"><span>${escapeHtml(item.type)} · ${escapeHtml(item.label)}</span><strong>${escapeHtml(item.verdict)}</strong>${settings.showConfidence ? `<small>Jev ${escapeHtml(item.selected)} → 확신 ${Math.round(item.certainty * 100)}% / 기준 ${Math.round(item.threshold * 100)}% → 최종 ${escapeHtml(item.verdict)} · ${escapeHtml(item.reason)}</small>` : ''}</div>`));
+    else if (trace.candidates?.length) rows.push(...trace.candidates.map((item) => `<div class="sr-decision-row"><span>${escapeHtml(item.type)} · ${escapeHtml(item.label)}</span><strong>검증 대기</strong></div>`));
+    rows.push(`<p class="sr-help">저장된 연속성: 약속·일정·위임 ${state.items.length}개 · 중요 지식 ${state.knowledge.length}개 · 후속 후보 ${state.followups.filter((item) => item.status === 'available').length}개. 압력은 완료·취소와 별도로 저장합니다.</p>`);
+    for (const item of state.items.slice(-6)) rows.push(`<div class="sr-decision-row"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.lifecycle || 'active')} · 압력 ${escapeHtml(item.pressure || 'none')}</strong></div>`);
+    for (const item of state.dependencies.slice(-4)) rows.push(`<div class="sr-decision-row"><span>${escapeHtml(item.stateId)}</span><strong>압력 ${escapeHtml(item.pressure || 'none')}</strong></div>`);
+    for (const item of state.knowledge.slice(-4)) rows.push(`<div class="sr-decision-row"><span>${escapeHtml(item.character)} · ${escapeHtml(item.summary || item.factId)}</span><strong>${escapeHtml(item.source)}</strong></div>`);
+    for (const item of state.followups.slice(-4)) rows.push(`<div class="sr-decision-row"><span>${escapeHtml(item.action)}</span><strong>${escapeHtml(item.status)}${item.lastOffered === rec?.sceneOpportunity ? ' · 이번 계기 사용' : ''}</strong></div>`);
+    root.innerHTML = rows.join('');
+}
+
+function fillReasonerEditor(profile = null) {
+    const values = {
+        'sr-reasoner-id': profile?.id || '',
+        'sr-reasoner-name': profile?.name || '',
+        'sr-reasoner-adapter': profile?.adapter || 'openai_compatible',
+        'sr-reasoner-url': profile?.baseUrl || '',
+        'sr-reasoner-model': profile?.model || '',
+        'sr-reasoner-timeout': profile?.timeoutMs || 30000,
+        'sr-reasoner-tokens': profile?.maxTokens || 1200,
+    };
+    for (const [id, value] of Object.entries(values)) { const node = document.getElementById(id); if (node) node.value = value; }
+    const key = document.getElementById('sr-reasoner-key');
+    if (key) key.value = '';
+}
+
 function renderAll() {
     renderJudgment();
     renderProfiles();
@@ -1677,6 +1874,8 @@ function renderAll() {
     renderCharacterStore();
     renderCharacterTurnResults();
     renderBackups();
+    renderReasonerProfiles();
+    renderContinuity();
     const preview = document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = activeInjectionPayload || '현재 주입문 없음';
 }
@@ -1761,6 +1960,8 @@ function setFormValues() {
     setChecked('sr-enabled', settings.enabled);
     setChecked('sr-auto', settings.autoJudge);
     setChecked('sr-pause-ooc', settings.pauseOnOoc);
+    setChecked('sr-continuity-enabled', settings.continuityEnabled);
+    renderReasonerProfiles();
     setValue('sr-recent-turns', settings.recentTurns);
     setChecked('sr-confidence', settings.showConfidence);
     const debugStatus = document.getElementById('sr-ooc-debug-status');
@@ -2093,6 +2294,75 @@ function bindForm() {
     document.getElementById('sr-jev-test')?.addEventListener('click', async () => {
         try { await testConnection(); } catch (error) { window.toastr?.error?.(error.message, '씬판독기'); }
     });
+    document.getElementById('sr-continuity-enabled')?.addEventListener('change', (event) => runUiTask((async () => {
+        invalidateReasonerJobs();
+        saveGlobal('continuityEnabled', event.target.checked);
+        await storagePost('settings', { settings: settingsSnapshot() });
+        if (event.target.checked && !settings.reasonerProfileId) window.toastr?.warning?.('연속성 추론에 사용할 연결 프로필을 선택하세요.', '씬판독기');
+        const rec = record(true);
+        if (!event.target.checked) rec.pendingContinuityCandidates = [];
+        rec.lastJudgment = null;
+        await persistChat();
+        await clearInjection();
+        renderAll();
+    })(), '연속성 추론 설정을 바꾸지 못했습니다.'));
+    document.getElementById('sr-reasoner-profile')?.addEventListener('change', (event) => runUiTask((async () => {
+        invalidateReasonerJobs();
+        saveGlobal('reasonerProfileId', event.target.value);
+        await storagePost('settings', { settings: settingsSnapshot() });
+        const rec = record(true);
+        rec.pendingContinuityCandidates = [];
+        rec.lastJudgment = null;
+        await persistChat();
+        await clearInjection();
+        renderReasonerProfiles();
+    })(), 'Reasoner 프로필을 변경하지 못했습니다.'));
+    document.getElementById('sr-reasoner-new')?.addEventListener('click', () => {
+        fillReasonerEditor();
+        document.getElementById('sr-reasoner-editor').open = true;
+    });
+    document.getElementById('sr-reasoner-edit')?.addEventListener('click', () => {
+        const profile = reasonerProfiles.find((item) => item.id === settings.reasonerProfileId);
+        if (!profile) { window.toastr?.warning?.('수정할 프로필을 먼저 선택하세요.', '씬판독기'); return; }
+        fillReasonerEditor(profile);
+        document.getElementById('sr-reasoner-editor').open = true;
+    });
+    document.getElementById('sr-reasoner-save')?.addEventListener('click', () => runUiTask((async () => {
+        invalidateReasonerJobs();
+        const value = (id) => document.getElementById(id)?.value || '';
+        const id = value('sr-reasoner-id') || `reasoner-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        const data = await reasonerPost('profile/save', {
+            profile: { id, name: value('sr-reasoner-name'), adapter: value('sr-reasoner-adapter'), baseUrl: value('sr-reasoner-url'), model: value('sr-reasoner-model'), timeoutMs: Number(value('sr-reasoner-timeout')), maxTokens: Number(value('sr-reasoner-tokens')), temperature: 0.1 },
+            apiKey: value('sr-reasoner-key'),
+        });
+        reasonerProfiles = data.profiles || [];
+        saveGlobal('reasonerProfileId', id);
+        await storagePost('settings', { settings: settingsSnapshot() });
+        fillReasonerEditor(reasonerProfiles.find((item) => item.id === id));
+        renderReasonerProfiles();
+        window.toastr?.success?.('Reasoner 연결 프로필을 저장했습니다.', '씬판독기');
+    })(), 'Reasoner 프로필을 저장하지 못했습니다.'));
+    document.getElementById('sr-reasoner-delete')?.addEventListener('click', () => runUiTask((async () => {
+        invalidateReasonerJobs();
+        const id = document.getElementById('sr-reasoner-id')?.value || settings.reasonerProfileId;
+        if (!id) throw new Error('삭제할 프로필을 선택하세요.');
+        const data = await reasonerPost('profile/delete', { id });
+        reasonerProfiles = data.profiles || [];
+        if (settings.reasonerProfileId === id) saveGlobal('reasonerProfileId', '');
+        await storagePost('settings', { settings: settingsSnapshot() });
+        const rec = record(true); rec.pendingContinuityCandidates = []; rec.lastJudgment = null;
+        await persistChat(); await clearInjection();
+        fillReasonerEditor(); renderReasonerProfiles();
+        window.toastr?.success?.('Reasoner 연결 프로필을 삭제했습니다.', '씬판독기');
+    })(), 'Reasoner 프로필을 삭제하지 못했습니다.'));
+    document.getElementById('sr-reasoner-test')?.addEventListener('click', () => runUiTask((async () => {
+        if (!settings.reasonerProfileId) throw new Error('연결 프로필을 선택하세요.');
+        const status = document.getElementById('sr-reasoner-status');
+        if (status) status.textContent = '연결 확인 중…';
+        await reasonerPost('test', { profileId: settings.reasonerProfileId });
+        renderReasonerProfiles();
+        window.toastr?.success?.('Reasoner 연결에 성공했습니다.', '씬판독기');
+    })(), 'Reasoner 연결 확인에 실패했습니다.'));
     document.getElementById('sr-copy-macro')?.addEventListener('click', async () => {
         try {
             await copyText('{{scene-reader}}');
@@ -2173,6 +2443,7 @@ function bindForm() {
         }
     })(), '세계관 목록을 가져오지 못했습니다.'));
     document.getElementById('sr-reset-npc')?.addEventListener('click', () => runUiTask((async () => {
+        invalidateReasonerJobs();
         const rec = record(true);
         rec.npcProfile = null;
         rec.villainProfile = null;
@@ -2186,6 +2457,10 @@ function bindForm() {
         rec.sceneState = { unresolved: 'none' };
         rec.backgroundEvents = [];
         rec.advancedEntities = [];
+        rec.continuity = normalizeContinuity(null);
+        rec.pendingContinuityCandidates = [];
+        rec.lastReasonerSource = null;
+        rec.lastContinuityTrace = null;
         rec.pendingPlan = null;
         rec.lastJudgment = null;
         await clearStateHistory();
@@ -2257,6 +2532,7 @@ function bindForm() {
         const id = backupButton.dataset.backupId;
         runUiTask((async () => {
             if (action === 'restore') {
+                invalidateReasonerJobs();
                 const data = await storagePost('backup/restore', { id }); backupList = data.backups || [];
                 await hydrateServerState({ migrate: false }); setFormValues(); renderAll();
                 window.toastr?.success?.('백업을 복원했습니다. 복원 직전 상태도 자동 백업했습니다.', '씬판독기');
@@ -2275,6 +2551,7 @@ function bindForm() {
         window.toastr?.success?.('현재 데이터를 날짜·시간 백업으로 저장했습니다.', '씬판독기');
     })(), '백업을 만들지 못했습니다.'));
     document.getElementById('sr-backup-import')?.addEventListener('change', (event) => runUiTask((async () => {
+        invalidateReasonerJobs();
         const file = event.target.files?.[0]; if (!file) return;
         const snapshot = JSON.parse(await file.text());
         const data = await storagePost('backup/import', { snapshot }); backupList = data.backups || [];
@@ -2314,6 +2591,7 @@ function createDialog() {
                     <details class="sr-details"><summary><span>장면·관계 판독</span><small id="sr-caption-scene">판독 대기</small></summary><div id="sr-scene-relation"></div></details>
                     <details class="sr-details"><summary><span>사건·NPC 진행</span><small id="sr-caption-event">판독 대기</small></summary><div id="sr-event-npc"></div></details>
                     <details id="sr-advanced-results" class="sr-details"><summary><span>고급 전개 판정</span><small id="sr-caption-advanced">사용 안 함</small></summary><div id="sr-advanced-judgment"></div></details>
+                    <details class="sr-details"><summary><span>연속성 추론</span><small>후보·검증·저장</small></summary><div id="sr-continuity-results"></div></details>
                     <details class="sr-details"><summary><span>갈등·실행 점검</span><small id="sr-caption-quality">판독 대기</small></summary><div id="sr-conflict-quality"></div></details>
                     <details class="sr-details"><summary><span>저장 상태·실제 주입문</span><small>채팅방별 기록</small></summary><p class="sr-criteria-note">의미 있는 관계 변화와 완료·보관된 사건만 누적하며, 아래에는 이번 응답의 실제 주입문만 표시합니다.</p><div id="sr-stored-state"></div><div class="sr-section-divider">실제 주입문</div><pre id="sr-prompt-preview" class="sr-preview"></pre></details>
                 </div>
@@ -2341,7 +2619,7 @@ function createDialog() {
                     <section class="sr-settings-card"><h3>제작자 모드</h3><label for="sr-owner-password">제작자 비밀번호</label><div class="sr-owner-unlock-row"><input id="sr-owner-password" class="text_pole" type="password" autocomplete="off" placeholder="비밀번호"><button id="sr-owner-unlock" type="button" class="menu_button">잠금 해제</button></div><div id="sr-owner-status" class="sr-key-status">잠금 상태</div><p class="sr-help">한 번 해제하면 이 SillyTavern 설치의 확장 설정에 유지되며, 갈등용 진행 탭에 로컬 전용 입력 영역이 나타납니다.</p></section>
                     <section class="sr-settings-card"><h3>주입 위치</h3><label for="sr-injection-mode">1. 기본 판정·전개 주입</label><select id="sr-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader}}</code><button id="sr-copy-macro" class="menu_button">복사</button></div><label for="sr-world-injection-mode">2. 세계관 전문 주입</label><select id="sr-world-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader-world}}</code><button id="sr-copy-world-macro" class="menu_button">복사</button></div><p class="sr-help">각 매크로 방식은 기본 위치와 중복 주입하지 않습니다. 세계관 전문은 Jev 판독 요청에 보내지 않고 최종 프리셋에만 넣습니다.</p><div id="sr-macro-status" class="sr-key-status"></div></section>
                     <section class="sr-settings-card"><h3>Jev API</h3><p class="sr-help">공식 TypeSafe Jev 주소와 <code>jev-latest</code>는 동봉 서버 플러그인에 고정되어 있습니다. 화면에는 키만 입력합니다.</p><label for="sr-jev-key">API 키</label><div class="sr-key-row"><input id="sr-jev-key" class="text_pole" type="password" autocomplete="new-password" placeholder="새 키 입력 (빈 값 저장 시 삭제)"><button id="sr-jev-toggle" class="menu_button" aria-label="키 표시 전환"><i class="fa-solid fa-eye"></i></button></div><div id="sr-jev-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-jev-save" class="menu_button">키 저장</button><button id="sr-jev-test" class="menu_button">연결 확인</button></div></section>
-                    <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>
+                    <section class="sr-settings-card"><h3>Continuity Reasoner</h3><label class="checkbox_label"><input id="sr-continuity-enabled" type="checkbox"><span><strong>연속성 추론 사용</strong></span></label><p class="sr-help">확정된 약속·일정·위임·중요 정보가 바뀔 때만 보조 모델로 후보를 찾습니다. Jev가 다음 판독에서 검증하기 전에는 상태나 주입문에 반영하지 않습니다.</p><label for="sr-reasoner-profile">연결 프로필</label><select id="sr-reasoner-profile" class="text_pole"></select><div id="sr-reasoner-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-reasoner-new" type="button" class="menu_button">새 프로필</button><button id="sr-reasoner-edit" type="button" class="menu_button">선택 프로필 수정</button><button id="sr-reasoner-test" type="button" class="menu_button">연결 확인</button></div><details id="sr-reasoner-editor" class="sr-settings-card"><summary>연결 프로필 관리</summary><input id="sr-reasoner-id" type="hidden"><label for="sr-reasoner-name">이름</label><input id="sr-reasoner-name" class="text_pole"><label for="sr-reasoner-adapter">API 방식</label><select id="sr-reasoner-adapter" class="text_pole"><option value="openai_compatible">OpenAI 호환</option><option value="gemini">Gemini</option></select><label for="sr-reasoner-url">API 기본 주소</label><input id="sr-reasoner-url" class="text_pole" placeholder="https://.../v1 또는 Gemini 기본 주소"><label for="sr-reasoner-model">모델</label><input id="sr-reasoner-model" class="text_pole" placeholder="모델 ID"><label for="sr-reasoner-key">API 키</label><input id="sr-reasoner-key" class="text_pole" type="password" autocomplete="new-password" placeholder="비우면 기존 키 유지"><label for="sr-reasoner-timeout">제한 시간(ms)</label><input id="sr-reasoner-timeout" class="text_pole" type="number" min="3000" max="60000"><label for="sr-reasoner-tokens">최대 출력 토큰</label><input id="sr-reasoner-tokens" class="text_pole" type="number" min="256" max="3000"><div class="sr-action-row"><button id="sr-reasoner-save" type="button" class="menu_button">프로필 저장</button><button id="sr-reasoner-delete" type="button" class="menu_button">선택 프로필 삭제</button></div></details></section>                    <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>
                     <section class="sr-settings-card"><h3>데이터 백업</h3><p class="sr-help">전용 저장소의 설정·채팅 상태·세계관·인물 시트와 Jev 키를 날짜·시간 기준으로 백업합니다. 복원 전 현재 상태도 자동 백업됩니다.</p><div class="sr-action-row"><button id="sr-backup-create" class="menu_button">지금 백업</button><label class="menu_button sr-file-button">백업 가져오기<input id="sr-backup-import" type="file" accept="application/json,.json" hidden></label></div><div id="sr-backup-list" class="sr-backup-list"></div></section>
                 </div>
             </main>
@@ -2479,6 +2757,7 @@ async function onBeforeGeneration(type, data, dryRun) {
 }
 
 async function onChatChanged() {
+    invalidateReasonerJobs();
     handledOocMarkers.length = 0;
     debugInjectionArmed = false;
     generationMode = 'rp';
@@ -2492,7 +2771,7 @@ async function onChatChanged() {
 
 async function init() {
     settings = { ...DEFAULTS, ...(extension_settings[MODULE] || {}) };
-    for (const key of ['enabled', 'autoJudge', 'pauseOnOoc', 'showConfidence', 'ownerUnlocked']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
+    for (const key of ['enabled', 'autoJudge', 'pauseOnOoc', 'showConfidence', 'ownerUnlocked', 'continuityEnabled']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
     settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
     extension_settings[MODULE] = settings;
     saveSettingsDebounced();
