@@ -43,8 +43,11 @@ function contextItems(entry, selected, knowledge, memory, transcript) {
 }
 export function buildLiveCharacterPlan(entries = [], { selected = [], transcript = '', knowledge = [], memory = null, persona = null } = {}) {
     return entries.map((entry, index) => {
-        const profile = currentProfileItems(entry).map(item => ({ id: item.id, kind: item.kind, target: item.target, text: item.text, inject_text: item.inject_text, evidence: item.evidence }));
-        const profileCandidates = profile.map(item => ({ ...item, score: relevant([item.text,item.target].join(' '), transcript) })).sort((a,b) => b.score - a.score).slice(0, 4).map(({score,...item}) => item);
+        // All stored rules (at most ten) remain visible to Jev. Cross-language keyword
+        // ranking must not silently hide a rule before semantic selection.
+        const profileCandidates = currentProfileItems(entry).map(item => ({
+            id: item.id, kind: item.kind, topic: item.topic, target: item.target, rule: item.rule,
+        }));
         return { index, id: entry.id, name: entry.name, kind: entry.kind, sourceVisibleToMain: entry.sourceVisibleToMain, core: buildCore(entry),
             profileCandidates, contextCandidates: contextItems(entry, selected, knowledge, memory, transcript),
             sourceExcerpt: profileIsCurrent(entry) ? selectRelevantChunks(entry.source, transcript, 1)[0] || '' : '',
@@ -57,13 +60,13 @@ export function buildCharacterTurnQuestions(plan = []) {
     for (const person of plan) {
         const prefix = `character_${person.index}`;
         questions[`${prefix}_presence`] = { type: 'choice', instructions: `Judge ${person.name}'s role in the next response from actual RP. A previously active person may remain present without being named again.`, criteria: PRESENCE_CHOICES };
-        const profileChoices = { none: 'No profile item needs emphasis.', ...Object.fromEntries(person.profileCandidates.map(item => [item.id, `${item.kind} / ${item.target || person.name}`])) };
+        const profileChoices = { none: 'No profile item needs emphasis.', ...Object.fromEntries(person.profileCandidates.map(item => [item.id, `${item.kind} / ${item.topic} / ${item.target || person.name}: ${item.rule}`])) };
         for (const slot of [1,2].slice(0,person.profileCandidates.length)) questions[`${prefix}_profile_slot_${slot}`] = { type: 'choice', instructions: PROFILE_SELECT, criteria: profileChoices };
         const contextChoices = { none: 'No context item needs emphasis.', ...Object.fromEntries(person.contextCandidates.map(item => [item.id, `${item.source} / ${item.speaker || item.characterId || ''} / message ${item.messageIndex ?? 'stored'} / ${item.occurredAt || 'time unknown'}`])) };
         for (const slot of [1,2].slice(0,person.contextCandidates.length)) questions[`${prefix}_context_slot_${slot}`] = { type: 'choice', instructions: CONTEXT_SELECT, criteria: contextChoices };
         person.contextCandidates.forEach((item, ordinal) => {
             if (item.characterId === person.id && item.type === 'acquired_knowledge') return;
-            questions[`${prefix}_context_access_${ordinal}`] = { type:'choice', instructions: `${ACCESS_INSTRUCTION.replace('Wade', person.name)}\nCandidate: ${item.id}`, criteria: ACCESS_CHOICES };
+            questions[`${prefix}_context_access_${ordinal}`] = { type:'choice', instructions: `${ACCESS_INSTRUCTION}\nPerson: ${person.name}. Candidate: ${item.id}.`, criteria: ACCESS_CHOICES };
         });
         questions[`${prefix}_response_direction`] = { type: 'choice', instructions: DIRECTION_SELECT, criteria: DIRECTIONS };
     }
@@ -88,9 +91,10 @@ export function resolveLiveCharacterPlan(plan, decisions) {
             if (access === 'none' || !Object.hasOwn(ACCESS_CHOICES, access)) denied.push(item);
             else accepted.push({ ...item, access });
         }
-        const direction = presence === 'active' && !denied.length && Object.hasOwn(DIRECTIONS, decisions[`${prefix}_response_direction`]) ? decisions[`${prefix}_response_direction`] : 'none';
+        let direction = presence === 'active' && Object.hasOwn(DIRECTIONS, decisions[`${prefix}_response_direction`]) ? decisions[`${prefix}_response_direction`] : 'none';
+        if (denied.length && !accepted.length && ['deceive', 'withhold'].includes(direction)) direction = 'none';
         return { ...person, presence, profileIds, profileItems: profileIds.map(id => person.profileCandidates.find(item => item.id === id)), contextIds,
-            contextItems: accepted, denied, direction, excludedReason: denied.length ? '접근 근거 없는 선택 제외 · 그 정보에 의존할 수 있는 행동 방향 보류' : '' };
+            contextItems: accepted, denied, direction, excludedReason: denied.length ? '접근 근거 없는 정보는 제외 · 독립적인 직접 반응은 유지' : '' };
     });
 }
 function contextLine(person, item) {
@@ -113,18 +117,27 @@ export function buildCharacterInjection(plan = []) {
         if (person.presence !== 'active') continue;
         const chosen = [];
         if (!person.sourceVisibleToMain) {
-            const excerpt = person.core.excerpts.map(item => item.text).join(' · ');
-            chosen.push({ priority: 100, text: `${person.name} · ${excerpt || 'Registered NPC; see established scene continuity.'}` });
+            const excerpt = person.core.excerpts.map(item => item.text).filter(text => !/[가-힣]/u.test(text)).join(' · ');
+            chosen.push({ priority: 100, mandatory: true, text: `${person.name}: ${excerpt || 'Registered NPC; use only the identity established in this scene.'}` });
         }
-        if (person.denied.length) chosen.push({ priority: 90, text: `${person.name}: Do not treat unshared scene or reference material as this person's knowledge.` });
-        for (const item of person.profileItems) chosen.push({ priority: item.kind === 'voice' ? 30 : 70, text: `${person.name}: ${item.inject_text}` });
-        for (const item of person.contextItems) chosen.push({ priority: 60, text: contextLine(person, item) });
+        if (person.denied.length) chosen.push({ priority: 90, mandatory: true, text: `${person.name}: Do not treat unshared scene or reference material as this person's knowledge.` });
+        for (const item of person.profileItems) chosen.push({ priority: 70, mandatory: true, text: `${person.name}: ${item.rule}` });
+        for (const item of person.contextItems) {
+            // Source text remains available to Jev. Do not copy non-English
+            // reference prose into the English execution prompt.
+            if (item.type !== 'raw_message' && /[가-힣]/u.test(item.text)) continue;
+            chosen.push({ priority: 60, text: contextLine(person, item) });
+        }
         if (person.direction !== 'none') chosen.push({ priority: 50, text: `${person.name} · Direction: ${DIRECTIONS[person.direction]}` });
         chosen.sort((a,b)=>b.priority-a.priority);
-        selections.push(...chosen.slice(0, 3));
+        selections.push(...chosen);
     }
-    const lines = selections.sort((a,b)=>b.priority-a.priority).slice(0,8).map(item => item.text);
-    while (lines.length && `<CHARACTER_EXECUTION>\n${lines.join('\n')}\n</CHARACTER_EXECUTION>`.length > MAX_INJECTION_CHARS) lines.pop();
+    const selected = selections.sort((a,b)=>b.priority-a.priority);
+    const lines = selected.filter(item => item.mandatory).map(item => item.text);
+    for (const item of selected.filter(item => !item.mandatory)) {
+        if (lines.length >= 8) break;
+        if (`<CHARACTER_EXECUTION>\n${[...lines,item.text].join('\n')}\n</CHARACTER_EXECUTION>`.length <= MAX_INJECTION_CHARS) lines.push(item.text);
+    }
     return { text: lines.length ? `<CHARACTER_EXECUTION>\n${lines.join('\n')}\n</CHARACTER_EXECUTION>` : '', traces };
 }
 export { CHARACTER_LIVE_SYSTEM };

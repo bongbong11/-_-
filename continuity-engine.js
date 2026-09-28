@@ -158,9 +158,17 @@ export function selectContinuityContext(continuity, transcript, { opportunity = 
 
 export function buildContinuityInjection(selected, chosenFollowup = null) {
     const lines = [];
-    for (const item of selected?.items || []) lines.push(`${short(item.label, 100)}: ${short(item.lifecycle, 30)}${item.pressure && item.pressure !== 'none' ? `; pressure=${short(item.pressure, 30)}` : ''}.`);
-    for (const item of selected?.knowledge || []) lines.push(`${short(item.character, 60)} knows ${short(item.summary || item.factId, 120)} only through ${short(item.source, 30)}.`);
-    for (const item of selected?.dependencies || []) lines.push(`${short(item.stateId, 60)} remains in its established lifecycle; pressure=${short(item.pressure, 30)}.`);
-    if (chosenFollowup?.data?.action) lines.push(`Optional secondary beat: ${short(chosenFollowup.data.action, 180)}. Execute only a causally supported, bounded step; do not claim an unseen action already happened.`);
+    const usable = (value, max) => { const text = String(value || '').trim(); return text && text.length <= max && !/[가-힣]/u.test(text) ? text : ''; };
+    for (const item of selected?.items || []) {
+        const label = usable(item.label, 100);
+        if (label) lines.push(`${label}: ${item.lifecycle}${item.pressure && item.pressure !== 'none' ? `; pressure=${item.pressure}` : ''}.`);
+    }
+    for (const item of selected?.knowledge || []) {
+        const summary = usable(item.summary || item.factId, 120);
+        if (summary) lines.push(`${short(item.character, 60)} has a ${item.source} information source concerning ${summary}; preserve whether it is a report, observation, or verified fact.`);
+    }
+    for (const item of selected?.dependencies || []) lines.push(`${short(item.stateId, 60)} remains in its established lifecycle; pressure=${item.pressure}.`);
+    const action = usable(chosenFollowup?.data?.action, 180);
+    if (action) lines.push(`Optional secondary beat: ${action}. Execute only a causally supported, bounded step; do not claim an unseen action already happened.`);
     return lines.length ? `<CONTINUITY_CONTEXT>\n${lines.join('\n')}\nTreat pressure as context, not a completed off-screen action.\n</CONTINUITY_CONTEXT>` : '';
 }

@@ -17,12 +17,7 @@ export function addQualifiedEvidence(bucket, direction, fingerprint, amount = 1)
 }
 
 export function commitObservedState(rec, decisions, evidenceKey) {
-    // These choices describe an already completed role, not a proposed exit action.
-    if (evidenceKey) {
-        if (decisions.event_route === 'retire' && rec.eventProfile) { archiveCurrentEvent(rec, 'completed'); rec.eventProfile = null; }
-        if (decisions.npc_route === 'retire') rec.npcProfile = null;
-        if (decisions.villain_route === 'retire') rec.villainProfile = null;
-    }
+    // Routing choices are pending plans; observations cannot retire stored actors/events.
     const relationship = rec.relationshipState;
     rec.observationState = {
         relationshipMotion: String(decisions.relationship_motion || 'unclear'),
@@ -32,12 +27,12 @@ export function commitObservedState(rec, decisions, evidenceKey) {
         unresolved: String(decisions.unresolved || 'unclear'),
         evidenceKey: String(evidenceKey || ''),
     };
-    const changed = decisions.continuity_change === 'change';
-    if (changed && ['closer', 'distant', 'mixed'].includes(decisions.relationship_motion)) relationship.motion = decisions.relationship_motion;
+    const changed = ['closer', 'distant', 'mixed'].includes(decisions.relationship_motion);
+    if (changed) relationship.motion = decisions.relationship_motion;
     if (changed && ['positive', 'negative', 'mixed'].includes(decisions.trust_signal)) relationship.trust = decisions.trust_signal;
     if (changed && ['positive', 'negative', 'mixed'].includes(decisions.intimacy_signal)) relationship.intimacy = decisions.intimacy_signal;
     if (decisions.romance_evidence === 'established' || (changed && ['attraction', 'counter', 'mixed'].includes(decisions.romance_evidence))) relationship.romance = decisions.romance_evidence;
-    if (changed && decisions.unresolved && !['none', 'unclear'].includes(decisions.unresolved)) rec.sceneState.unresolved = decisions.unresolved;
+    if (decisions.unresolved && !['none', 'unclear'].includes(decisions.unresolved)) rec.sceneState.unresolved = decisions.unresolved;
     if (changed && evidenceKey && ['closer', 'distant'].includes(decisions.relationship_motion)) {
         addQualifiedEvidence(rec.pacingState.relationship, decisions.relationship_motion, evidenceKey, 1);
     }
@@ -108,9 +103,9 @@ export function commitVerifiedPlan(rec, pendingPlan, verification) {
     }
     if (npcVerified) {
         if (npcFulfilled && planned.npc_route === 'retire') rec.npcProfile = null;
-        else if ((['create', 'reuse'].includes(planned.npc_route) || (npcFulfilled && planned.npc_route === 'replace')) && staged.npcProfile) rec.npcProfile = { ...JSON.parse(JSON.stringify(staged.npcProfile)), status: 'active' };
+        else if ((npcFulfilled && ['create', 'reuse', 'replace'].includes(planned.npc_route)) && staged.npcProfile) rec.npcProfile = { ...JSON.parse(JSON.stringify(staged.npcProfile)), status: 'active' };
         if (npcFulfilled && planned.villain_route === 'retire') rec.villainProfile = null;
-        else if ((['create', 'continue'].includes(planned.villain_route) || (npcFulfilled && planned.villain_route === 'replace')) && staged.villainProfile) rec.villainProfile = { ...JSON.parse(JSON.stringify(staged.villainProfile)), status: 'active' };
+        else if ((npcFulfilled && ['create', 'continue', 'replace'].includes(planned.villain_route)) && staged.villainProfile) rec.villainProfile = { ...JSON.parse(JSON.stringify(staged.villainProfile)), status: 'active' };
         committedEffects.npc = npcFulfilled ? 'full' : 'partial';
     }
     if (relationshipFulfilled && planned.relationship_beat && planned.relationship_beat !== 'none') {

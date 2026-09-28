@@ -10,10 +10,11 @@ import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvanced
 import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
 import { appendPendingUserMessage, buildInputKey, buildRecentContext, buildRecentTranscript, filterNonRpHistory, generationCycleSalt, latestUserMessageText, pendingComposerText, selectRecentMessages, splitOocText } from './runtime-utils.js';
 import { sha256Fallback, sha256Hex } from './security-utils.js';
-import { buildCharacterInjection, buildCharacterTurnQuestions, buildProfileQuestions, buildLiveCharacterPlan, resolveLiveCharacterPlan, prepareProfileItems, verifyProfileItems, currentProfileItems, profileStatus, chunkSheet, defaultCharacterStore, normalizeCharacterStore, selectActiveEntries, selectRelevantChunks } from './character-library.js';
+import { buildCharacterInjection, buildCharacterTurnQuestions, buildLiveCharacterPlan, resolveLiveCharacterPlan, prepareProfileItems, createProfile, currentProfileItems, profileStatus, chunkSheet, defaultCharacterStore, normalizeCharacterStore, selectActiveEntries, selectRelevantChunks } from './character-library.js';
 import { applyDecisionPolicy, buildVerificationQuestions, decisionPolicyKind, pendingPlanEffects, stableFingerprint, verificationSummary } from './decision-engine.js';
 import { commitObservedState, commitVerifiedPlan, updateProgressionPressure } from './state-engine.js';
 import { selectActionPlan } from './action-coordinator.js';
+import { coordinateDecisions } from './src/scene/coordinator.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
 import { applyContinuityVerdicts, buildContinuityInjection, emptyContinuity, selectContinuityContext, validateReasonerResult } from './continuity-engine.js';
 import { listConnectionProfiles, requestWithConnectionProfile } from './st-profile-reasoner.js';
@@ -31,16 +32,16 @@ const stateEngineSource = await readFile(new URL('./state-engine.js', import.met
 const runtimeSource = await readFile(new URL('./runtime-utils.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.meta.url));
-await access(new URL('./downloads/scene-reader-sillytavern-v0.14.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-sillytavern-v0.15.0.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.14.0');
+assert.equal(manifest.version, '0.15.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
 assert.match(source, /적극적은 현재 근거로 실행 가능한 행동 하나를 확실히 수행/);
-assert.match(library, /An unclear or stable scene is not by itself a reason to hold/);
-assert.match(library, /an NPC may still be routed when the enabled progression mode has a plausible concrete function/);
+assert.match(library, /If a new-event route fails, an existing event, relationship pressure, current interaction, or prior action may still move/);
+assert.match(library, /A registered person being active does not prohibit another suitable NPC from entering/);
 assert.equal(pkg.main, 'server-plugin/index.cjs');
 assert.equal(pluginPkg.main, 'index.cjs');
 assert.equal(pluginPkg.version, '0.6.0');
@@ -110,7 +111,7 @@ assert.match(source, /activityToasts = new Map/);
 assert.match(stateEngineSource, /const amount = eventFulfilled \? 1 : 0\.5/);
 assert.match(stateEngineSource, /relationshipFulfilled && planned\.relationship_beat/);
 assert.match(stateEngineSource, /observedRank > currentRank/);
-assert.match(stateEngineSource, /const changed = decisions\.continuity_change === 'change'/);
+assert.match(stateEngineSource, /const changed = \['closer', 'distant', 'mixed'\]/);
 assert.match(stateEngineSource, /!\['none', 'unclear'\]\.includes\(decisions\.unresolved\)/);
 assert.match(stateEngineSource, /unfulfilledDestructiveRoute/);
 assert.match(source, /Jev가 최근 장면을 판독하고 있습니다/);
@@ -200,7 +201,8 @@ for (const [name, expected] of Object.entries(expectedHashes)) {
 
 const preferences = { progressionMode: 'investigation', worldDirection: 'hostile', relationshipDirection: 'hostile', negativePriority: true, judgmentStyle: 'balanced', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', fightSustain: true, villainEnabled: true, socialEnabled: true, worldHostility: true, npcToUser: true, userMisfortune: true };
 const questions = buildQuestions({ preferences, hasVillain: false, hasNpc: false, hasEvent: false, pacingState: { relationship: { closer: 1, distant: 0 }, event: { qualifiedSteps: 1 } } });
-for (const key of ['scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity', 'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'repetitive_ending', 'action_evasion', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
+for (const key of ['scene_state', 'conflict_state', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'unresolved', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'repetitive_ending', 'action_evasion', 'scene_cutoff', 'response_cadence', 'relationship_pacing', 'relationship_beat', 'primary_focus', 'villain_route', 'event_route', 'progression_move', 'npc_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) assert.ok(questions[key], `${key} question missing`);
+for (const key of ['conversation_tone','continuity_change','ambiguity','time_relation']) assert.equal(questions[key], undefined);
 for (const key of ['npc_autonomy', 'world_hostility', 'npc_guard', 'misfortune', 'directive_followthrough', 'npc_followthrough', 'resolution_pacing', 'fight_sustain']) assert.equal(questions[key], undefined, `${key} must be derived or fixed rather than redundantly Jev-gated`);
 assert.equal(decisionPolicyKind('romance_evidence'), 'observation');
 assert.equal(decisionPolicyKind('primary_focus'), 'routing');
@@ -237,6 +239,16 @@ const directEventPlan = selectActionPlan({
 });
 assert.equal(directEventPlan.primary.kind, 'direct', 'a direct answer remains the primary beat');
 assert.equal(directEventPlan.secondary.kind, 'event', 'an ongoing event can advance as a compatible secondary beat');
+const advancedOpportunityPlan = selectActionPlan({
+    decisions: { primary_focus: 'direct', scene_state: 'normal', advanced_route: 'create', advanced_move: 'seed', relationship_pacing: 'closer_incremental', relationship_beat: 'vulnerability' },
+    settings: { ...actionSettings, advancedEnabled: true },
+    allowUnpreparedCreates: true,
+});
+assert.equal(advancedOpportunityPlan.primary.kind, 'direct');
+assert.equal(advancedOpportunityPlan.secondary.id, 'advanced_event', 'an eligible advanced event reaches its probability roll even when a routine relationship beat is available');
+const contraryRelation = { relationship_pacing: 'closer_significant', relationship_beat: 'confession', counterevidence: 'clear', resolution_readiness: 'none', event_route: 'none', event_state: 'none', npc_route: 'none' };
+coordinateDecisions({ preferences: { advancedEnabled: false, progressionMode: 'off', relationshipPace: 'slow', resolutionPace: 'medium' }, pacingState: { relationship: { closer: 0 } } }, {}, contraryRelation);
+assert.equal(contraryRelation.relationship_pacing, 'hold', 'clear counterevidence must not be reopened by a later pace adjustment');
 const eventFirstPlan = selectActionPlan({
     decisions: { primary_focus: 'event', event_state: 'active', event_route: 'continue', progression_move: 'advance', npc_route: 'reuse', npc_role: 'witness', npc_weight: 'supporting', relationship_pacing: 'closer_incremental' },
     settings: actionSettings,
@@ -307,12 +319,12 @@ const stateFixture = () => ({
     advancedEntities: [],
 });
 const observedState = stateFixture();
-commitObservedState(observedState, { relationship_motion: 'unclear', trust_signal: 'none', intimacy_signal: 'none', romance_evidence: 'none', unresolved: 'unclear', continuity_change: 'continuity', event_state: 'unclear' }, 'same-cause');
+commitObservedState(observedState, { relationship_motion: 'unclear', trust_signal: 'none', intimacy_signal: 'none', romance_evidence: 'none', unresolved: 'unclear', event_state: 'unclear' }, 'same-cause');
 assert.equal(observedState.relationshipState.romance, 'established', 'current none must not erase established romance');
 assert.equal(observedState.relationshipState.trust, 'positive', 'missing current trust signal must not erase prior trust state');
 assert.equal(observedState.sceneState.unresolved, 'relationship', 'unclear scene state must not erase stored unresolved state');
-commitObservedState(observedState, { relationship_motion: 'closer', trust_signal: 'positive', intimacy_signal: 'positive', romance_evidence: 'established', unresolved: 'relationship', continuity_change: 'change', event_state: 'turning' }, 'same-cause');
-commitObservedState(observedState, { relationship_motion: 'closer', trust_signal: 'positive', intimacy_signal: 'positive', romance_evidence: 'established', unresolved: 'relationship', continuity_change: 'change', event_state: 'turning' }, 'same-cause');
+commitObservedState(observedState, { relationship_motion: 'closer', trust_signal: 'positive', intimacy_signal: 'positive', romance_evidence: 'established', unresolved: 'relationship', event_state: 'turning' }, 'same-cause');
+commitObservedState(observedState, { relationship_motion: 'closer', trust_signal: 'positive', intimacy_signal: 'positive', romance_evidence: 'established', unresolved: 'relationship', event_state: 'turning' }, 'same-cause');
 assert.equal(observedState.pacingState.relationship.closer, 1, 'the same relationship cause must be counted once');
 assert.equal(observedState.eventProfile.phase, 'turning', 'actual observed event phase must advance beyond introduced');
 const missedState = stateFixture();
@@ -517,7 +529,8 @@ const eventPayload = buildInjection({
     eventProfile: event,
 });
 assert.match(eventPayload, /<RP_EVENT_BEAT role="primary" mode="investigation" phase="introduced">/);
-assert.match(eventPayload, /진술의 핵심 모순/);
+assert.match(eventPayload, /Expose one precise contradiction/);
+assert.doesNotMatch(eventPayload, /진술의 핵심 모순/);
 assert.match(eventPayload, /Introduce at most one limited clue/);
 assert.doesNotMatch(eventPayload, /<CONFLICT_PROGRESSION>/);
 
@@ -529,8 +542,8 @@ const npcPayload = buildInjection({
     eventProfile: null,
 });
 assert.match(npcPayload, /<NPC_SCENE_EXECUTION role="witness" weight="supporting" knowledge="partial" disclosure="selective">/);
-assert.match(npcPayload, /Keep active NPCs consistent and self-directed/);
-assert.match(npcPayload, /do not grant hidden knowledge/);
+assert.match(npcPayload, /Keep the active NPC self-directed/);
+assert.match(npcPayload, /do not let a guess identify the unavailable truth/);
 assert.match(npcPayload, /multiple explanations open/);
 assert.match(npcPayload, /Reveal only the portion/);
 
@@ -549,30 +562,23 @@ assert.equal(emptyCharacterStore.enabled, false);
 assert.equal(emptyCharacterStore.schemaVersion, 5);
 assert.equal(selectActiveEntries(emptyCharacterStore, 'Alice is here.', 'Alice').length, 0);
 const sheet = 'Name: Wade\nRole: Family patriarch and business owner.\nHe controls his son on family decisions.';
-const candidate = {id:'c1',kind:'relationship',target:'son',text:'가족 결정에 관해 아들의 선택을 통제하려는 경향이 있다.',inject_text:'Wade tends to control his son on family decisions.',evidence:['He controls his son on family decisions.']};
-const prepared = prepareProfileItems({items:[candidate]},sheet);
+const candidate = {id:'c1',kind:'relationship',topic:'family_decisions',target:'son',rule:'Wade tends to control his son on family decisions.'};
+const prepared = prepareProfileItems({items:[candidate]});
 assert.equal(prepared.items.length,1);
-assert.equal(prepared.items[0].evidence[0].start,sheet.indexOf(candidate.evidence[0]));
-assert.equal(prepareProfileItems({items:[{...candidate,evidence:['unwritten fact']}]},sheet).items.length,0);
-const profileQuestions = buildProfileQuestions(prepared.items);
-assert.deepEqual(Object.keys(profileQuestions),['profile_c1_text_grounding','profile_c1_text_scope','profile_c1_inject_grounding','profile_c1_inject_scope']);
-const answers = Object.fromEntries(Object.entries(profileQuestions).map(([key,q])=>[key,{choice:Object.keys(q.criteria)[0],confidence:0.9}]));
+assert.equal(prepareProfileItems({items:[{...candidate,id:'c2',rule:'가족을 통제한다.'}]}).items.length,0);
 const profileOptions={characterId:'wade',sourceHash:'sheet-v1',source:sheet,analysisId:'analysis-v1'};
-let verified=verifyProfileItems(prepared.items,{answers},profileOptions);
-assert.equal(verified.verifiedItems.length,1);
-assert.match(verified.verifiedItems[0].id,/wade@sheet-v1:analysis-v1:c1/);
-const low={...answers,profile_c1_inject_scope:{...answers.profile_c1_inject_scope,confidence:0.68}};
-assert.equal(verifyProfileItems(prepared.items,{answers:low},profileOptions).verifiedItems.length,0,'every check must separately reach 0.75');
-assert.equal(verifyProfileItems(prepared.items,{answers:{...answers,profile_c1_inject_scope:undefined}},profileOptions).verifiedItems.length,0);
+const verified=createProfile(prepared.items,profileOptions);
+assert.equal(verified.items.length,1);
+assert.match(verified.items[0].id,/wade@sheet-v1:analysis-v1:c1/);
 const characterStoreFixture=normalizeCharacterStore({enabled:true,characters:[{id:'alice',name:'Alice',aliases:['A'],source:'Alice is a surgeon.\n\nShe grew up in London.'}],npcs:[{id:'wade',name:'Wade',source:sheet,sourceHash:'sheet-v1',profile:verified}]});
 assert.equal(selectActiveEntries(characterStoreFixture,'Wade enters. Alice watches.','Alice').length,2);
 assert.ok(chunkSheet('a'.repeat(3000),1000).length>=3);
 assert.ok(selectRelevantChunks(characterStoreFixture.characters[0].source,'London',1).some(chunk=>/London/.test(chunk)));
 assert.equal(currentProfileItems(characterStoreFixture.npcs[0]).length,1);
-assert.equal(profileStatus(characterStoreFixture.npcs[0]),'검증된 해석 저장됨');
+assert.equal(profileStatus(characterStoreFixture.npcs[0]),'인물 규칙 저장됨');
 const stale=normalizeCharacterStore({...characterStoreFixture,npcs:[{...characterStoreFixture.npcs[0],source:sheet+' changed'}]});
 assert.equal(currentProfileItems(stale.npcs[0]).length,0);
-assert.match(profileStatus(stale.npcs[0]),/재판정 필요/);
+assert.match(profileStatus(stale.npcs[0]),/재판독 필요/);
 const selected=[{is_user:true,name:'User',mes:'Perhaps he is the culprit.',send_date:'Friday'},{is_user:false,name:'Alice',mes:'I have no proof.',send_date:'Friday'},{is_user:true,name:'User',mes:'Wade enters.',send_date:'Saturday'}];
 const live=buildLiveCharacterPlan([characterStoreFixture.npcs[0]],{selected,transcript:'Wade enters. Perhaps he is the culprit.'});
 assert.equal(live[0].profileCandidates.length,1);
@@ -580,6 +586,7 @@ assert.ok(live[0].contextCandidates.some(item=>item.text==='Perhaps he is the cu
 const turnQuestions=buildCharacterTurnQuestions(live);
 assert.ok(turnQuestions.character_0_presence);
 assert.ok(turnQuestions.character_0_profile_slot_1);
+assert.match(turnQuestions.character_0_profile_slot_1.criteria[live[0].profileCandidates[0].id],/family decisions/);
 assert.ok(turnQuestions.character_0_context_slot_2);
 assert.ok(turnQuestions.character_0_context_access_0);
 const noSelection=resolveLiveCharacterPlan(live,{character_0_presence:'active',character_0_profile_slot_1:'none',character_0_context_slot_1:'none',character_0_response_direction:'none'});
@@ -588,7 +595,7 @@ const secret=live[0].contextCandidates.find(item=>item.text==='Perhaps he is the
 const secretOrdinal=live[0].contextCandidates.indexOf(secret);
 const denied=resolveLiveCharacterPlan(live,{character_0_presence:'active',character_0_context_slot_1:secret.id,['character_0_context_access_'+secretOrdinal]:'none',character_0_response_direction:'confront'});
 assert.equal(denied[0].contextItems.length,0);
-assert.equal(denied[0].direction,'none','a response dependent on denied information cannot pass');
+assert.equal(denied[0].direction,'confront','an independent direct response survives an unrelated denied item');
 const accepted=resolveLiveCharacterPlan(live,{character_0_presence:'active',character_0_profile_slot_1:live[0].profileCandidates[0].id,character_0_response_direction:'act'});
 const charResult=buildCharacterInjection(accepted);
 const charBlock=charResult.text;
@@ -596,8 +603,7 @@ assert.match(charBlock,/<CHARACTER_EXECUTION>/);
 assert.match(charBlock,/Wade/);
 assert.match(charBlock,/family decisions/);
 assert.ok(charBlock.length<1900);
-assert.equal(buildCharacterInjection([]).text,'');
-const charPayload = buildInjection({
+assert.equal(buildCharacterInjection([]).text,'');const charPayload = buildInjection({
     settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'slow' },
     decisions: { response_cadence: 'linger', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'direct', npc_route: 'none', villain_route: 'none', fight_sustain: 'no', repetitive_ending: 'yes', user_handoff: 'yes', input_echo: 'yes' },
     characterBlock: charBlock,
@@ -665,7 +671,7 @@ assert.match(source, /id="sr-character-analysis-result"/);
 assert.match(source, /characterAnalysisSelection = \{ kind, id: entry\.id \};\s*renderCharacterStore\(\)/, 'saving must select the saved person in the analysis browser');
 assert.match(source, /data-character-view-kind/);
 assert.match(source, /data-character-edit-kind/);
-assert.match(source, /검증·적용할 수 있는 해석/);
+assert.match(source, /이번 시트에서 저장할 만한 개별 규칙이 없습니다/);
 assert.doesNotMatch(source, /id="sr-character-analysis"/, 'the old editor-bound analysis panel must be removed');
 assert.match(source, /id="sr-world-edit-franchise"/);
 assert.match(await readFile(new URL('./src/characters/selection.js', import.meta.url), 'utf8'), /carried\.has\(entry\.id\)/);

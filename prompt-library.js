@@ -40,17 +40,13 @@ export const DECISION_LABELS = {
     world_direction: WORLD_DIRECTIONS,
     negative_priority: { off: '사용 안 함', on: '부정 편향 최우선' },
     scene_state: { active: '활발히 진행 중', normal: '정상 진행', stalled: '정체·반복', transition_ready: '전환 가능', unclear: '불명확' },
-    conversation_tone: { neutral: '중립·평온', warm: '따뜻함', tense: '긴장', hostile: '적대적', intimate: '친밀·사적', action: '행동 중심', mixed: '혼합', unclear: '불명확' },
     conflict_state: { none: '갈등 없음', tension: '긴장만 있음', active: '실제 갈등 진행 중', resolving: '해소 과정', unclear: '불명확' },
     relationship_motion: { none: '비교 근거 없음', stable: '유지', closer: '가까워짐', distant: '멀어짐', mixed: '상반된 움직임', unclear: '실제로 판별 불가' },
     trust_signal: { none: '뚜렷한 근거 없음', positive: '신뢰 증가 근거', negative: '불신 증가 근거', mixed: '상반된 근거', unclear: '불명확' },
     intimacy_signal: { none: '뚜렷한 근거 없음', positive: '친밀감 증가 근거', negative: '거리 증가 근거', mixed: '상반된 근거', unclear: '불명확' },
     romance_evidence: { none: '로맨틱 근거 없음', attraction: '끌림·성적 긴장만 있음', established: '명시적 로맨틱 근거', counter: '반대 근거', mixed: '상반된 근거', unclear: '불명확' },
-    continuity_change: { continuity: '기존 상태 유지', change: '실제 변화 있음', mixed: '유지·변화 혼재', none: '판단할 변화 없음', unclear: '불명확' },
-    counterevidence: { none: '반대 근거 없음', weak: '약한 제한 근거', clear: '명확한 반대 근거', mixed: '상반된 근거', unclear: '불명확' },
-    ambiguity: { low: '해석이 비교적 명확', material: '중요한 모호성 있음', high: '판정 곤란', unclear: '불명확' },
+    counterevidence: { none: '관계 진전의 반대 근거 없음', limited: '진전 폭을 제한할 근거', clear: '가까워짐을 반박하는 근거', mixed: '지지·반대 근거 혼재', unclear: '근거 부족', not_applicable: '가까워짐 판정 대상 아님' },
     unresolved: { none: '뚜렷한 미해결 없음', relationship: '관계 문제', conflict: '갈등', goal: '목표·행동', information: '정보·비밀', danger: '위협·위기', multiple: '여러 요소', unclear: '불명확' },
-    time_relation: { first_scene: '비교할 이전 장면 없음', immediate: '직전 장면에서 즉시 연속', minutes: '수분~수십 분 후', hours: '몇 시간 후', next_day: '다음날', days: '며칠 후', weeks_months: '수주~수개월 후', unclear: '실제로 판별 불가' },
     context_change_source: { none: '새 장면 기회 없음', user_established: '유저가 새 상황 확정', character_established: '캐릭터 출력이 새 상황 확정', both: '양쪽에서 새 상황 확정', unclear: '변화 출처 불명확' },
     continuity_trigger: { none: '연결 변화 없음', commitment: '약속·일정·의무', delegation: '위임·책임', knowledge_transfer: '중요 정보 전달', major_status_change: '중요 상태 변화' },
     event_state: { none: '진행 중인 중심 사건 없음', introduced: '사건 도입', active: '사건 진행 중', turning: '전환점', resolution_ready: '해결 조건 마련됨', aftermath: '해결 후 여파', unclear: '불명확' },
@@ -154,7 +150,7 @@ export const EXECUTION_CORRECTION_PRIORITY = ['action_evasion', 'scene_cutoff', 
 const CORE_EXECUTION_CORRECTIONS = ['action_evasion', 'scene_cutoff'];
 const SECONDARY_EXECUTION_CORRECTIONS = ['user_handoff', 'circularity', 'refusal_stall', 'input_echo', 'repetitive_ending', 'hesitation_drag'];
 
-const NPC_COMMON_PROMPT = 'Keep active NPCs consistent and self-directed: let the relevant NPC speak, choose, or act from established motives, knowledge, and immediate stakes—not merely answer {{user}}, deliver exposition, or wait—and do not replace {{char}} or take over unrelated parts of the scene. Suspicion, intuition, body-language reading, coincidence, and genre convention do not grant hidden knowledge: infer only broad surface states from cues this NPC actually observed, never an unavailable fact, cause, relationship, motive, plan, or location.';
+const NPC_COMMON_PROMPT = 'Keep the active NPC self-directed within their own motive, knowledge, access, and immediate stake. Give them one proportionate choice or action; do not make them a mouthpiece, a group mind, or a substitute for the primary character.';
 
 const NPC_ROLE_PROMPTS = {
     participant: 'Let the NPC act as a directly affected participant with something concrete to gain, lose, decide, or protect.',
@@ -390,21 +386,7 @@ export function rollVillainProfile(random = Math.random) {
 export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {} }) {
     const progressionMode = preferences.advancedEnabled ? 'off' : preferences.progressionMode;
     const newEventEnabled = preferences.advancedEnabled || progressionMode !== 'off';
-    const stalledOutputs = Math.max(0, Number(pacingState?.progression?.turnsSinceMeaningfulProgress) || 0);
-    const progressPressure = stalledOutputs
-        ? `The last ${stalledOutputs} verified CHARACTER output${stalledOutputs === 1 ? '' : 's'} did not fully deliver material progress. This is routing pressure toward a concrete supported step, never evidence for an unsupported fact, event, relationship change, or time jump.`
-        : 'There is no accumulated verified progression stall.';
     const posture = 'Use the same evidence standard regardless of routing style. Select none only when the recent exchange affirmatively supports absence; select unclear when relevant evidence exists but is insufficient or contradictory. Do not turn desired next movement into an observed fact.';
-    const uncertainProgressionRule = {
-        conservative: 'When the scene is unclear or merely maintaining its state, prefer hold. Do not add movement only to avoid uncertainty.',
-        balanced: 'When the scene is unclear or merely maintaining its state, advance an already available thread by one modest step when possible; otherwise hold. Do not manufacture a new incident.',
-        active: 'An unclear or stable scene is not by itself a reason to hold. If any established thread, desire, obligation, location, relationship pressure, or genre-compatible opportunity can move, choose exactly one concrete advance, complication, favorable development, reveal, consequence, or transition. Hold only when movement would require inventing a major unsupported cause.',
-    }[preferences.judgmentStyle] || 'When the scene is unclear or merely maintaining its state, advance an already available thread by one modest step when possible; otherwise hold.';
-    const uncertainNpcRule = {
-        conservative: 'When need is unclear, select none and keep existing people in focus.',
-        balanced: 'When need is unclear, prefer an established suitable person; create a new NPC only for a concrete missing function.',
-        active: 'When the scene is stable or its immediate need is unclear, an NPC may still be routed when the enabled progression mode has a plausible concrete function for them. Prefer an established suitable person, and use create only when none can fill that function.',
-    }[preferences.judgmentStyle] || 'When need is unclear, prefer an established suitable person; create a new NPC only for a concrete missing function.';
     const relationshipDirectionRule = {
         hostile: 'The complete original CHARACTER_TO_USER_DEFAULT directive is fixed and active. Do not reinterpret, narrow, soften, summarize, or replace it. Judge only whether the current exchange supports an additional relationship change and how large that change may be.',
         positive: 'The fixed relationship directive establishes basic goodwill. Do not count that baseline as new progress; select movement toward closeness only when this exchange adds concrete reciprocal trust, openness, reliance, intimacy, or commitment. Real conflict or betrayal may still support movement away.',
@@ -433,13 +415,6 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
                 unclear: 'The recent text does not establish the state reliably.',
             },
         },
-        conversation_tone: {
-            type: 'choice',
-            instructions: `Classify the dominant texture of the latest exchange without treating prose style as character emotion. ${posture}`,
-            criteria: {
-                neutral: 'The exchange is materially calm, ordinary, or neutral.', warm: 'Voluntary warmth, care, or ease dominates.', tense: 'Pressure, discomfort, friction, or guardedness dominates without overt hostility.', hostile: 'Overt antagonism, coercion, contempt, threat, or attack dominates.', intimate: 'Private emotional or physical closeness dominates.', action: 'Concrete physical action or urgent task execution dominates.', mixed: 'Two or more materially different tones are simultaneously central.', unclear: 'The tone genuinely cannot be distinguished.',
-            },
-        },
         relationship_motion: {
             type: 'choice',
             instructions: `Classify immediate relationship movement, not the overall relationship. If no earlier relationship state is available, select none rather than unclear. Do not infer closeness from proximity or genre alone. ${posture}`,
@@ -460,30 +435,22 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             instructions: `Classify romantic evidence conservatively. Attraction, sex, jealousy, possession, protection, proximity, or genre alone do not establish romantic love. ${posture}`,
             criteria: { none: 'No romantic evidence occurs.', attraction: 'Only attraction, sexual tension, jealousy, possession, or proximity is supported.', established: 'Explicit or accumulated character-specific romantic investment is evidenced.', counter: 'Concrete evidence weighs against romantic investment or reciprocity.', mixed: 'Romantic and counterevidence coexist.', unclear: 'The evidence cannot be distinguished.' },
         },
-        continuity_change: {
-            type: 'choice',
-            instructions: `Distinguish continuity from an actual state change in the latest exchange. ${posture}`,
-            criteria: { continuity: 'The prior state is materially continuing.', change: 'A concrete action, choice, disclosure, or consequence changes the state.', mixed: 'Some state changes while another important part continues.', none: 'There is no meaningful state comparison available.', unclear: 'Continuity versus change cannot be distinguished.' },
-        },
         counterevidence: {
             type: 'choice',
-            instructions: `Judge whether evidence materially limits the most positive or escalatory reading of the exchange. ${posture}`,
-            criteria: { none: 'No meaningful counterevidence appears.', weak: 'A limited cue mildly constrains the reading.', clear: 'Concrete evidence directly contradicts or limits the apparent change.', mixed: 'Evidence supports incompatible readings.', unclear: 'Counterevidence cannot be assessed.' },
-        },
-        ambiguity: {
-            type: 'choice',
-            instructions: `Classify interpretive ambiguity in the recent exchange. ${posture}`,
-            criteria: { low: 'The material facts and immediate state are reasonably clear.', material: 'At least one important motive, meaning, or state has multiple plausible readings.', high: 'Several central facts or meanings cannot be distinguished.', unclear: 'There is too little material to assess ambiguity.' },
+            instructions: 'Does observed RP contain concrete evidence that limits a proposed increase in trust, intimacy, romance, or relationship closeness? Judge the observation only; an OOC direction or desired next beat is not evidence.',
+            criteria: {
+                none: 'No material limiting evidence is present.',
+                limited: 'A specific reservation or contrary cue limits the size or meaning of the change.',
+                clear: 'Concrete conduct directly contradicts the proposed escalation.',
+                mixed: 'Supporting and limiting evidence both materially matter.',
+                unclear: 'Relevant evidence exists, but its meaning cannot be distinguished reliably.',
+                not_applicable: 'No closer relationship interpretation is being considered.',
+            },
         },
         unresolved: {
             type: 'choice',
             instructions: `Identify the dominant unresolved element still active at the end of the recent exchange. ${posture}`,
             criteria: { none: 'No material unresolved element remains.', relationship: 'A relationship question or emotional issue remains.', conflict: 'An interpersonal confrontation or grievance remains.', goal: 'An action, task, decision, or objective remains.', information: 'A clue, secret, uncertainty, or needed explanation remains.', danger: 'An immediate threat or survival pressure remains.', multiple: 'Several unresolved elements are equally central.', unclear: 'The unresolved element cannot be distinguished.' },
-        },
-        time_relation: {
-            type: 'choice',
-            instructions: 'Infer the current scene\'s temporal relation to the previous established scene. Prioritize explicit info blocks or timestamps, then dialogue, activity, location, routine, and environmental cues. Select first_scene when no previous scene is present. Never equate message count with elapsed in-world time and never invent precision.',
-            criteria: { first_scene: 'No earlier established scene is available for comparison.', immediate: 'The scene is a direct continuation with no meaningful gap.', minutes: 'A short gap of minutes to tens of minutes is supported.', hours: 'A gap of several hours within roughly the same day is supported.', next_day: 'An overnight or next-day transition is supported.', days: 'A gap of multiple days is supported.', weeks_months: 'A gap of weeks to months or longer is supported.', unclear: 'A previous scene exists but no reliable temporal relation can be inferred.' },
         },
         context_change_source: {
             type: 'choice',
@@ -593,7 +560,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     }[preferences.relationshipPace] || 'Allow a proportionate relationship change when the current exchange contains concrete reciprocal causes.';
     questions.relationship_pacing = {
         type: 'choice',
-        instructions: `Choose both the direction and permitted amount of relationship movement for the next response. The user's fixed relationship direction remains active regardless of this choice. ${relationshipDirectionRule} ${relationshipRule}`,
+        instructions: `Choose the direction and maximum amount of relationship movement permitted in the NEXT response. This is a plan, not proof that the movement has occurred. Base it on actual RP conduct, the established relationship, relevant counterevidence, and the selected relationship pace. The fixed relationship direction remains active. Do not create love, trust, consent, reconciliation, or rupture merely to satisfy a pace setting. Commit a change to stored state only after the following CHARACTER output actually enacts it and verification confirms it. ${relationshipDirectionRule} ${relationshipRule}`,
         criteria: {
             hold: 'Keep the current relationship state; this exchange adds no sufficient cause for change at the selected pace.',
             closer_incremental: 'One small increase in openness, trust, intimacy, cooperation, or favorable regard is supported.',
@@ -635,7 +602,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
 
     questions.primary_focus = {
         type: 'choice',
-        instructions: `Choose the single primary function for the next response. Immediate danger and already-started action outrank new material; a direct user question or choice outranks optional intervention. Do not let a new event or NPC interrupt a meaningful active relationship exchange without a concrete cause. ${progressPressure} ${preferences.judgmentStyle === 'active' ? 'When several choices fit, prefer the one that produces a concrete genre-appropriate change now instead of passive maintenance; this still permits only one primary beat.' : ''}`,
+        instructions: 'Choose the one function that should lead the next response. Finish an already-started action or answer the active interaction before adding optional material. A calm scene can still admit a causally available event or NPC; calmness alone is neither a reason to create one nor a reason to forbid one. If a proposed route is unavailable, preserve an executable direct response instead of treating the turn as empty.',
         criteria: {
             direct: 'Respond to the user\'s immediate speech, choice, or already-started action.',
             relationship: 'The active relationship question or interpersonal change should receive the main development.',
@@ -650,7 +617,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     if (progressionMode !== 'off') {
         questions.event_route = {
             type: 'choice',
-            instructions: `Route the stored primary event under the ${progressionMode} progression mode. A complication, clue, or consequence inside an active event is not a new event. New creation is allowed only when no stronger unfinished interaction or event would be displaced. ${progressPressure}`,
+            instructions: 'Decide what to do with the stored primary event. Continue an unfinished event when a concrete next step or consequence is available. Its clue, obstacle, contact, or consequence is progress within that event, not a new event. Choose create only when there is no incompatible active primary event, the setting provides a plausible route, and the scene has room for the configured probability roll. An event is not completed merely because it was absent from recent messages.',
             criteria: {
                 none: hasEvent ? 'Keep the stored event in the background this response without erasing it.' : 'No new event is appropriate.',
                 continue: hasEvent ? 'The stored event remains the primary event and should be acted on now.' : 'Do not select: no stored event exists.',
@@ -661,7 +628,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         };
         questions.progression_move = {
             type: 'choice',
-            instructions: `Choose at most one major progression function for the next response under the ${progressionMode} progression mode. This controls plot movement only and must not alter preset genre, tone, style, or setting. ${uncertainProgressionRule} ${progressPressure}`,
+            instructions: 'Choose one concrete plot function supported by the active scene, stored event, established consequences, or setting-compatible opportunity. In active mode, prefer an executable step over passive repetition, but do not manufacture a cause, force a time jump, or accelerate relationship change. If a new-event route fails, an existing event, relationship pressure, current interaction, or prior action may still move.',
             criteria: {
                 hold: 'The current interaction already has meaningful unfinished material and needs no added movement.',
                 advance: 'One existing aim, event, or thread should move through concrete action or consequence.',
@@ -676,7 +643,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     }
     questions.npc_route = {
         type: 'choice',
-        instructions: `Judge whether a general non-antagonist NPC is needed in the next response. Existing scene NPCs may act even when automatic plot progression is off. ${uncertainNpcRule}`,
+        instructions: 'Judge the need for a general Generated Cast NPC separately from the presence of registered Sheet Cast. A registered person being active does not prohibit another suitable NPC from entering. Prefer an established person who can fill the function; create someone new only when a concrete function lacks a suitable existing person and access is plausible. Mention or absence alone does not retire a stored NPC.',
         criteria: {
             none: 'No NPC action or entry is needed.',
             reuse: hasNpc ? 'The stored NPC can act or re-enter usefully now.' : 'A suitable NPC already established in the roleplay should act; no new profile is needed.',
@@ -759,7 +726,6 @@ ${lines.join('\n')}
 function eventPrompt(profile, route, role = 'primary') {
     if (!profile || !['create', 'continue', 'replace'].includes(route)) return '';
     return `<RP_EVENT_BEAT role="${role}" mode="${profile.mode}" phase="${profile.phase}">
-Event: ${profile.title}. Trigger: ${profile.trigger}. Goal: ${profile.goal}. Pressure: ${profile.pressure}. Resolution condition: ${profile.resolution}.
 ${profile.prompt}
 ${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or consequence. Keep the primary interaction central; do not force a full scene transition or resolution.' : ''}
 </RP_EVENT_BEAT>`;
@@ -792,11 +758,10 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     const castNames = new Set(sheetCastNames.map(name => String(name || '').trim().toLocaleLowerCase()).filter(Boolean));
     const generatedName = String(npcProfile?.name || npcProfile?.identityName || npcProfile?.characterName || '').trim().toLocaleLowerCase();
     const npcIsSheetCast = Boolean(generatedName && castNames.has(generatedName));
-    if (castNames.size && ['create','replace','reuse'].includes(decisions.npc_route)) blocks.push('<NPC_CAST_SCOPE>Registered sheet characters retain their established identity and are governed by the character selection, even when its current profile is stale or disabled. Generic NPC generation and behavior instructions apply only to other people. Never introduce a duplicate of a registered person.</NPC_CAST_SCOPE>');
+    if (castNames.size && ['create','replace','reuse'].includes(decisions.npc_route)) blocks.push('<NPC_CAST_SCOPE>Registered Sheet Cast retain their established identity, knowledge, and relationships. Generated Cast instructions apply only to other people; do not duplicate a registered person.</NPC_CAST_SCOPE>');
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
-Respond from the current character and scene rather than explaining or recapping the input. When supported, perform one concrete response, decision, refusal, action, next step, or immediate consequence. Do not repeat every input detail or append a generic question merely to hand continuation back. If further progress genuinely requires {{user}}'s unresolved response, stop on a live in-character action, pressure, attempt, or natural question without deciding {{user}}'s response or the outcome.
-Execute the selected move materially in this response. When the character has the motive, information, means, and opportunity, do not stop at intention, atmosphere, preparation, warning, near-action, or another question; complete one bounded causal step and show its immediate effect.
+Continue the active exchange through one concrete, character-consistent response, decision, refusal, action, or immediate consequence. Do not recap the input, stop at intention or warning when a supported step can be executed, or end on a question merely to hand back the turn. Leave {{user}}'s response and any outcome that depends on it open.
 </DIRECT_SCENE_EXECUTION>`);
 
     const relationshipMoves = {
@@ -831,9 +796,9 @@ Execute the selected move materially in this response. When the character has th
         const prompt = (MOVE_PROMPTS[settings.progressionMode] || MOVE_PROMPTS.natural)[move];
         const progressionRelevant = move !== 'hold' || ['event', 'new_event', 'transition'].includes(decisions.primary_focus);
         if (prompt && progressionRelevant) blocks.push(`<RP_PROGRESSION mode="${settings.progressionMode}">\n${prompt}\n</RP_PROGRESSION>`);
-        const npc = npcIsSheetCast ? '' : genreNpcPrompt(npcProfile, decisions.npc_route);
-        if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
     }
+    const npc = npcIsSheetCast ? '' : genreNpcPrompt(npcProfile, decisions.npc_route);
+    if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
     const npcExecution = npcIsSheetCast ? '' : npcExecutionPrompt(decisions);
     if (npcExecution) blocks.push(npcExecution);
 
@@ -856,7 +821,7 @@ Execute the selected move materially in this response. When the character has th
     if (settings.userMisfortune) worldBlocks.push(L.USER_MISFORTUNE);
     if (worldBlocks.length) conflictBlocks.push(L.INDEPENDENT_PERSPECTIVES, ...worldBlocks);
     if (conflictBlocks.length) {
-        const priority = settings.negativePriority ? '[Priority = highest among scene-reader directives. All relationship, event, genre, NPC, and pacing directives operate within these enabled negative-bias constraints and may not soften, compensate for, or cancel them.]\n' : '';
+        const priority = settings.negativePriority ? '[Priority: enabled negative-bias constraints cannot be cancelled by positive world or event routing. They do not rewrite a registered person\'s established knowledge, relationships, or characterization.]\n' : '';
         blocks.push(`<CONFLICT_PROGRESSION>\n${priority}${conflictBlocks.join('\n\n')}\n</CONFLICT_PROGRESSION>`);
     }
 

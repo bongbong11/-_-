@@ -204,12 +204,6 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
     const enabled = Array.isArray(preferences.advancedElements) && preferences.advancedElements.length
         ? preferences.advancedElements.filter((key) => ADVANCED_ELEMENTS[key])
         : ADVANCED_DEFAULT_ELEMENTS;
-    const styleRule = {
-        conservative: 'Require a clear existing cause or thread before opening a new event. Apparent safety strongly lowers entry, but does not erase an already established route.',
-        balanced: 'Allow a surprising event when the world, location, prior consequence, faction, or ordinary chance supplies a concrete causal route. Do not require explicit foreshadowing.',
-        active: 'Actively recognize setting-compatible openings, including latent routes into a calm scene. Still reject events that lack world compatibility, physical access, or scene capacity.',
-        very_active: 'Actively seek setting-compatible openings, including latent routes into calm scenes and plausible surprises. Keep the gate closed only when world compatibility, physical access, causal opportunity, or scene capacity is actually absent.',
-    }[preferences.advancedStyle] || 'Allow a surprising event when a concrete causal route exists.';
     const elementCriteria = { none: 'No enabled element should be used in this response.' };
     for (const key of enabled) elementCriteria[key] = `${ADVANCED_ELEMENTS[key]} is the single best fit for the available causal route and current scene.`;
     if (hasEvent && ADVANCED_ELEMENTS[eventElement] && !elementCriteria[eventElement]) {
@@ -218,7 +212,7 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
     return {
         advanced_entry: {
             type: 'choice',
-            instructions: `Judge whether advanced world activity can enter the immediate response. Expectedness is not required; causal compatibility is. Apparent safety lowers likelihood but never guarantees immunity. ${styleRule} World routing hint: ${worldHint || 'follow only the active setting and recent roleplay.'}`,
+            instructions: "Judge whether the selected world's rules and the actual scene permit an advanced development. Explicit foreshadowing is not required: location, ordinary chance, a faction's access, an earlier consequence, or a world condition may provide a plausible route. Apparent safety does not guarantee immunity. Reject a route when world compatibility, physical access, causal opportunity, or scene capacity is genuinely absent. This question identifies eligibility, not an event that has already occurred.",
             criteria: {
                 closed: 'No setting-valid cause, access route, or scene capacity exists for a new advanced development.',
                 latent: 'The scene looks calm or focused elsewhere, but a setting-valid event could enter through a concrete world, location, faction, consequence, or chance route.',
@@ -227,7 +221,7 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         },
         advanced_route: {
             type: 'choice',
-            instructions: `Choose one sparse advanced route. There is at most one stored primary event. A newly rolled event begins immediately and remains stored until the user ends it. ${hasEvent ? `Stored event: ${eventTitle}.` : 'No stored event exists.'}`,
+            instructions: `If a stored advanced event exists, decide whether it should take one concrete step now or remain stored without an injection. If none exists, choose create only when the entry is eligible and the scene has room; creation still requires the configured probability roll. A failed roll does not forbid an independent direct response or progress within another established thread. Do not silently replace or finish a stored event. ${hasEvent ? `Stored event: ${eventTitle}.` : 'No stored event exists.'}`,
             criteria: {
                 none: 'Use no advanced event instruction this response.',
                 continue: hasEvent ? 'The stored event should materially act, develop, or produce a consequence now.' : 'Do not select: no stored event exists.',
@@ -254,7 +248,7 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         },
         advanced_move: {
             type: 'choice',
-            instructions: 'Choose one immediate execution level. Do not select attack merely because threat or horror is enabled; require means, access, and opportunity. Do not select quiet when an already executed cause requires a consequence.',
+            instructions: 'Choose one bounded step for the selected event. A seed is a concrete first sign, not a full attack. Contact and attack require actual means, access, and opportunity. An executed cause may require an aftermath even when no new threat enters. Keep the selected move proportionate to the current scene and leave unresolved USER participation open.',
             criteria: {
                 quiet: 'Keep the event or world activity stored without an advanced injection this response.',
                 seed: 'Introduce only a first concrete sign, opportunity, or pressure.',
@@ -274,13 +268,11 @@ export function buildAdvancedInjection({ decisions, eventProfile }) {
     const move = decisions.advanced_move || 'advance';
     if (move === 'quiet') return '';
     const lines = [
-        `Active event: ${eventProfile.title}. Immediate basis: ${eventProfile.trigger}`,
         eventProfile.prompt,
         MOVE_PROMPTS[move] || MOVE_PROMPTS.advance,
     ];
     const entity = eventProfile.entity;
-    if (entity) lines.push(`Cast form: ${entity.form}; ${entity.label}. Purpose: ${entity.purpose}. Stake: ${entity.stake}. Constraint: ${entity.constraint}. Keep temporary participants compact; promote only a person who becomes causally important.`);
-    lines.push('Use only this response\'s relevant lines. Do not restate the event profile, expose the roll, or cover every enabled content element.');
+    if (entity && ['contact','attack','advance','obstacle'].includes(move)) lines.push(`Cast form: ${entity.form}. Purpose: ${entity.purpose}. Stake: ${entity.stake}. Constraint: ${entity.constraint}.`);
     return `<ADVANCED_PROGRESSION element="${eventProfile.element}" move="${move}" cause="${decisions.advanced_cause || 'existing'}">
 ${lines.join('\n')}
 </ADVANCED_PROGRESSION>`;

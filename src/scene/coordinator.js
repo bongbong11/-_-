@@ -66,10 +66,19 @@ export function coordinateDecisions(rec, details, decisions) {
         const direction = relation.startsWith('closer_') ? 'closer' : 'distant';
         const prior = Number(rec.pacingState?.relationship?.[direction]) || 0;
         const decisiveCurrent = direction === 'closer'
-            ? decisions.continuity_change === 'change' && (decisions.relationship_motion === 'closer' || decisions.trust_signal === 'positive' || decisions.intimacy_signal === 'positive')
-            : decisions.continuity_change === 'change' && (decisions.relationship_motion === 'distant' || decisions.trust_signal === 'negative' || decisions.intimacy_signal === 'negative' || decisions.romance_evidence === 'counter');
-        if (rec.preferences.relationshipPace === 'slow' && prior < 2 && !decisiveCurrent) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '느린 관계 속도·누적 원인 적용');
-        if (rec.preferences.relationshipPace === 'medium' && prior < 1 && !decisiveCurrent) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '중간 관계 속도·누적 원인 적용');
+            ? decisions.relationship_motion === 'closer' && !['limited', 'clear', 'mixed'].includes(decisions.counterevidence)
+            : decisions.relationship_motion === 'distant' &&
+                (decisions.trust_signal === 'negative' || decisions.intimacy_signal === 'negative' || decisions.romance_evidence === 'counter');
+        if (direction === 'closer' && ['limited', 'clear', 'mixed'].includes(decisions.counterevidence)) {
+            const blocked = decisions.counterevidence === 'clear';
+            overrideDecision(details, decisions, 'relationship_pacing', blocked ? 'hold' : 'closer_incremental',
+                blocked ? '실제 RP가 이번 가까워짐을 직접 반박' : '실제 RP의 반대 근거가 큰 관계 도약을 제한');
+            if (blocked) overrideDecision(details, decisions, 'relationship_beat', 'none', '반대 근거와 충돌하는 관계 비트 제외');
+        }
+        if (decisions.counterevidence !== 'clear') {
+            if (rec.preferences.relationshipPace === 'slow' && prior < 2 && !decisiveCurrent) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '느린 관계 속도·누적 원인 적용');
+            if (rec.preferences.relationshipPace === 'medium' && prior < 1 && !decisiveCurrent) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '중간 관계 속도·누적 원인 적용');
+        }
     }
 
     const readiness = decisions.resolution_readiness;

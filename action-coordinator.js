@@ -159,6 +159,9 @@ function secondaryScore(candidate, decisions, settings) {
         if (settings.resolutionPace === 'fast') score += 14;
         if (settings.resolutionPace === 'slow') score -= 10;
         if (candidate.isNew && settings.judgmentStyle === 'conservative') score -= 18;
+        // A Jev-approved new event must reach its configured probability roll.
+        // Otherwise the routine relationship beat always wins the only secondary slot.
+        if (candidate.isNew && settings.advancedEnabled && decisions.advanced_route === 'create') score += 30;
     }
     if (candidate.kind === 'relationship') score += settings.relationshipPace === 'fast' ? 10 : settings.relationshipPace === 'slow' ? -8 : 0;
     if (candidate.kind === 'conflict' && decisions.conflict_state === 'active') score += 15;

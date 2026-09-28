@@ -24,7 +24,7 @@ function prepareProfiles(rec, decisions, details) {
                 const chance = advancedChance(rec.preferences.advancedStyle);
                 rec.lastEventRoll = { roll, chance, opportunity: rec.sceneOpportunity, advanced: true, at: new Date().toISOString() };
                 if (roll <= chance && decisions.advanced_element !== 'none') {
-                    const world = selectedWorld(rec);
+                    const world = resolveWorld(rec);
                     rec.eventProfile = rollAdvancedEvent(decisions.advanced_element, { worldId: world.id, worldName: world.name, supernatural: decisions.advanced_world_rules === 'supernatural' });
                     const { entity, reused } = rollAdvancedEntity(rec.eventProfile, { existing: rec.advancedEntities });
                     if (entity) {
@@ -43,11 +43,12 @@ function prepareProfiles(rec, decisions, details) {
             rec.eventProfile.status = 'active';
         }
     }
-    if (rec.preferences.advancedEnabled) return prepareConflictProfiles(rec, decisions, details);
+    if (rec.preferences.advancedEnabled) return prepareStandardProfiles(rec, decisions, details, { includeEvent: false });
     return prepareStandardProfiles(rec, decisions, details);
 }
 
-function prepareStandardProfiles(rec, decisions, details) {
+function prepareStandardProfiles(rec, decisions, details, { includeEvent = true } = {}) {
+    if (includeEvent) {
     if (decisions.event_route === 'retire') {
         archiveCurrentEvent(rec, 'completed');
         rec.eventProfile = null;
@@ -70,6 +71,7 @@ function prepareStandardProfiles(rec, decisions, details) {
                 }
             }
         } else overrideDecision(details, decisions, 'event_route', 'continue', '저장된 중심 사건 계속');
+    }
     }
     if (decisions.villain_route === 'retire') {
         rec.villainProfile = null;
@@ -121,23 +123,5 @@ function prepareStandardProfiles(rec, decisions, details) {
     if (decisions.npc_route === 'background' && rec.npcProfile) rec.npcProfile.status = 'background';
 }
 
-function prepareConflictProfiles(rec, decisions, details) {
-    if (decisions.villain_route === 'retire') { rec.villainProfile = null; rec.lastVillainRoll = null; }
-    if (decisions.villain_route === 'replace') { rec.villainProfile = null; rec.lastVillainRoll = null; }
-    if (['create', 'replace'].includes(decisions.villain_route)) {
-        if (!rec.villainProfile) {
-            if (rec.lastVillainRoll?.opportunity === rec.sceneOpportunity) overrideDecision(details, decisions, 'villain_route', 'waiting', '같은 기회의 빌런 추첨 완료');
-            else {
-                const roll = 1 + Math.floor(Math.random() * 100);
-                rec.lastVillainRoll = { roll, chance: Number(rec.preferences.appearanceChance) || 10, opportunity: rec.sceneOpportunity, at: new Date().toISOString() };
-                if (roll <= rec.lastVillainRoll.chance) rec.villainProfile = { ...rollVillainProfile(), status: 'active', createdAt: new Date().toISOString() };
-                else overrideDecision(details, decisions, 'villain_route', 'waiting', '빌런 확률 추첨 대기');
-            }
-        } else overrideDecision(details, decisions, 'villain_route', 'continue', '저장된 빌런 계속');
-    }
-    if (['create', 'replace'].includes(decisions.npc_route)) overrideDecision(details, decisions, 'npc_route', 'none', '고급 전개의 사건 인물 조립 사용');
-}
-
-
-return {prepareProfiles, prepareStandardProfiles, prepareConflictProfiles};
+return { prepareProfiles, prepareStandardProfiles };
 }

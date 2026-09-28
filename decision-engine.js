@@ -1,7 +1,7 @@
 export const OBSERVATION_KEYS = new Set([
-    'advanced_world_rules', 'scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal',
-    'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity',
-    'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker',
+    'advanced_world_rules', 'scene_state', 'conflict_state', 'relationship_motion', 'trust_signal',
+    'intimacy_signal', 'romance_evidence', 'counterevidence',
+    'unresolved', 'event_state', 'event_valence', 'event_blocker',
     'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'context_change_source', 'continuity_trigger',
 ]);
 

@@ -200,24 +200,18 @@ async function analyzeAndSaveCharacter() {
     deps.updateActivity(`${name} 인물 시트 해석 중…`, { owner: activityOwner });
     await deps.loadReasonerProfiles(); job.assert();
     const extraction = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.PROFILE_SYSTEM,
-        { kind, name, sheet: source, output_contract: { text: 'Korean', inject_text: 'English', evidence: 'exact original quotation' } }, { maxTokens: 3200 });
+        { kind, name, sheet: source }, { maxTokens: 2200 });
     assertEditor();
-    const prepared = deps.prepareProfileItems(extraction.result, source);
-    taskStatus(prepared.items.length ? `시트 해석 완료 · ${prepared.items.length}개 항목의 Jev 근거 검증 중…` : '시트 해석 완료 · 검증할 후보 없음');
-    deps.updateActivity(prepared.items.length ? `${name} · Jev 검증 중…` : `${name} · 유효한 해석 후보 없음`, { owner: activityOwner });
+    const prepared = deps.prepareProfileItems(extraction.result);
+    taskStatus(`시트 해석 완료 · 영어 규칙 ${prepared.items.length}개`);
+    deps.updateActivity(`${name} · 규칙 저장 중…`, { owner: activityOwner });
     const sourceHash = await deps.sha256Hex(source);
     const analysisId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
-    const data = prepared.items.length ? await deps.callJev({
-        model: deps.JEV_MODEL,
-        state: { scope: deps.PROFILE_VERIFY_SYSTEM, kind, name, sheet: source, items: prepared.items },
-        questions: deps.buildProfileQuestions(prepared.items),
-    }, 30000, job.controller.signal) : { answers: {} };
     assertEditor();
     const currentEntry = characterEntries(kind).find((item) => item.id === targetId);
     if (targetId && (!currentEntry || deps.stableFingerprint(currentEntry) !== originalHash)) throw new deps.StaleRunError();
     if (deps.characterEditorKind === kind && deps.characterEditorId === targetId && String(deps.document.getElementById('sr-character-source')?.value || '').trim() !== source) throw new deps.StaleRunError();
-    const profile = deps.verifyProfileItems(prepared.items, data, { characterId: targetId, sourceHash, source, analysisId });
-    profile.rejected.push(...prepared.rejected);
+    const profile = deps.createProfile(prepared.items, { characterId: targetId, sourceHash, source, analysisId, rejected: prepared.rejected });
     const entry = { ...original, profile, sourceHash, updatedAt: new Date().toISOString() };
     const next = deps.normalizeCharacterStore(deps.characterStore);
     if (kind === 'persona') next.persona = entry;
@@ -226,7 +220,7 @@ async function analyzeAndSaveCharacter() {
         const index = next[key].findIndex((item) => item.id === entry.id);
         if (index >= 0) next[key][index] = entry; else next[key].push(entry);
     }
-    // Replace the old analysis only after Jev and server persistence both succeed.
+    // Replace the old analysis only after the new profile and server persistence succeed.
     await deps.saveCharacterStore(chatKey, next);
     job.assert();
     deps.characterStore = next;
@@ -337,6 +331,23 @@ function bindForm() {
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) deps.document.getElementById(id)?.addEventListener('change', event => deps.runUiTask(savePreference(key,event.target.checked)));
 
     deps.document.getElementById('sr-close')?.addEventListener('click', () => deps.dialog.close());
+    deps.document.getElementById('sr-copy-debug')?.addEventListener('click', () => deps.runUiTask((async () => {
+        const judgment = deps.record()?.lastJudgment;
+        if (!judgment) { deps.window.toastr?.warning?.('복사할 판정이 없습니다.', '씬판독기'); return; }
+        const tab = deps.dialog.querySelector('.sr-tab-panel.active')?.id?.replace('sr-tab-', '') || 'flow';
+        const related = (key) => tab === 'advanced' ? key.startsWith('advanced_') || ['primary_focus', 'secondary_focus', 'event_state', 'event_route'].includes(key)
+            : tab === 'conflict' ? ['conflict_state', 'fight_sustain', 'villain_route', 'npc_autonomy', 'npc_knowledge_fit', 'world_hostility', 'misfortune', 'negative_priority'].includes(key) || key.startsWith('verification_')
+                : tab === 'characters' ? key.startsWith('character_') || ['npc_route', 'npc_presence', 'npc_knowledge_fit'].includes(key)
+                    : true;
+        const details = Object.fromEntries(Object.entries(judgment.details || {}).filter(([key]) => related(key)).map(([key, value]) => [key, {
+            original: value.selected, confidence: value.certainty, final: value.effective, reason: value.rule || '',
+        }]));
+        const report = { tab, judgedAt: judgment.judgedAt, model: judgment.model,
+            jevOriginalChoices: Object.fromEntries(Object.entries(judgment.rawChoices || {}).filter(([key]) => related(key))), decisions: details,
+            actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification };
+        await deps.copyText(JSON.stringify(report, null, 2));
+        deps.window.toastr?.success?.('판정 원선택과 최종 조정 결과를 복사했습니다.', '씬판독기');
+    })()));
     deps.dialog.addEventListener('click', (event) => { if (event.target === deps.dialog) deps.dialog.close(); });
     deps.dialog.querySelectorAll('[data-sr-tab]').forEach((button) => button.addEventListener('click', () => {
         const target = button.dataset.srTab;

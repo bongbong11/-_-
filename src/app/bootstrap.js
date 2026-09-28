@@ -10,7 +10,7 @@ import { createDraws } from '../scene/draws.js';
 import { createResults } from '../ui/results.js';
 import { dialogTemplate } from '../ui/dialog-template.js';
 
-import { PROFILE_SYSTEM, PROFILE_VERIFY_SYSTEM, CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
+import { PROFILE_SYSTEM, CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
 import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
 import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, PACE_OPTIONS, buildQuestions, buildInjection } from '../../prompt-library.js';
@@ -24,7 +24,7 @@ import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecond
 import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from '../../continuity-engine.js';
 import { listConnectionProfiles, requestWithConnectionProfile } from '../../st-profile-reasoner.js';
 import { sha256Hex } from '../../security-utils.js';
-import { buildProfileQuestions, prepareProfileItems, verifyProfileItems, profileStatus, normalizeCharacterStore, selectActiveEntries, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
+import { prepareProfileItems, createProfile, profileStatus, normalizeCharacterStore, selectActiveEntries, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
 
 import { createJobScope, createWriteQueue, StaleRunError } from '../app/jobs.js';
 import { messageSnapshot, firstChangedMessage, attachSelectedOutput } from '../input/message-identity.js';
@@ -654,7 +654,6 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get saveSession() { return saveSession; },
     get ADVANCED_ELEMENTS() { return ADVANCED_ELEMENTS; },
     get PROFILE_SYSTEM() { return PROFILE_SYSTEM; },
-    get PROFILE_VERIFY_SYSTEM() { return PROFILE_VERIFY_SYSTEM; },
     get JEV_KEY_STORAGE() { return JEV_KEY_STORAGE; },
     get JEV_MODEL() { return JEV_MODEL; },
     get OWNER_PASSWORD_HASH() { return OWNER_PASSWORD_HASH; },
@@ -666,9 +665,8 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get archiveCurrentEvent() { return archiveCurrentEvent; },
     get availableWorlds() { return availableWorlds; }, set availableWorlds(value) { availableWorlds = value; },
     get backupList() { return backupList; }, set backupList(value) { backupList = value; },
-    get buildProfileQuestions() { return buildProfileQuestions; },
     get prepareProfileItems() { return prepareProfileItems; },
-    get verifyProfileItems() { return verifyProfileItems; },
+    get createProfile() { return createProfile; },
     get profileStatus() { return profileStatus; },
     get callJev() { return callJev; }, set callJev(value) { callJev = value; },
     get characterAnalysisSelection() { return characterAnalysisSelection; }, set characterAnalysisSelection(value) { characterAnalysisSelection = value; },
@@ -742,6 +740,18 @@ function createDialog() {
     dialog.id = 'scene-reader-dialog';
     dialog.innerHTML = dialogTemplate({optionsHtml, escapeHtml, WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, PACE_OPTIONS, ADVANCED_STYLES, ADVANCED_ELEMENTS});
     document.body.append(dialog);
+    // A modal dialog sits in the browser's top layer. Body-level toasts would
+    // render behind it regardless of z-index, so keep the shared toast container
+    // inside the dialog only while the dialog is open.
+    const syncToastLayer = () => {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        const target = dialog.open ? dialog : document.body;
+        if (container.parentElement !== target) target.append(container);
+    };
+    new MutationObserver(syncToastLayer).observe(document.body, { childList: true });
+    dialog.addEventListener('close', syncToastLayer);
+    dialog.addEventListener('toggle', syncToastLayer);
     bindForm();
     setFormValues();
     renderAll();
@@ -763,6 +773,8 @@ function openSceneReader() {
     setFormValues();
     renderAll();
     if (!dialog.open) dialog.showModal();
+    const toastContainer = document.getElementById('toast-container');
+    if (toastContainer && toastContainer.parentElement !== dialog) dialog.append(toastContainer);
     void loadReasonerProfiles();
 }
 
