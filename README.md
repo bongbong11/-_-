@@ -34,7 +34,7 @@
 
 ## 🧭 어떻게 작동하나요?
 
-씬판독기는 최근 RP를 그대로 읽고, 다음 응답에 필요한 **소수의 실행 지시만** 조립합니다.
+씬판독기는 최근 RP를 직접 읽고, 다음 응답에 필요한 **소수의 실행 지시만** 조립합니다.
 
 ~~~mermaid
 flowchart TD
@@ -87,9 +87,23 @@ SillyTavern/plugins/scene-reader-jev/package.json
 SillyTavern/plugins/scene-reader-jev/index.cjs
 ~~~
 
-#### Android · Termux에서 플러그인 설치
+### 3. 서버 플러그인 활성화
 
-아래 명령은 SillyTavern을 기본 위치인 `~/SillyTavern`에 설치한 경우입니다. 다른 위치에 설치했다면 첫 번째 `cd` 경로만 실제 SillyTavern 폴더로 바꾸세요.
+<code>config.yaml</code>에서:
+
+~~~yaml
+enableServerPlugins: true
+~~~
+
+로 설정하고 SillyTavern을 완전히 종료한 뒤 다시 시작합니다.
+
+> [!TIP]
+> <code>enableCorsProxy</code>는 켤 필요 없습니다.
+
+<details>
+<summary><strong>📱 Android · Termux 설치법 보기</strong></summary>
+
+아래 명령은 SillyTavern을 기본 위치인 `~/SillyTavern`에 설치한 경우입니다. 다른 위치에 설치했다면 `cd` 경로만 실제 SillyTavern 폴더로 바꾸세요.
 
 먼저 실행 중인 SillyTavern을 `Ctrl+C`로 종료한 뒤 Termux에 다음 명령을 한 줄씩 입력합니다.
 
@@ -115,17 +129,7 @@ unzip -o "$HOME/storage/downloads/scene-reader-jev-plugin-v0.4.0.zip" -d plugins
 
 처음 `termux-setup-storage`를 실행하면 Android의 파일 접근 권한을 허용해야 합니다.
 
-### 3. 서버 플러그인 활성화
-
-<code>config.yaml</code>에서:
-
-~~~yaml
-enableServerPlugins: true
-~~~
-
-로 설정하고 SillyTavern을 완전히 종료한 뒤 다시 시작합니다.
-
-Termux에서는 `config.yaml`을 다음처럼 열 수 있습니다.
+이어서 `config.yaml`을 엽니다.
 
 ~~~bash
 cd ~/SillyTavern
@@ -139,10 +143,9 @@ cd ~/SillyTavern
 bash start.sh
 ~~~
 
-> [!TIP]
-> <code>enableCorsProxy</code>는 켤 필요 없습니다.
->
-> SillyTavern의 최신 Android·Termux 기본 설치법은 [공식 안내](https://docs.sillytavern.app/installation/android-%28termux%29/)를 참고하세요.
+SillyTavern의 최신 Android·Termux 기본 설치법은 [공식 안내](https://docs.sillytavern.app/installation/android-%28termux%29/)를 참고하세요.
+
+</details>
 
 ### 4. Jev 연결
 
@@ -152,7 +155,7 @@ bash start.sh
 
 Jev 주소와 모델은 서버 플러그인에 고정되어 있습니다.
 
-- Endpoint: <code>https://api.typesafe.ai/v1/systemone</code>
+- Upstream API: <code>https://api.typesafe.ai/v1/systemone</code>
 - Model: <code>jev-latest</code>
 
 더 자세한 설치와 오류 코드는 [INSTALL.md](INSTALL.md)를 참고하세요.
@@ -338,7 +341,7 @@ extra.ooc_chat = true
 
 - 실제 OOC 본문은 메시지의 <code>mes</code>에서 읽음
 - <code>extra.ooc_instruction</code>은 OOC 본문으로 사용하지 않음
-- OOC-only에서는 Jev 씬 판독과 씬 주입을 건너뜀
+- `OOC-only 입력에서는 판독·주입 일시정지`를 켠 경우 Jev 씬 판독과 기존 씬 주입을 건너뜀
 
 ---
 
