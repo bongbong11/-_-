@@ -10,7 +10,7 @@ function sourceRevisionKey(rec, world) {
             caseSensitive: deps.worldInfoModule?.world_info_case_sensitive,
             wholeWords: deps.worldInfoModule?.world_info_match_whole_words,
         } : null,
-        characters: deps.characterStore.enabled ? [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases, anchors: entry.anchors, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, analysis: entry.analysis })) : [],
+        characters: deps.characterStore.enabled ? [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, profile: entry.profile })) : [],
     });
 }
 
@@ -47,10 +47,8 @@ function sourceUserRpForOutput(outputIndex) {
 
 async function postVerifiedCharacterOutput(rec, pending, verification, trigger) {
     const identity = sourceIdentityForPending(pending);
-    const backstageActive = rec.preferences.backstageEnabled && pending.backstageEnabled && deps.characterStore.enabled;
-    const offscreenPeople = backstageActive ? deps.backstagePeople(deps.characterStore, (pending.judgment?.characterTrace || []).filter(p=>p.final?.presence!=='absent').map(p=>p.id)) : [];
-    if (!(deps.settings.continuityEnabled || backstageActive) || !deps.settings.reasonerProfileId || !deps.connectionRequestService || !pending.outputText) return;
-    if ((!trigger || trigger === 'none') && !offscreenPeople.length) return;
+    if (!deps.settings.continuityEnabled || !deps.settings.reasonerProfileId || !deps.connectionRequestService || !pending.outputText) return;
+    if (!trigger || trigger === 'none') return;
     if (rec.lastReasonerSource?.outputFingerprint === identity.outputFingerprint
         && rec.lastReasonerSource?.assistantIndex === identity.assistantIndex
         && rec.lastReasonerSource?.sourceRevision === identity.sourceRevision) return;
@@ -63,9 +61,7 @@ async function postVerifiedCharacterOutput(rec, pending, verification, trigger) 
     rec.lastContinuityTrace = { status: 'analyzing', trigger, profileId: deps.settings.reasonerProfileId, sourceIdentity: identity, candidates: [] };
     const job = (async () => {
         try {
-            const data = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.REASONER_SYSTEM + (backstageActive ? '\n'+deps.BACKSTAGE_SYSTEM : ''), {
-                    offscreen_people: offscreenPeople.map(p=>({id:p.id,name:p.name,sheet:p.source.slice(0,3000),anchors:p.anchors})),
-                    backstage_jobs: backstageActive ? deps.normalizeBackstage(rec.backstage).jobs : [],
+            const data = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.REASONER_SYSTEM, {
                     memory_reference: pending.memoryReference || null,
                     trigger,
                     source_rp: sourceText,
@@ -80,15 +76,11 @@ async function postVerifiedCharacterOutput(rec, pending, verification, trigger) 
             if (deps.judgeInFlight) await deps.judgeCompletionPromise;
             const current = deps.record(true);
             const output = (deps.getContext().chat || [])[identity.assistantIndex];
-            if (generationToken !== deps.reasonerGeneration || !(deps.settings.continuityEnabled || current.preferences.backstageEnabled) || deps.settings.reasonerProfileId !== rec.lastContinuityTrace?.profileId
+            if (generationToken !== deps.reasonerGeneration || !deps.settings.continuityEnabled || deps.settings.reasonerProfileId !== rec.lastContinuityTrace?.profileId
                 || deps.stateChatKey() !== chatKey || sourceRevisionKey(current, deps.selectedWorld(current)) !== identity.sourceRevision
                 || !output || deps.stableFingerprint(String(output.mes || '')) !== identity.outputFingerprint) return;
             const candidates = deps.validateReasonerResult(data.result, { sourceText, continuity: deps.continuityView(current), sourceIdentity: identity });
             current.pendingContinuityCandidates = deps.settings.continuityEnabled ? candidates : [];
-            if (backstageActive) {
-                current.backstage = deps.normalizeBackstage(current.backstage);
-                current.backstage.proposals = deps.validateBackstage(data.result, offscreenPeople, sourceText, identity);
-            }
             current.lastContinuityTrace = { status: candidates.length ? 'pending_jev' : 'empty', trigger, profileId: deps.settings.reasonerProfileId, sourceIdentity: identity, candidates: candidates.map((item) => ({ type: item.type, label: item.label, evidence: item.evidence })) };
             await deps.persistChat();
             deps.renderAll();
@@ -122,9 +114,6 @@ async function commitPriorVerification(rec, decisions, run = null) {
     const verification = deps.verificationSummary(pending, decisions);
     const before = JSON.parse(JSON.stringify(pending.stateSnapshot || deps.reversibleStateSnapshot(rec)));
     const result = deps.commitVerifiedPlan(rec, pending, verification);
-    if (pending.generationMode === 'rp' && pending.backstageEnabled && rec.preferences.backstageEnabled) {
-        rec.backstage = deps.verifyBackstageDelivery(pending.preparedStateSnapshot?.backstage || rec.backstage, pending, verification, rec.sceneOpportunity);
-    }
     const followed = rec.continuity?.followups?.find((item) => item.id === pending.decisions?.selected_continuity_id);
     if (followed) {
         followed.lastOffered = rec.sceneOpportunity;
@@ -237,7 +226,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const mixedOoc = Boolean(context.metaGuidance.current);
     if (mixedOoc) deps.updateActivity('OOC 지시 확인 · RP와 분리해 판독 중…');
 
-    const waitingReasoner = (deps.settings.continuityEnabled || deps.preferences().backstageEnabled) ? deps.reasonerJobs.get(deps.stateChatKey()) : null;
+    const waitingReasoner = deps.settings.continuityEnabled ? deps.reasonerJobs.get(deps.stateChatKey()) : null;
     if (waitingReasoner) await Promise.race([waitingReasoner, new Promise((resolve) => setTimeout(resolve, 180))]).catch((error) => console.warn('[씬판독기] Reasoner 결과 대기 실패', error));
     run.assert();
     const rec = stagedRecord(deps.record(true));
@@ -290,12 +279,6 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         pacingState: { ...rec.pacingState, progression: rec.progressionState },
     });
     if (prefs.advancedEnabled) questions.advanced_world_rules = {type:'choice',instructions:'From explicit current world rules, recent RP and supplied memory only: are supernatural mechanisms established? A horror label alone does not establish ghosts, curses or exorcism. This is world evidence, never an invitation to invent.',criteria:{mundane:'No supported supernatural mechanics.',supernatural:'Supernatural mechanics are established and compatible with this setting.',unclear:'Insufficient world evidence.'}};
-    if (prefs.backstageEnabled && deps.characterStore.enabled) {
-        rec.backstage = deps.normalizeBackstage(rec.backstage);
-        rec.backstage.proposals = deps.activePendingCandidates(rec.backstage.proposals, {chatKey:run.identity,chat:deps.getContext().chat,sourceRevision:sourceKey});
-        Object.assign(questions, deps.backstageQuestions(rec.backstage, rec.sceneOpportunity));
-    }
-    const backstageBasis = structuredClone(deps.normalizeBackstage(rec.backstage));
     Object.assign(questions, deps.buildVerificationQuestions(rec.pendingPlan));
     if (deps.settings.continuityEnabled && rec.pendingPlan?.outputText) questions.continuity_trigger = {
         type: 'choice',
@@ -318,8 +301,17 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         .filter((item) => item?.final?.presence && item.final.presence !== 'absent')
         .map((item) => item.id);
     const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds);
-    if (deps.characterStore.enabled) Object.assign(questions, deps.buildCharacterTurnQuestions(activeCharacters, { franchiseWorld: deps.isFranchiseWorld(world) }));
-    const structuredCharacterContext = deps.characterStore.enabled ? deps.characterContext(activeCharacters, deps.characterStore.persona, transcript, rec.characterState?.knowledge || []) : null;
+    const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
+        selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
+        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona,
+    }) : [];
+    if (deps.characterStore.enabled) Object.assign(questions, deps.buildCharacterTurnQuestions(liveCharacters));
+    // The common scene router chooses who may enter; the sheet system owns how a registered person behaves.
+    if (deps.characterStore.enabled && deps.isFranchiseWorld(world)) questions.npc_identity_route = {
+        type: 'choice', instructions: 'If a new NPC is needed, choose a naturally present canon person, a setting-compatible original, an existing person, or a group. Presence must follow location, time, role, access, and continuity. Do not create a duplicate of a registered sheet character.',
+        criteria: { none: 'No NPC route.', reuse_existing: 'An established NPC fits.', canon_natural: 'A canon character naturally occupies the role.', original_major: 'A lasting original NPC fits.', original_minor: 'A temporary original NPC fits.', group: 'A group fits.' },
+    };
+    const structuredCharacterContext = liveCharacters.length ? { policy: deps.CHARACTER_LIVE_SYSTEM, people: liveCharacters } : null;
 
     deps.judgeInFlight = true;
     deps.judgeCompletionPromise = new Promise((resolve) => { deps.resolveJudgeCompletion = resolve; });
@@ -342,7 +334,6 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
-                backstage: prefs.backstageEnabled ? deps.normalizeBackstage(rec.backstage) : null,
                 pending_verification: rec.pendingPlan?.outputText ? { plan: { effects: rec.pendingPlan.effects, decisions: rec.pendingPlan.decisions }, source_user_rp: sourceUserRpForOutput(rec.pendingPlan.outputIndex), character_output: rec.pendingPlan.outputText } : null,
                 continuity_context: deps.settings.continuityEnabled ? { items: continuityContext.items, knowledge: continuityContext.knowledge, dependencies: continuityContext.dependencies } : null,
                 pending_continuity_candidates: pendingCandidates.map((candidate) => ({ id: candidate.id, type: candidate.type, label: candidate.label, evidence: candidate.evidence, data: candidate.data, sourceIdentity: candidate.sourceIdentity })),
@@ -364,7 +355,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         }
         const decisions = deps.effectiveMap(details);
         const priorVerification = await commitPriorVerification(rec, decisions, run);
-        const verifiedExternalCandidates = [...deps.verifiedSecondaryCandidates(pendingCandidates, decisions), ...(prefs.backstageEnabled ? deps.backstageCandidates(backstageBasis, decisions, rec.sceneOpportunity).filter(c=>rec.backstage?.jobs?.some(j=>j.id===c.id&&j.status==='result'&&j.lastOffered!==rec.sceneOpportunity)) : [])];
+        const verifiedExternalCandidates = deps.verifiedSecondaryCandidates(pendingCandidates, decisions);
         await commitContinuityCandidates(rec, pendingCandidates, decisions, details, run);
         run.assert();
         deps.deriveDependentDecisions(rec, details, decisions);
@@ -408,7 +399,6 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         if (!proposedIds.has('npc') && ['create', 'replace'].includes(decisions.npc_route)) decisions.npc_route = 'none';
         if (!proposedIds.has('villain') && ['create', 'replace'].includes(decisions.villain_route)) decisions.villain_route = 'none';
         const staged = stagedRecord(rec);
-        if (prefs.backstageEnabled && deps.characterStore.enabled) staged.backstage = deps.advanceBackstage(rec.backstage, decisions, {opportunity:rec.sceneOpportunity,evidenceKey:inputKey,generationMode:'rp',basis:backstageBasis});
         deps.prepareProfiles(staged, decisions, details);
         const preparedRoutes = {
             event_route: decisions.event_route,
@@ -432,9 +422,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         finalPlan.excluded = [...excludedById.values()];
         decisions.action_plan = deps.actionPlanSummary(finalPlan);
         const chosenExternal = verifiedExternalCandidates.find((item) => finalPlan.secondary?.id === `external:${item.id}`) || null;
-        const chosenBackstage = chosenExternal?.kind === 'backstage' ? chosenExternal : null;
-        const chosenContinuity = chosenBackstage ? null : chosenExternal;
-        if (chosenBackstage) decisions.selected_backstage_id = chosenBackstage.id;
+        const chosenContinuity = chosenExternal;
         if (chosenContinuity) decisions.selected_continuity_id = chosenContinuity.id;
         deps.coordinateCharacterDecisions(activeCharacters, details, decisions);
         if (!['create', 'replace', 'reuse'].includes(decisions.npc_route)) {
@@ -451,13 +439,15 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             details.npc_autonomy = { selected: npcActive ? 'yes' : 'no', effective: npcActive ? 'yes' : 'no', certainty: 1, threshold: 1, adjusted: false, conditional: true };
             decisions.npc_autonomy = details.npc_autonomy.effective;
         }
-        const characterTrace = deps.characterStore.enabled ? deps.buildCharacterTrace(activeCharacters, decisions) : [];
-        const characterBlock = deps.characterStore.enabled ? deps.buildCharacterInjection(activeCharacters, decisions, transcript) : '';
+        const resolvedCharacters = deps.characterStore.enabled ? deps.resolveLiveCharacterPlan(liveCharacters, decisions) : [];
+        const characterExecution = deps.buildCharacterInjection(resolvedCharacters);
+        const characterTrace = characterExecution.traces;
+        const characterBlock = characterExecution.text;
         const continuityBlock = deps.settings.continuityEnabled
             ? deps.buildContinuityInjection(deps.selectContinuityContext(deps.continuityView(rec), transcript, { opportunity: rec.sceneOpportunity }), chosenContinuity)
             : '';
-        const backstageBlock = deps.backstageInjection(chosenBackstage);
-        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: staged.npcProfile, eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock: [continuityBlock, backstageBlock].filter(Boolean).join('\n') });
+        const sheetCastNames = [...deps.characterStore.characters, ...deps.characterStore.npcs].flatMap(entry => [entry.name, ...(entry.aliases || [])]);
+        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: staged.npcProfile, eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock, sheetCastNames });
         const finalContinuityCacheKey = deps.settings.continuityEnabled
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
@@ -468,7 +458,6 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 inputKey,
                 sourceKey,
                 generationMode: 'rp',
-                backstageEnabled: prefs.backstageEnabled,
                 memoryReference: memory,
                 decisions: { ...decisions },
                 effects: deps.pendingPlanEffects(decisions),

@@ -3,11 +3,18 @@ import http from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import { prepareProfileItems, verifyProfileItems } from '../character-library.js';
 const require=createRequire(import.meta.url);
 const { chromium }=require('playwright');
 const root=path.resolve(import.meta.dirname,'..');
 const prefix='/scripts/extensions/third-party/scene-reader/';
-const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:null,history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true,analysis:{expertise_depth:'professional'}}],npcs:[{id:'wade',name:'Wade',source:'Wade is a businessman. He controls his son.',sourceVisibleToMain:false,analysis:{sheet_density:'sparse',expertise_depth:'working'},anchors:[{kind:'role',quote:'Wade is a businessman.',note:'사업가로 명시돼 있습니다.'}]}]}};
+const wadeSource='Name: Wade\nRole: Businessman.\nHe controls his son.';
+const wadeHash=createHash('sha256').update(wadeSource).digest('hex');
+const wadeItem=prepareProfileItems({items:[{id:'c1',kind:'relationship',target:'son',text:'아들의 선택을 통제하려는 경향이 있다.',inject_text:'Wade tends to control his son on family matters.',evidence:['He controls his son.']}]},wadeSource).items;
+const wadeAnswers=Object.fromEntries(['text_grounding','text_scope','inject_grounding','inject_scope'].map(key=>['profile_c1_'+key,{choice:key.includes('scope')?'bounded':'direct',confidence:.9}]));
+const wadeProfile=verifyProfileItems(wadeItem,{answers:wadeAnswers},{characterId:'wade',sourceHash:wadeHash,source:wadeSource,analysisId:'browser'});
+const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:null,history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true}],npcs:[{id:'wade',name:'Wade',source:wadeSource,sourceHash:wadeHash,sourceVisibleToMain:false,profile:wadeProfile}]}};
 const requests=[];
 const host=`<!doctype html><html><meta charset="utf-8"><style>:root{--SmartThemeBodyColor:#eee;--SmartThemeBlurTintColor:#25252b;--SmartThemeBorderColor:#666;--SmartThemeQuoteColor:#9cbfff}body{margin:0;background:#202025;color:var(--SmartThemeBodyColor);font:16px Arial}button,input,select,textarea{box-sizing:border-box;font:inherit}button{cursor:pointer}select,input,textarea{color:inherit;background:var(--SmartThemeBlurTintColor)}.menu_button{border:1px solid var(--SmartThemeBorderColor);border-radius:5px;padding:7px}.text_pole{width:100%;border:1px solid #666;padding:6px}.checkbox_label{display:flex;align-items:center;gap:6px}.checkbox_label input{width:auto}</style><link rel="stylesheet" href="${prefix}style.css"><div id="extensionsMenu"></div><div id="leftSendForm"><button id="extensionsMenuButton">wand</button></div><textarea id="send_textarea"></textarea><script>
 const listeners=new Map(), prompts={},macros={};
@@ -33,7 +40,7 @@ const server=http.createServer(async(req,res)=>{try{
         else if(req.url.endsWith('/characters'))store.characters=body.value;
         else if(req.url.endsWith('/chat'))store.chat=body.value;
         else if(req.url.endsWith('/history'))store.history=body.value;
-        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,{choice:key.startsWith('verification_')?'fulfilled':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none',anchor_0:'supported'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
+        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,{choice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
         res.end(JSON.stringify(result));return;
     }
     if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'application/javascript');res.end(await readFile(file));return;}
@@ -56,10 +63,8 @@ try{
         }
     }
     await page.setViewportSize({width:390,height:850});await page.locator('[data-sr-tab="characters"]').click();
-    await page.locator('[data-character-view-id="wade"]').click();await page.locator('#sr-character-analysis-result').getByText('사업가로 명시돼 있습니다.').waitFor();
-    await page.locator('#sr-character-analysis-result summary').click();
-    assert.match(await page.locator('#sr-character-analysis-result').innerText(),/관련 실무의 이해/);
-    await page.locator('#sr-character-analysis-result summary').click();
+    await page.locator('[data-character-view-id="wade"]').click();await page.locator('#sr-character-analysis-result').getByText('아들의 선택을 통제하려는 경향이 있다.').waitFor();
+    assert.match(await page.locator('#sr-character-analysis-result').innerText(),/시트 근거/);
     await page.locator('#sr-settings-button').click();await page.locator('#sr-memory-charm').check();await page.locator('#sr-memory-lorebook').check();
     await page.locator('#sr-reasoner-profile').selectOption('test-profile');
     await page.locator('[data-sr-tab="flow"]').click();
@@ -90,15 +95,20 @@ try{
     const charmRequest=requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeCharm).find(r=>r.body.state?.memory_reference);
     assert.ok(charmRequest?.body.state.memory_reference.entries.some(e=>e.sourceKind==='charm'),'Charm remains available when character lore is off');
     assert.ok(!charmRequest?.body.state.memory_reference.entries.some(e=>e.sourceKind==='lorebook'),'disabled character lore is not sent');
+    await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Wade enters the room.'});await mock.emit('MESSAGE_SENT',5);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.ok(requests.some(r=>r.body.state?.character_profiles?.people?.some(person=>person.name==='Wade' && person.profileCandidates.length)),'verified Wade items reach live Jev selection');
+    assert.match(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Wade: Wade tends to control his son on family matters\./,'the selected verified item reaches the final injection');
     await mkdir(path.join(root,'artifacts'),{recursive:true});await page.locator('[data-sr-tab="characters"]').click();await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(root,'artifacts','mobile-characters.png')});
     await page.evaluate(()=>{document.documentElement.style.setProperty('--SmartThemeBodyColor','#202020');document.documentElement.style.setProperty('--SmartThemeBlurTintColor','#f5f5f7');});await page.screenshot({path:path.join(root,'artifacts','mobile-light.png')});
     await page.locator('#sr-npc-sheet-new').evaluate(e=>e.closest('details').open=true);
     await page.locator('#sr-npc-sheet-new').click();
     await page.locator('#sr-character-name').fill('Mara');await page.locator('#sr-character-source').fill('Mara works as a gardener.');
     await page.locator('#sr-character-save').click();
-    await page.locator('#sr-character-editor').waitFor({state:'hidden'});
+    await page.locator('#sr-character-task-status').getByText('시트 저장됨 · 판정 필요').waitFor();
+    await page.locator('#sr-character-editor-cancel').click();
     assert.ok(store.characters.npcs.some(p=>p.name==='Mara'),'saved NPC reaches server transport');
-    await page.locator('[data-character-edit-id]').click();await page.locator('#sr-character-delete').click();
+    await page.locator('[data-character-view-id]').filter({hasText:'Mara'}).click();
+    await page.locator('#sr-character-analysis-result [data-character-edit-id]').click();await page.locator('#sr-character-delete').click();
     await page.locator('#sr-character-editor').waitFor({state:'hidden'});
     assert.equal(store.characters.npcs.some(p=>p.name==='Mara'),false);
     await page.locator('[data-sr-tab="advanced"]').click();await page.locator('#sr-world-new').evaluate(e=>e.closest('details').open=true);await page.locator('#sr-world-new').click();

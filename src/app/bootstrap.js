@@ -3,7 +3,6 @@ import { createOutputLifecycle } from '../app/output-lifecycle.js';
 import { createSceneExecution } from '../scene/execution.js';
 import { createUiController } from '../ui/controller.js';
 import { migrateKnowledge, continuityView, assignContinuity } from '../storage/knowledge.js';
-import { BACKSTAGE_SYSTEM, normalizeBackstage, backstagePeople, validateBackstage, backstageQuestions, advanceBackstage, backstageCandidates, backstageInjection, verifyBackstageDelivery } from '../backstage/planner.js';
 import { readCharm, readCharacterLorebooks, mergeMemory, linkedCharacterBooks, memoryStatusText } from '../memory/context.js';
 import { FALLBACKS, applyPolicy, fixedDecision, applyCharacterPolicy } from '../scene/policy.js';
 import { effectiveMap, overrideDecision, deriveDependentDecisions, coordinateDecisions, coordinateActionBudget, coordinateCharacterDecisions } from '../scene/coordinator.js';
@@ -11,7 +10,7 @@ import { createDraws } from '../scene/draws.js';
 import { createResults } from '../ui/results.js';
 import { dialogTemplate } from '../ui/dialog-template.js';
 
-import { ANCHOR_SYSTEM, normalizeAnchors, anchorQuestions, verifiedAnchors } from '../characters/anchors.js';
+import { PROFILE_SYSTEM, PROFILE_VERIFY_SYSTEM, CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
 import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
 import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, PACE_OPTIONS, buildQuestions, buildInjection } from '../../prompt-library.js';
@@ -25,7 +24,7 @@ import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecond
 import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from '../../continuity-engine.js';
 import { listConnectionProfiles, requestWithConnectionProfile } from '../../st-profile-reasoner.js';
 import { sha256Hex } from '../../security-utils.js';
-import { buildProfileQuestions, normalizeProfileAnalysis, normalizeCharacterStore, selectActiveEntries, buildCharacterTurnQuestions, characterContext, buildCharacterTrace, buildCharacterInjection } from '../../character-library.js';
+import { buildProfileQuestions, prepareProfileItems, verifyProfileItems, profileStatus, normalizeCharacterStore, selectActiveEntries, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
 
 import { createJobScope, createWriteQueue, StaleRunError } from '../app/jobs.js';
 import { messageSnapshot, firstChangedMessage, attachSelectedOutput } from '../input/message-identity.js';
@@ -68,7 +67,7 @@ const DEFAULTS = {
 };
 
 const CHAT_DEFAULTS = {
-    charmMemory: false, lorebookMemory: false, backstageEnabled: false,
+    charmMemory: false, lorebookMemory: false,
     worldDirection: 'natural',
     relationshipDirection: 'dynamic',
     negativePriority: false,
@@ -297,7 +296,7 @@ function record(create = false) {
         value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;
         value.preferences.advancedElements = [...new Set((Array.isArray(value.preferences.advancedElements) ? value.preferences.advancedElements : []).filter((key) => ADVANCED_ELEMENTS[key]))];
         if (!value.preferences.advancedElements.length) value.preferences.advancedElements = [...ADVANCED_DEFAULT_ELEMENTS];
-        for (const key of ['charmMemory', 'lorebookMemory', 'backstageEnabled', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune']) value.preferences[key] = Boolean(value.preferences[key]);
+        for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune']) value.preferences[key] = Boolean(value.preferences[key]);
         for (const key of ['appearanceChance', 'eventChance']) value.preferences[key] = Math.max(1, Math.min(100, Number(value.preferences[key]) || CHAT_DEFAULTS[key]));
         const pacing = value.pacingState && typeof value.pacingState === 'object' ? value.pacingState : {};
         const relation = pacing.relationship && typeof pacing.relationship === 'object' ? pacing.relationship : {};
@@ -437,7 +436,6 @@ async function callJev(body, timeoutMs = 30000, signal = null) {
 function reversibleStateSnapshot(rec) {
     return JSON.parse(JSON.stringify({
         pacingState: rec.pacingState,
-        backstage: normalizeBackstage(rec.backstage),
         characterState: rec.characterState,
         relationshipState: rec.relationshipState,
         observationState: rec.observationState,
@@ -508,7 +506,7 @@ let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAss
 });
 
 let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalCandidates, sourceUserRpForOutput, postVerifiedCharacterOutput, registerSceneOpportunity, commitPriorVerification, commitContinuityCandidates, runJudge, executeJudge} = createSceneExecution({
-    get BACKSTAGE_SYSTEM() { return BACKSTAGE_SYSTEM; },
+    get CHARACTER_LIVE_SYSTEM() { return CHARACTER_LIVE_SYSTEM; },
     get FALLBACKS() { return FALLBACKS; },
     get JEV_MODEL() { return JEV_MODEL; },
     get REASONER_SYSTEM() { return REASONER_SYSTEM; },
@@ -516,26 +514,21 @@ let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalC
     get StaleRunError() { return StaleRunError; },
     get actionPlanSummary() { return actionPlanSummary; },
     get activePendingCandidates() { return activePendingCandidates; },
-    get advanceBackstage() { return advanceBackstage; },
     get applyCharacterPolicy() { return applyCharacterPolicy; },
     get applyContinuityVerdicts() { return applyContinuityVerdicts; },
     get applyPolicy() { return applyPolicy; },
     get applyStoredInjection() { return applyStoredInjection; }, set applyStoredInjection(value) { applyStoredInjection = value; },
     get assignContinuity() { return assignContinuity; },
-    get backstageCandidates() { return backstageCandidates; },
-    get backstageInjection() { return backstageInjection; },
-    get backstagePeople() { return backstagePeople; },
-    get backstageQuestions() { return backstageQuestions; },
     get buildCharacterInjection() { return buildCharacterInjection; },
-    get buildCharacterTrace() { return buildCharacterTrace; },
+    get buildLiveCharacterPlan() { return buildLiveCharacterPlan; },
     get buildCharacterTurnQuestions() { return buildCharacterTurnQuestions; },
+    get resolveLiveCharacterPlan() { return resolveLiveCharacterPlan; },
     get buildContinuityInjection() { return buildContinuityInjection; },
     get buildInjection() { return buildInjection; },
     get buildPendingCandidateQuestions() { return buildPendingCandidateQuestions; },
     get buildQuestions() { return buildQuestions; },
     get buildVerificationQuestions() { return buildVerificationQuestions; },
     get callJev() { return callJev; }, set callJev(value) { callJev = value; },
-    get characterContext() { return characterContext; },
     get characterStore() { return characterStore; }, set characterStore(value) { characterStore = value; },
     get chatRecords() { return chatRecords; },
     get clearInjection() { return clearInjection; }, set clearInjection(value) { clearInjection = value; },
@@ -563,7 +556,6 @@ let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalC
     get linkedCharacterBooks() { return linkedCharacterBooks; },
     get lorebookRevisions() { return lorebookRevisions; },
     get memoryStatusText() { return memoryStatusText; },
-    get normalizeBackstage() { return normalizeBackstage; },
     get normalizeContinuity() { return normalizeContinuity; },
     get overrideDecision() { return overrideDecision; },
     get ownerPrompt() { return ownerPrompt; }, set ownerPrompt(value) { ownerPrompt = value; },
@@ -658,10 +650,11 @@ async function testConnection() {
     }
 }
 
-let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm} = createUiController({
+let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, saveCharacterEntry, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm} = createUiController({
     get saveSession() { return saveSession; },
     get ADVANCED_ELEMENTS() { return ADVANCED_ELEMENTS; },
-    get ANCHOR_SYSTEM() { return ANCHOR_SYSTEM; },
+    get PROFILE_SYSTEM() { return PROFILE_SYSTEM; },
+    get PROFILE_VERIFY_SYSTEM() { return PROFILE_VERIFY_SYSTEM; },
     get JEV_KEY_STORAGE() { return JEV_KEY_STORAGE; },
     get JEV_MODEL() { return JEV_MODEL; },
     get OWNER_PASSWORD_HASH() { return OWNER_PASSWORD_HASH; },
@@ -669,12 +662,14 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get OWNER_UNLOCK_STORAGE() { return OWNER_UNLOCK_STORAGE; },
     get StaleRunError() { return StaleRunError; },
     get SyntaxError() { return SyntaxError; },
-    get anchorQuestions() { return anchorQuestions; },
     get applyStoredInjection() { return applyStoredInjection; }, set applyStoredInjection(value) { applyStoredInjection = value; },
     get archiveCurrentEvent() { return archiveCurrentEvent; },
     get availableWorlds() { return availableWorlds; }, set availableWorlds(value) { availableWorlds = value; },
     get backupList() { return backupList; }, set backupList(value) { backupList = value; },
     get buildProfileQuestions() { return buildProfileQuestions; },
+    get prepareProfileItems() { return prepareProfileItems; },
+    get verifyProfileItems() { return verifyProfileItems; },
+    get profileStatus() { return profileStatus; },
     get callJev() { return callJev; }, set callJev(value) { callJev = value; },
     get characterAnalysisSelection() { return characterAnalysisSelection; }, set characterAnalysisSelection(value) { characterAnalysisSelection = value; },
     get characterEditorId() { return characterEditorId; }, set characterEditorId(value) { characterEditorId = value; },
@@ -698,10 +693,8 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get localStorage() { return localStorage; },
     get macroAvailable() { return macroAvailable; }, set macroAvailable(value) { macroAvailable = value; },
     get makeWorldHint() { return makeWorldHint; },
-    get normalizeAnchors() { return normalizeAnchors; },
     get normalizeCharacterStore() { return normalizeCharacterStore; },
     get normalizeContinuity() { return normalizeContinuity; },
-    get normalizeProfileAnalysis() { return normalizeProfileAnalysis; },
     get ownerPrompt() { return ownerPrompt; }, set ownerPrompt(value) { ownerPrompt = value; },
     get ownerUnlocked() { return ownerUnlocked; }, set ownerUnlocked(value) { ownerUnlocked = value; },
     get persistChat() { return persistChat; }, set persistChat(value) { persistChat = value; },
@@ -737,7 +730,6 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get updateActivity() { return updateActivity; }, set updateActivity(value) { updateActivity = value; },
     get updateKeyStatus() { return updateKeyStatus; }, set updateKeyStatus(value) { updateKeyStatus = value; },
     get updateStatus() { return updateStatus; }, set updateStatus(value) { updateStatus = value; },
-    get verifiedAnchors() { return verifiedAnchors; },
     get window() { return window; }
 });
 

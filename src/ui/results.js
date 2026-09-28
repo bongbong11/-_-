@@ -1,9 +1,9 @@
 import { continuityView } from '../storage/knowledge.js';
 import { memoryStatusText } from '../memory/context.js';
 import { DECISION_LABELS, EXECUTION_CORRECTION_PRIORITY } from '../../prompt-library.js';
-import { PROFILE_LABELS } from '../../character-library.js';
+import { ITEM_LABELS, currentProfileItems, profileStatus } from '../../character-library.js';
 import { normalizeContinuity } from '../../continuity-engine.js';
-import { CHARACTER_MEANINGS, displayValue, profileMeaning, verificationText } from './presentation.js';
+import { displayValue, verificationText } from './presentation.js';
 export function createResults({readState, document, getContext, record, ownerPrompt, escapeHtml, selectCharacter}) {
 function decisionTitle(key) {
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
@@ -27,54 +27,36 @@ function resultLabel(key, value) {
     return displayValue(DECISION_LABELS, key, value);
 }
 
-const CHARACTER_TURN_FIELDS = ['presence', 'knowledge', 'competence', 'access', 'certainty', 'trait', 'response', 'history'];
-const CHARACTER_TURN_TITLES = { presence: '장면 역할', knowledge: '지식 근거', competence: '현재 주제 능력', access: '실제 접근', certainty: '판단 확실성', trait: '성향 적용', response: '응답 방식', history: '과거 영향' };
 const CHARACTER_TURN_LABELS = {
-    presence: { absent: '부재', background: '배경 유지', active: '실제 실행' },
-    knowledge: { none: '근거 없음', observed: '직접 관찰', reported: '전달받음', public: '공개·생활 지식', role_based: '역할 근거', privileged: '명시된 특수 지식' },
-    competence: { unsupported: '특별 근거 없음', ordinary: '일반 수준', familiar: '익숙함', practical: '실무 가능', professional: '전문 수준' },
-    access: { none: '접근 없음', indirect: '간접 접근', direct: '직접 접근', privileged: '특수 접근' },
-    certainty: { none: '결론 불가', suspicion: '넓은 의심', bounded: '제한된 결론', confident: '구체적 판단 가능' },
-    trait: { none: '강조 없음', relevant: '현재 맥락에 적용', flattening_risk: '획일화 방지 필요' },
-    response: { none: '응답 없음', selective: '선별 반응', act: '행동 우선', speak: '대사 우선', withhold: '숨김·회피' },
-    history: { none: '사용 없음', influence: '행동에 자연 반영', callback: '구체적 과거 재등장' },
+    presence: { absent: '이번 응답에서 역할 없음', background: '배경에 머묾', active: '실제로 반응하거나 행동할 차례' },
+    direction: { none: '별도 행동 지시 없음', speak: '대사로 반응', act: '행동으로 반응', selective: '중요한 부분만 반응', withhold: '근거 있는 정보 제한', evade: '근거 있는 회피', deceive: '근거 있는 기만', withdraw: '장면에서 물러남', confront: '현재 쟁점에 맞섬' },
 };
-
-function characterTurnLabel(field, value) {
-    const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
-    return CHARACTER_TURN_LABELS[field]?.[value] || '판독 결과 없음';
-}
-
+function characterTurnLabel(field, value) { return CHARACTER_TURN_LABELS[field]?.[value] || '적용하지 않음'; }
 function renderCharacterTurnResults() {
-    const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
+    const {settings, characterStore} = readState();
     const root = document.getElementById('sr-character-turn-results');
     if (!root) return;
-    if (!characterStore.enabled) {
-        root.innerHTML = '<div class="sr-empty-small">인물 판정을 켜면 이번 턴 결과를 표시합니다.</div>';
-        return;
-    }
+    if (!characterStore.enabled) { root.innerHTML = '<div class="sr-empty-small">인물 판정을 켜면 이번 턴 결과를 표시합니다.</div>'; return; }
     const judgment = record()?.lastJudgment;
     const trace = judgment?.characterTrace || [];
-    if (!trace.length) {
-        root.innerHTML = '<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>';
-        return;
-    }
+    if (!trace.length) { root.innerHTML = '<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
     root.innerHTML = trace.map((person) => {
-        const audit = [];
-        const rows = CHARACTER_TURN_FIELDS.map((field) => {
-            const final = person.final?.[field] || (field === 'presence' ? 'absent' : 'none');
-            const detail = judgment.details?.[`character_${person.index}_${field}`];
-            const selected = detail?.selected ? characterTurnLabel(field, detail.selected) : '응답 없음';
-            const policy = detail?.policyEffective ? characterTurnLabel(field, detail.policyEffective) : characterTurnLabel(field, final);
-            const reason = detail?.rule || (detail?.fallbackApplied ? '확신도 부족·기본값 적용' : 'Jev 선택 유지');
-            const meta = settings.showConfidence && detail
-                ? `<small>Jev ${escapeHtml(selected)} → 확신 ${Math.round((Number(detail.certainty) || 0) * 100)}% / 기준 ${Math.round((Number(detail.threshold) || 0) * 100)}% → 기준 적용 ${escapeHtml(policy)} → 최종 ${escapeHtml(characterTurnLabel(field, final))} · ${escapeHtml(reason)}</small>`
-                : '';
-            if (meta) audit.push(`<div class="sr-decision-row"><span>${escapeHtml(CHARACTER_TURN_TITLES[field])}</span>${meta}</div>`);
-            return `<div class="sr-decision-row"><span>${escapeHtml(CHARACTER_TURN_TITLES[field])}</span><strong>${escapeHtml(CHARACTER_MEANINGS[field]?.[final] || '확인되지 않았습니다.')}</strong></div>`;
-        }).join('');
-        const kind = { character: '캐릭터', persona: '페르소나', npc: 'NPC' }[person.kind] || '인물';
-        return `<section class="sr-character-turn-card"><h4>${escapeHtml(person.name)} <small>${escapeHtml(kind)}</small></h4>${rows}${audit.length ? `<details class="sr-trace"><summary>판정 경로·확신도</summary>${audit.join('')}</details>` : ''}</section>`;
+        const prefix = 'character_' + person.index + '_';
+        const presence = judgment.details?.[prefix + 'presence'];
+        const direction = judgment.details?.[prefix + 'response_direction'];
+        const status = person.presence === 'active' ? '이번 응답에 적용' : person.presence === 'background' ? '배경 참고' : '미적용';
+        const audit = [presence && ['장면 역할',presence],direction && ['반응 방향',direction]].filter(Boolean).map(([label,detail]) =>
+            '<div class="sr-decision-row"><span>' + label + '</span><small>Jev ' + escapeHtml(String(detail.selected || '응답 없음')) + ' → 확신 ' + Math.round((Number(detail.certainty)||0)*100) + '% / 기준 ' + Math.round((Number(detail.threshold)||0)*100) + '% → 최종 ' + escapeHtml(String(detail.effective || '없음')) + ' · ' + escapeHtml(detail.rule || '선택 유지') + '</small></div>').join('');
+        const entry = [...characterStore.characters,...characterStore.npcs].find((item) => item.id === person.id);
+        const profileNames = (person.profileIds || []).map((id) => currentProfileItems(entry).find((item) => item.id === id)?.text).filter(Boolean);
+        const rows = [
+            ['이번 역할', characterTurnLabel('presence',person.presence)],
+            ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
+            ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
+            ['지식 접근 제외', (person.deniedIds || []).length ? person.deniedIds.length + '개 · 관련 행동 지시도 보류' : '없음'],
+            ['반응 방향', characterTurnLabel('direction',person.direction)],
+        ].map(([label,value]) => '<div class="sr-decision-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>').join('');
+        return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : '캐릭터') + ' · ' + status + '</small></h4>' + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + '</details>' : '') + '</section>';
     }).join('');
 }
 
@@ -227,14 +209,15 @@ function renderCharacterAnalysisBrowser() {
     selectCharacter(selected ? { kind: selected.kind, id: selected.id } : { kind: '', id: '' });
     list.innerHTML = entries.map((entry) => `<button type="button" class="sr-character-view${selected?.id === entry.id && selected?.kind === entry.kind ? ' active' : ''}" data-character-view-kind="${entry.kind}" data-character-view-id="${escapeHtml(entry.id)}" aria-pressed="${selected?.id === entry.id && selected?.kind === entry.kind}"><span>${escapeHtml(entry.name)}</span><small>${entry.kind === 'npc' ? 'NPC' : entry.kind === 'persona' ? '페르소나' : '캐릭터'}</small></button>`).join('') || '<div class="sr-empty-small">저장된 인물 없음</div>';
     if (!selected) { result.innerHTML = '<div class="sr-empty-small">시트를 저장하면 여기서 판독 기준을 확인할 수 있습니다.</div>'; return; }
-    const groups = [
-        ['시트에서 확인한 범위', [['sheet_density', '시트 정보량'], ['role_inference', '역할에서 추론할 범위'], ['trait_scope', '성향 적용 범위'], ['canon_status', '원작 인물 여부']]],
-        ['지식·능력·접근 경계', [['knowledge_scope', '지식 근거 범위'], ['expertise_depth', '명시된 전문성'], ['institutional_access', '기관·비밀 접근'], ['practical_competence', '실무 능력']]],
-        ['대화·행동 참고', [['speech_register', '말투'], ['initiative', '행동 성향'], ['disclosure_style', '정보 공개'], ['memory_precision', '기억 정밀도'], ['history_use', '과거 활용']]],
-    ];
-    const anchors = (selected.anchors || []).map(a => `<div class="sr-decision-row"><span>시트 근거 · ${escapeHtml({role:'역할',relationship:'관계',knowledge:'지식',access:'접근',trait:'성향'}[a.kind])}</span><strong>${escapeHtml(a.note)}</strong><small>${escapeHtml(a.quote)}</small></div>`).join('') || '<p class="sr-help">구체적인 시트 근거가 저장되어 있지 않습니다. 아래 분류만으로 전문 분야나 비밀 지식을 확정하지 않습니다.</p>';
-    const rows = anchors + '<details class="sr-trace"><summary>지식·성향·대화의 전체 기준</summary>' + groups.map(([heading, fields]) => `<div class="sr-section-divider">${heading}</div>${fields.map(([key, label]) => `<div class="sr-decision-row"><span>${label}</span><strong>${escapeHtml(profileMeaning(key, selected.analysis?.[key], PROFILE_LABELS))}</strong></div>`).join('')}`).join('') + '</details>';
-    result.innerHTML = `<div class="sr-character-analysis-head"><strong>${escapeHtml(selected.name)}</strong><button type="button" class="menu_button" data-character-edit-kind="${selected.kind}" data-character-edit-id="${escapeHtml(selected.id)}">시트 수정</button></div><p class="sr-help">저장된 기본 경계입니다. 고정 능력치나 매턴 주입문이 아닙니다. 실제 장면의 지식·반응은 위의 ‘이번 턴 인물 판정’에서 따로 확인하세요.</p><div class="sr-decision-row"><span>메인 RP 모델의 원본 시트 접근</span><strong>${selected.sourceVisibleToMain ? '이미 읽음' : '씬판독기에만 저장됨'}</strong></div>${rows}`;
+    const verified = currentProfileItems(selected);
+    const rejected = selected.profile?.rejected || [];
+    const rows = verified.map((item) => '<div class="sr-decision-row"><span>' + escapeHtml(ITEM_LABELS[item.kind] || item.kind) + (item.target ? ' · ' + escapeHtml(item.target) : '') + '</span><strong>' + escapeHtml(item.text) + '</strong><small>시트 근거: ' + item.evidence.map((ev) => escapeHtml(ev.quote)).join(' / ') + '</small></div>').join('');
+    const rejectedRows = rejected.map((item) => '<div class="sr-decision-row"><span>제외 · ' + escapeHtml(item.id) + '</span><strong>' + escapeHtml(item.reason) + '</strong></div>').join('');
+    result.innerHTML = '<div class="sr-character-analysis-head"><strong>' + escapeHtml(selected.name) + '</strong><button type="button" class="menu_button" data-character-edit-kind="' + selected.kind + '" data-character-edit-id="' + escapeHtml(selected.id) + '">시트 수정</button></div>'
+        + '<p class="sr-help">' + escapeHtml(profileStatus(selected)) + ' · 원본 시트는 메인 모델에 ' + (selected.sourceVisibleToMain ? '이미 보입니다.' : '자동으로 보이지 않습니다.') + '</p>'
+        + (rows || '<p class="sr-help">이번 시트에서 검증·적용할 수 있는 해석이 없습니다.</p>')
+        + (rejectedRows ? '<details class="sr-trace"><summary>제외된 후보와 이유</summary>' + rejectedRows + '</details>' : '');
+
 }
 
 function renderBackups() {
@@ -288,18 +271,7 @@ function renderContinuity() {
     root.innerHTML = rows.join('');
 }
 
-function renderBackstage() {
-    const {characterStore} = readState();
-    const root=document.getElementById('sr-backstage-results'); if(!root)return;
-    const rec=record();
-    if(!rec?.preferences?.backstageEnabled){root.textContent='사용 안 함 · 기존 배경 기록은 보존됩니다.';return;}
-    if(!characterStore.enabled){root.textContent='인물 판정을 먼저 켜세요.';return;}
-    const status={running:'준비·시도 진행 중',result:'배경 결과 있음 · 장면 전달 전',delivered:'출력에서 전달 확인'};
-    const jobs=rec.backstage?.jobs||[];
-    root.innerHTML=jobs.map(j=>`<div class="sr-decision-row"><span>${escapeHtml(j.name)} · ${escapeHtml(j.target)}</span><strong>${escapeHtml(status[j.status]||'검증 대기')}</strong><small>${j.pressure==='blocked'?'알려진 장애로 막혀 있음':'배경 시뮬레이션 · 실제 RP 관찰과 구분'}</small></div>`).join('') || '<p class="sr-help">근거가 있는 배경 활동을 기다리는 중입니다.</p>';
-}
 function renderAll() {
-    renderBackstage();
     const memoryNode = document.getElementById('sr-memory-status');
     if (memoryNode) memoryNode.textContent = memoryStatusText(record()?.preferences, record()?.lastJudgment?.memoryStatus);
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();

@@ -765,7 +765,7 @@ ${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or
 </RP_EVENT_BEAT>`;
 }
 
-export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '' }) {
+export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [] }) {
     const blocks = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
     if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
     const cadencePrompts = {
@@ -789,6 +789,10 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
     if (String(characterBlock || '').trim()) blocks.push(String(characterBlock).trim());
     if (String(continuityBlock || '').trim()) blocks.push(String(continuityBlock).trim());
+    const castNames = new Set(sheetCastNames.map(name => String(name || '').trim().toLocaleLowerCase()).filter(Boolean));
+    const generatedName = String(npcProfile?.name || npcProfile?.identityName || npcProfile?.characterName || '').trim().toLocaleLowerCase();
+    const npcIsSheetCast = Boolean(generatedName && castNames.has(generatedName));
+    if (castNames.size && ['create','replace','reuse'].includes(decisions.npc_route)) blocks.push('<NPC_CAST_SCOPE>Registered sheet characters retain their established identity and are governed by the character selection, even when its current profile is stale or disabled. Generic NPC generation and behavior instructions apply only to other people. Never introduce a duplicate of a registered person.</NPC_CAST_SCOPE>');
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
 Respond from the current character and scene rather than explaining or recapping the input. When supported, perform one concrete response, decision, refusal, action, next step, or immediate consequence. Do not repeat every input detail or append a generic question merely to hand continuation back. If further progress genuinely requires {{user}}'s unresolved response, stop on a live in-character action, pressure, attempt, or natural question without deciding {{user}}'s response or the outcome.
@@ -827,10 +831,10 @@ Execute the selected move materially in this response. When the character has th
         const prompt = (MOVE_PROMPTS[settings.progressionMode] || MOVE_PROMPTS.natural)[move];
         const progressionRelevant = move !== 'hold' || ['event', 'new_event', 'transition'].includes(decisions.primary_focus);
         if (prompt && progressionRelevant) blocks.push(`<RP_PROGRESSION mode="${settings.progressionMode}">\n${prompt}\n</RP_PROGRESSION>`);
-        const npc = genreNpcPrompt(npcProfile, decisions.npc_route);
+        const npc = npcIsSheetCast ? '' : genreNpcPrompt(npcProfile, decisions.npc_route);
         if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
     }
-    const npcExecution = npcExecutionPrompt(decisions);
+    const npcExecution = npcIsSheetCast ? '' : npcExecutionPrompt(decisions);
     if (npcExecution) blocks.push(npcExecution);
 
     // Keep the supplied Quick Reply blocks at the end as the most specific constraints.

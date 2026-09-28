@@ -107,14 +107,14 @@ const THRESHOLDS = {
 const CHOICE_THRESHOLDS = { villain_route: { retire: 0.88, replace: 0.90 }, npc_route: { retire: 0.84, replace: 0.86 } };
 
 export function applyPolicy(key, answer, judgmentStyle = 'balanced', allowedChoices = []) {
-    const fallback = String(key).startsWith('backstage_work_') ? 'hold' : String(key).startsWith('verification_') ? 'not_applicable' : (String(key).startsWith('continuity_candidate_') || String(key).startsWith('backstage_')) ? 'reject' : FALLBACKS[key];
+    const fallback = String(key).startsWith('verification_') ? 'not_applicable' : String(key).startsWith('continuity_candidate_') ? 'reject' : FALLBACKS[key];
     const result = applyDecisionPolicy({
         key,
         answer,
         style: judgmentStyle,
         allowedChoices,
         fallback: allowedChoices.includes(fallback) ? fallback : allowedChoices.includes('unclear') ? 'unclear' : allowedChoices.includes('not_applicable') ? 'not_applicable' : allowedChoices[0],
-        baseThreshold: String(key).startsWith('backstage_') ? 0.8 : THRESHOLDS[key] ?? (String(key).startsWith('verification_') ? 0.66 : 0.7),
+        baseThreshold: THRESHOLDS[key] ?? (String(key).startsWith('verification_') ? 0.66 : 0.7),
         choiceThreshold: CHOICE_THRESHOLDS[key],
     });
     result.policyEffective = result.effective;
@@ -127,9 +127,10 @@ export function fixedDecision(effective) {
 }
 
 export function applyCharacterPolicy(key, answer, judgmentStyle, allowedChoices) {
-    const suffix = key.split('_').at(-1);
-    const fallback = key === 'npc_identity_route' ? 'none' : ({ presence: 'absent', knowledge: 'none', competence: 'unsupported', access: 'none', certainty: 'none', trait: 'none', response: 'none', history: 'none' }[suffix] || allowedChoices[0]);
-    const result = applyDecisionPolicy({ key, answer, style: judgmentStyle, allowedChoices, fallback, baseThreshold: ['knowledge', 'competence', 'access', 'certainty'].includes(suffix) ? 0.66 : 0.59 });
+    const isAccess = /^character_\d+_context_access_\d+$/.test(key);
+    const fallback = key === 'npc_identity_route' ? 'none' : key.endsWith('_presence') ? 'absent' : 'none';
+    // Active play may change routing, never the evidence standard for information access.
+    const result = applyDecisionPolicy({ key, answer, style: isAccess ? 'balanced' : judgmentStyle, allowedChoices, fallback, baseThreshold: isAccess ? 0.75 : 0.59 });
     result.policyEffective = result.effective;
     result.coordinatorFinal = result.effective;
     return result;

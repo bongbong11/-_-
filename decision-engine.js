@@ -13,8 +13,7 @@ export const DIAGNOSTIC_KEYS = new Set([
 
 export function decisionPolicyKind(key) {
     if (String(key).startsWith('verification_') || String(key).startsWith('continuity_candidate_')) return 'verification';
-    if (String(key).startsWith('backstage_')) return 'verification';
-    if (OBSERVATION_KEYS.has(key) || /_knowledge$|_competence$|_access$|_certainty$/.test(key)) return 'observation';
+    if (OBSERVATION_KEYS.has(key) || /_knowledge$|_competence$|_access$|_certainty$|^character_\d+_context_access_\d+$/.test(key)) return 'observation';
     if (DIAGNOSTIC_KEYS.has(key)) return 'diagnostic';
     return 'routing';
 }
@@ -68,7 +67,6 @@ export function pendingPlanEffects(decisions = {}) {
     if (decisions.fight_sustain === 'yes' || decisions.primary_focus === 'conflict') effects.push('conflict');
     if (decisions.direct_execution === 'yes' || decisions.primary_focus === 'direct') effects.push('direct');
     if (decisions.selected_continuity_id) effects.push('continuity');
-    if (decisions.selected_backstage_id) effects.push('backstage');
     return [...new Set(effects)];
 }
 

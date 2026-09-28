@@ -163,6 +163,6 @@ export function coordinateCharacterDecisions(entries, details, decisions) {
         .sort((a, b) => Number(b.detail?.certainty || 0) - Number(a.detail?.certainty || 0));
     for (const item of active.slice(2)) {
         overrideDecision(details, decisions, `character_${item.index}_presence`, 'background', '한 응답의 주요 인물 실행을 최대 두 명으로 제한');
-        overrideDecision(details, decisions, `character_${item.index}_response`, 'none', '이번 응답의 초점 인물 아님');
+        overrideDecision(details, decisions, `character_${item.index}_response_direction`, 'none', '이번 응답의 초점 인물 아님');
     }
 }

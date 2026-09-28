@@ -4,22 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fixture } from './audit-v012.mjs';
-import { normalizeAnchors, verifiedAnchors } from '../../src/characters/anchors.js';
 import { readCharm, readCharacterLorebooks, linkedCharacterBooks, selectCharacterLoreEntries, mergeMemory, memoryStatusText } from '../../src/memory/context.js';
-import { advanceBackstage, backstageQuestions, backstageCandidates, verifyBackstageDelivery } from '../../src/backstage/planner.js';
 import { migrateKnowledge, continuityView, assignContinuity } from '../../src/storage/knowledge.js';
-import { profileMeaning, CHARACTER_MEANINGS, displayValue } from '../../src/ui/presentation.js';
-import { PROFILE_LABELS } from '../../character-library.js';
+import { displayValue } from '../../src/ui/presentation.js';
 const require=createRequire(import.meta.url);
 const storage=require('../../server-plugin/storage.cjs');
 
-const source='Wade is a businessman. He controls his son.';
-const anchors=normalizeAnchors({anchors:[{kind:'role',quote:'Wade is a businessman.',note:'사업가로 명시돼 있습니다.'},{kind:'knowledge',quote:'He is a physician.',note:'의사입니다.'}]},source);
-assert.equal(anchors.length,1);
-assert.equal(verifiedAnchors(anchors,{anchor_0:{choice:'supported',probabilities:{supported:0.9}}}).length,1);
-assert.equal(verifiedAnchors(anchors,{anchor_0:{choice:'supported',confidence:0.2}}).length,0);
-assert.match(profileMeaning('expertise_depth','professional',PROFILE_LABELS),/직업 분야에 한해/);
-assert.match(CHARACTER_MEANINGS.certainty.suspicion,/숨은 원인을/);
 assert.equal(displayValue({},'new','new_internal_code').includes('new_internal_code'),false);
 
 let calls=0;
@@ -40,7 +30,6 @@ assert.equal(mergeMemory(charm,lore,'B').entries.length,0);
 assert.equal((await readCharacterLorebooks(loreModule,loreContext,{identity:'A',recentRoleplay:'council',isCurrent:()=>false})).status,'stale');
 assert.equal((await readCharacterLorebooks({...loreModule,loadWorldInfo:()=>new Promise(()=>{})},loreContext,{identity:'A',recentRoleplay:'council',isCurrent:()=>true,timeoutMs:5})).status,'timeout');
 
-const proposal={id:'job',personId:'wade',name:'Wade',action:'contact',target:'council',timeRequirement:'after several hours'};
 // Linked books use key conditions and character filters without losing healthy books to a failed read.
 {
     const select = (entry, text, options={}) => selectCharacterLoreEntries([{uid:1,world:'book',content:'Reference',key:['council'],...entry}], 'A', text, options).entries.length;
@@ -88,17 +77,6 @@ const proposal={id:'job',personId:'wade',name:'Wade',action:'contact',target:'co
     assert.equal(f.run('record().lastJudgment'),null);
     assert.equal(f.run('record().pendingPlan.outputText'),'Actual output');
 }
-const bs={jobs:[],proposals:[proposal],seen:[]};
-assert.deepEqual(advanceBackstage(bs,{backstage_proposal_0:'accept'},{opportunity:1,evidenceKey:'ooc',generationMode:'ooc_debug'}).jobs,[]);
-let next=advanceBackstage(bs,{backstage_proposal_0:'accept'},{opportunity:1,evidenceKey:'input1'});assert.equal(next.jobs[0].status,'running');
-next=advanceBackstage(next,{backstage_work_0:'partial'},{opportunity:1,evidenceKey:'input1'});assert.equal(next.jobs[0].status,'running','same input cannot advance twice');
-assert.match(backstageQuestions(next,1).backstage_work_0.instructions,/Message count/);
-next=advanceBackstage(next,{backstage_work_0:'blocked'},{opportunity:1,evidenceKey:'input2'});assert.equal(next.jobs[0].status,'running');assert.equal(next.jobs[0].pressure,'blocked');
-next=advanceBackstage(next,{backstage_work_0:'partial'},{opportunity:2,evidenceKey:'input3'});assert.equal(next.jobs[0].source,'simulated_offscreen');
-assert.equal(backstageCandidates(next,{backstage_delivery_0:'accept'},2).length,1);
-next=verifyBackstageDelivery(next,{decisions:{selected_backstage_id:'job'},outputFingerprint:'out'},{backstage:'missed'},2);assert.equal(next.jobs[0].status,'result');assert.equal(backstageCandidates(next,{backstage_delivery_0:'accept'},2).length,0);
-next=verifyBackstageDelivery(next,{decisions:{selected_backstage_id:'job'},outputFingerprint:'out2'},{backstage:'fulfilled'},3);assert.equal(next.jobs[0].status,'delivered');
-
 const personState={continuity:{knowledge:[{factId:'letter',character:'Alice',source:'observed'}]}};
 migrateKnowledge(personState);assert.equal(personState.continuity.knowledge.length,0);assert.equal(continuityView(personState).knowledge[0].character,'Alice');
 assignContinuity(personState,{items:[],knowledge:[{factId:'letter',character:'Alice',source:'observed'},{factId:'rumor',character:'Bob',source:'reported'}]});assert.equal(personState.characterState.knowledge.length,2);assert.equal(personState.continuity.knowledge.length,0);
@@ -132,7 +110,7 @@ try {
     f.ctx.chat.push({is_user:false,mes:'This is an explanation, not RP.'});await f.run('onCharacterMessageReceived(4)');
     assert.equal(f.run('JSON.stringify(record().relationshipState)'),saved);
 }
-console.log('Unified regression passed: source-grounded profiles, memory, backstage, per-person knowledge, backup safety, complete decision lifecycle.');
+console.log('Unified regression passed: source-grounded profiles, memory, per-person knowledge, backup safety, complete decision lifecycle.');
 // Failed scene persistence cannot commit staged observations or leave the previous injection active.
 {
     const f=fixture();f.ctx.chat=[{is_user:true,mes:'She enters the station.'}];
@@ -152,17 +130,6 @@ console.log('Unified regression passed: source-grounded profiles, memory, backst
     assert.equal(f.run('record().preferences.judgmentStyle'),'active');
     assert.equal(f.run('record().relationshipState'),undefined);
     assert.equal((await f.run('loadStateHistory()')).length,0);
-}
-// A user editing any sheet field while Jev runs cannot save an obsolete result.
-{
-    const f=fixture();const fields=new Map();
-    f.sandbox.document.getElementById=id=>{if(!fields.has(id))fields.set(id,{value:'',checked:false,hidden:false,textContent:'',scrollIntoView(){}});return fields.get(id);};
-    f.run('showCharacterEditor("npc");');
-    fields.get('sr-character-name').value='Wade';fields.get('sr-character-source').value='Wade is a businessman.';
-    let finish;f.sandbox.mockJev=()=>new Promise(resolve=>{finish=resolve;});f.run('callJev=mockJev;');
-    const task=f.run('analyzeAndSaveCharacter()');
-    fields.get('sr-character-aliases').value='new alias';finish({answers:{}});await task;
-    assert.equal(f.run('characterStore.npcs.length'),0);
 }
 // Independent long operations own their toast; old completion timers cannot erase new progress.
 {
@@ -187,11 +154,5 @@ console.log('Failure/rollback/UI regression passed: failed writes, expired snaps
     f.ctx.chat[0].mes='Enter. (OOC: No reconciliation.)';
     f.run('record().preferences.relationshipPace="fast";');
     assert.equal(f.run('cachedJudgmentMatches(record(),recentContext(),currentInputKey(),true)'),false);
-}
-{
-    const f=fixture();
-    const ctx=f.run('characterContext([{id:"a",name:"Alice",source:"Alice works here.",aliases:[],analysis:{}}],null,"Alice enters.",[{character:"Alice",factId:"letter",summary:"Alice received the letter."},{character:"Bob",factId:"secret",summary:"Bob knows a secret."}])');
-    assert.equal(ctx.active[0].acquired_knowledge.length,1);
-    assert.equal(ctx.active[0].acquired_knowledge[0].factId,'letter');
 }
 console.log('Reuse/source regression passed: same swipe, changed OOC, changed pacing, separate person knowledge.');

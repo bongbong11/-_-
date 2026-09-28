@@ -39,7 +39,7 @@ function setFormValues() {
     setChecked('sr-user-misfortune', prefs.userMisfortune);
     setChecked('sr-enabled', deps.settings.enabled);
     setChecked('sr-auto', deps.settings.autoJudge);
-    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory'],['sr-backstage-enabled','backstageEnabled']]) setChecked(id, prefs[key]);
+    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) setChecked(id, prefs[key]);
     setChecked('sr-continuity-enabled', deps.settings.continuityEnabled);
     deps.renderReasonerProfiles();
     setValue('sr-recent-turns', deps.settings.recentTurns);
@@ -125,6 +125,8 @@ function showCharacterEditor(kind, entry = null) {
     const visibleToggle = deps.document.getElementById('sr-character-source-visible');
     if (visibleToggle) visibleToggle.checked = entry ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc';
     deps.document.getElementById('sr-character-delete').hidden = !entry;
+    const status = deps.document.getElementById('sr-character-task-status');
+    if (status) status.textContent = entry ? deps.profileStatus(entry) : '시트를 저장한 뒤 인물 판정을 실행할 수 있습니다.';
     editor.scrollIntoView?.({ block: 'nearest' });
 }
 
@@ -136,11 +138,52 @@ function closeCharacterEditor() {
     if (editor) editor.hidden = true;
 }
 
+function characterForm() {
+    return { kind: deps.characterEditorKind,
+        name: String(deps.document.getElementById('sr-character-name')?.value || '').trim(),
+        source: String(deps.document.getElementById('sr-character-source')?.value || '').trim(),
+        aliases: String(deps.document.getElementById('sr-character-aliases')?.value || '').split(',').map(v => v.trim()).filter(Boolean),
+        sourceVisibleToMain: Boolean(deps.document.getElementById('sr-character-source-visible')?.checked) };
+}
+function taskStatus(message, error = false) {
+    const node = deps.document.getElementById('sr-character-task-status');
+    if (node) { node.textContent = message; node.dataset.error = error ? 'true' : 'false'; }
+}
+async function saveCharacterEntry() {
+    const form = characterForm();
+    if (!form.kind || !form.name || (form.kind !== 'npc' && !form.source)) throw new Error('이름과 시트 원문을 입력하세요.');
+    const targetId = deps.characterEditorId;
+    const current = characterEntries(form.kind).find(item => item.id === targetId);
+    const sourceHash = form.source ? await deps.sha256Hex(form.source) : '';
+    const entry = { ...current, ...form, id: targetId || `${form.kind}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, sourceHash, updatedAt: new Date().toISOString() };
+    const next = deps.normalizeCharacterStore(deps.characterStore);
+    if (form.kind === 'persona') next.persona = entry;
+    else {
+        const key = form.kind === 'npc' ? 'npcs' : 'characters';
+        const index = next[key].findIndex(item => item.id === entry.id);
+        if (index < 0) next[key].push(entry); else next[key][index] = entry;
+    }
+    await deps.saveCharacterStore(deps.stateChatKey(), next);
+    deps.characterStore = deps.normalizeCharacterStore(next);
+    deps.characterEditorId = entry.id;
+    characterEditorRevision++;
+    deps.document.getElementById('sr-character-delete').hidden = false;
+    invalidatePreparedJudgment();
+    await deps.persistChat(); await deps.clearInjection();
+    deps.renderCharacterStore();
+    taskStatus(deps.profileStatus(entry));
+    deps.window.toastr?.success?.('시트를 저장했습니다.', '씬판독기');
+    return entry;
+}
+
 async function analyzeAndSaveCharacter() {
     const kind = deps.characterEditorKind;
     const targetId = deps.characterEditorId;
+    if (!targetId) { taskStatus('시트를 먼저 저장하세요.', true); throw new Error('시트를 먼저 저장하세요.'); }
     const chatKey = deps.stateChatKey();
     const original = characterEntries(kind).find((item) => item.id === targetId);
+    if (!original?.source?.trim()) { taskStatus('판독할 시트 원문이 없습니다.', true); throw new Error('판독할 시트 원문이 없습니다.'); }
+    if (!deps.settings.reasonerProfileId) { taskStatus('설정에서 시트 분석용 연결 프로필을 선택하세요.', true); throw new Error('설정에서 시트 분석에 사용할 연결 프로필을 선택하세요.'); }
     const originalHash = original ? deps.stableFingerprint(original) : '';
     const job = deps.jobs.begin(`sheet:${kind}:${targetId || 'new'}`);
     const revision = characterEditorRevision;
@@ -151,31 +194,31 @@ async function analyzeAndSaveCharacter() {
         if (revision !== characterEditorRevision || signature !== characterFormSignature()) throw new deps.StaleRunError();
     };
     try {
-    const name = String(deps.document.getElementById('sr-character-name')?.value || '').trim();
-    const source = String(deps.document.getElementById('sr-character-source')?.value || '').trim();
-    const aliases = String(deps.document.getElementById('sr-character-aliases')?.value || '').split(',').map((v) => v.trim()).filter(Boolean);
-    const sourceVisibleToMain = Boolean(deps.document.getElementById('sr-character-source-visible')?.checked);
-    if (!kind || !name || !source) throw new Error('이름과 시트 원문을 입력하세요.');
-    deps.updateActivity(`${name} 시트를 Jev가 구조화하고 있습니다…`, { owner: activityOwner });
-    let anchors = [];
-    if (deps.settings.reasonerProfileId) {
-        await deps.loadReasonerProfiles(); job.assert();
-        const extraction = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.ANCHOR_SYSTEM, { kind, name, sheet: source });
-        job.assert();
-        anchors = deps.normalizeAnchors(extraction.result, source);
-    }
-    const data = await deps.callJev({
+    const { name, source } = characterForm();
+    if (source !== original.source || name !== original.name || characterForm().sourceVisibleToMain !== original.sourceVisibleToMain || characterForm().aliases.join('|') !== (original.aliases || []).join('|')) throw new Error('수정한 시트를 먼저 저장하세요.');
+    taskStatus('연결 모델이 인물 시트를 해석하고 있습니다…');
+    deps.updateActivity(`${name} 인물 시트 해석 중…`, { owner: activityOwner });
+    await deps.loadReasonerProfiles(); job.assert();
+    const extraction = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.PROFILE_SYSTEM,
+        { kind, name, sheet: source, output_contract: { text: 'Korean', inject_text: 'English', evidence: 'exact original quotation' } }, { maxTokens: 3200 });
+    assertEditor();
+    const prepared = deps.prepareProfileItems(extraction.result, source);
+    taskStatus(prepared.items.length ? `시트 해석 완료 · ${prepared.items.length}개 항목의 Jev 근거 검증 중…` : '시트 해석 완료 · 검증할 후보 없음');
+    deps.updateActivity(prepared.items.length ? `${name} · Jev 검증 중…` : `${name} · 유효한 해석 후보 없음`, { owner: activityOwner });
+    const sourceHash = await deps.sha256Hex(source);
+    const analysisId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+    const data = prepared.items.length ? await deps.callJev({
         model: deps.JEV_MODEL,
-        state: { anchor_candidates: anchors, task: 'Character sheet boundary classification only. Do not summarize prose or invent missing biography.', kind, name, sheet: source },
-        questions: { ...deps.buildProfileQuestions(kind), ...deps.anchorQuestions(anchors) },
-    }, 30000, job.controller.signal);
+        state: { scope: deps.PROFILE_VERIFY_SYSTEM, kind, name, sheet: source, items: prepared.items },
+        questions: deps.buildProfileQuestions(prepared.items),
+    }, 30000, job.controller.signal) : { answers: {} };
     assertEditor();
     const currentEntry = characterEntries(kind).find((item) => item.id === targetId);
     if (targetId && (!currentEntry || deps.stableFingerprint(currentEntry) !== originalHash)) throw new deps.StaleRunError();
     if (deps.characterEditorKind === kind && deps.characterEditorId === targetId && String(deps.document.getElementById('sr-character-source')?.value || '').trim() !== source) throw new deps.StaleRunError();
-    const sourceHash = await deps.sha256Hex(source);
-    assertEditor();
-    const entry = { id: targetId || `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, kind, name, aliases, source, sourceVisibleToMain, sourceHash, anchors: deps.verifiedAnchors(anchors, data.answers), analysis: deps.normalizeProfileAnalysis(data), updatedAt: new Date().toISOString() };
+    const profile = deps.verifyProfileItems(prepared.items, data, { characterId: targetId, sourceHash, source, analysisId });
+    profile.rejected.push(...prepared.rejected);
+    const entry = { ...original, profile, sourceHash, updatedAt: new Date().toISOString() };
     const next = deps.normalizeCharacterStore(deps.characterStore);
     if (kind === 'persona') next.persona = entry;
     else {
@@ -194,8 +237,9 @@ async function analyzeAndSaveCharacter() {
     deps.characterAnalysisSelection = { kind, id: entry.id };
     deps.renderCharacterStore();
     deps.document.getElementById('sr-character-analysis-result')?.scrollIntoView?.({ block: 'nearest' });
-    deps.updateActivity(`${name} 판독을 저장했습니다.`, { done: true, owner: activityOwner });
+    deps.updateActivity(`${name} · ${deps.profileStatus(entry)}`, { done: true, owner: activityOwner });
     } catch (error) {
+        taskStatus(`판정 실패 · 기존 결과 보관 · ${error.message}`, !(error instanceof deps.StaleRunError));
         deps.updateActivity(error.message, { error: !(error instanceof deps.StaleRunError), done: error instanceof deps.StaleRunError, owner: activityOwner });
         if (!(error instanceof deps.StaleRunError)) { error.activityReported = true; throw error; }
     } finally { job.finish(); }
@@ -290,7 +334,7 @@ async function endActiveEvent() {
 }
 
 function bindForm() {
-    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory'],['sr-backstage-enabled','backstageEnabled']]) deps.document.getElementById(id)?.addEventListener('change', event => deps.runUiTask(savePreference(key,event.target.checked)));
+    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) deps.document.getElementById(id)?.addEventListener('change', event => deps.runUiTask(savePreference(key,event.target.checked)));
 
     deps.document.getElementById('sr-close')?.addEventListener('click', () => deps.dialog.close());
     deps.dialog.addEventListener('click', (event) => { if (event.target === deps.dialog) deps.dialog.close(); });
@@ -548,7 +592,6 @@ function bindForm() {
         rec.advancedEntities = [];
         rec.continuity = deps.normalizeContinuity(null);
         rec.characterState = {knowledge:[],revision:0};
-        rec.backstage = {jobs:[],proposals:[],seen:[]};
         rec.progressionState = {turnsSinceMeaningfulProgress:0,lastOutputFingerprint:""};
         rec.observedOpportunityKeys = []; rec.sceneOpportunity = 1;
         rec.lastVerification = null; rec.lastStateInput = null;
@@ -611,7 +654,8 @@ function bindForm() {
     })(), '인물 판정 설정을 저장하지 못했습니다.'));
     for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) deps.document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));
     deps.document.getElementById('sr-character-editor-cancel')?.addEventListener('click', closeCharacterEditor);
-    deps.document.getElementById('sr-character-save')?.addEventListener('click', () => deps.runUiTask(analyzeAndSaveCharacter(), '인물 시트를 판독·저장하지 못했습니다.'));
+    deps.document.getElementById('sr-character-save')?.addEventListener('click', () => deps.runUiTask(saveCharacterEntry(), '시트를 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-character-analyze')?.addEventListener('click', () => deps.runUiTask(analyzeAndSaveCharacter(), '인물 판정을 완료하지 못했습니다.'));
     deps.document.getElementById('sr-character-delete')?.addEventListener('click', () => deps.runUiTask(deleteCharacterEntry(), '인물 시트를 삭제하지 못했습니다.'));
     deps.dialog.addEventListener('click', (event) => {
         const view = event.target.closest('[data-character-view-id]');
@@ -666,5 +710,5 @@ function bindForm() {
 }
 
 
-return {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm};
+return {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, saveCharacterEntry, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm};
 }

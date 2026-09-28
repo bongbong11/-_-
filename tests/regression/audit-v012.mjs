@@ -3,14 +3,12 @@ import {createSceneExecution} from '../../src/scene/execution.js';
 import {createOutputLifecycle} from '../../src/app/output-lifecycle.js';
 import {createRepository} from '../../src/storage/repository.js';
 import * as knowledge from '../../src/storage/knowledge.js';
-import * as backstage from '../../src/backstage/planner.js';
 import * as memory from '../../src/memory/context.js';
 import * as policy from '../../src/scene/policy.js';
 import * as coordinator from '../../src/scene/coordinator.js';
 import { createDraws } from '../../src/scene/draws.js';
 import { createResults } from '../../src/ui/results.js';
 import * as presentation from '../../src/ui/presentation.js';
-import * as anchors from '../../src/characters/anchors.js';
 import { dialogTemplate } from '../../src/ui/dialog-template.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -26,6 +24,7 @@ import * as hooks from '../../continuity-hooks.js';
 import * as continuity from '../../continuity-engine.js';
 import * as profile from '../../st-profile-reasoner.js';
 import * as character from '../../character-library.js';
+import * as characterPrompts from '../../src/characters/prompts.js';
 import * as security from '../../security-utils.js';
 
 import * as jobs from '../../src/app/jobs.js';
@@ -35,7 +34,7 @@ const source = (await readFile(new URL('../../src/app/bootstrap.js', import.meta
 export function fixture() {
     const ctx = { characterId: 1, chatId: 'room-A', name1: 'User', name2: 'Hunter', chat: [], saveMetadata: async () => {} };
     const sandbox = {
-        createUiController,createSceneExecution,createOutputLifecycle,createRepository, ...knowledge, ...backstage, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...anchors, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...security,
+        createUiController,createSceneExecution,createOutputLifecycle,createRepository, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...security,
         currentContext: ctx, chat_metadata: {}, extension_settings: {},
         console, structuredClone, setTimeout, clearTimeout, AbortController, AbortSignal,
         jQuery() {}, document: { getElementById() { return null; } },
@@ -149,20 +148,6 @@ function result(id, detail) { results.push({ id, ...detail }); }
     result('empty_backup_retains_old_state',JSON.parse(remaining));
 }
 {
-    const f=fixture();
-    const inputs = {'sr-character-name':{value:'Alice'},'sr-character-source':{value:'Alice is a teacher.'},'sr-character-aliases':{value:''},'sr-character-source-visible':{checked:false}};
-    f.sandbox.document.getElementById = id => inputs[id] || null;
-    let release, started;
-    const ready=new Promise(r=>{started=r});
-    f.sandbox.mockJev=async()=>{started();return await new Promise(r=>{release=()=>r({answers:{}})})};
-    f.run(`record(true); characterStore=normalizeCharacterStore({enabled:true,npcs:[{id:'alice',name:'Alice',source:'Alice is a teacher.'},{id:'bob',name:'Bob',source:'Bob is a doctor.'}]}); characterEditorKind='npc'; characterEditorId='alice'; callJev=mockJev; saveCharacterStore=async()=>{};`);
-    const pending=f.run('analyzeAndSaveCharacter()');await ready;
-    f.run(`characterEditorId='bob';`); release();await pending;
-    const entries=JSON.parse(f.run('JSON.stringify(characterStore.npcs.map(({id,name,source})=>({id,name,source})))'));
-    assert.equal(entries.find(x=>x.id==='bob').name,'Bob'); assert.equal(entries.find(x=>x.id==='alice').name,'Alice');
-    result('sheet_save_target_changes_while_waiting',{entries});
-}
-{
     const c=continuity.emptyContinuity();
     c.items=[{id:'continuity:meeting',label:'Attend council meeting',owners:['Wade'],lifecycle:'confirmed',pressure:'none'}];
     c.followups=[{id:'f',relatedStateId:'continuity:meeting',action:'Wade asks his aide to prepare for the council meeting',reason:'An obligation exists',status:'available',executed:false,expiry:5,lastOffered:null}];
@@ -180,20 +165,5 @@ function result(id, detail) { results.push({ id, ...detail }); }
     await f.run(`rollbackChangedOutput(5,'deleted')`);
     assert.equal((await f.run('loadStateHistory()')).length,0);
     result('middle_delete_wrong_boundary',{removedIndex:1,eventArgument:5,historyStillPresent:true});
-}
-{
-    const f=fixture();
-    const calls=[];
-    f.sandbox.recordActivity=(message,options)=>calls.push({message,options});
-    f.sandbox.document.getElementById=id=>({'sr-character-name':{value:'Alice'},'sr-character-source':{value:'Teacher.'}}[id]||null);
-    let errorToast=false;
-    f.sandbox.window.toastr={error(){errorToast=true}};
-    f.sandbox.console={...console,error(){}};
-    f.run(`characterEditorKind='npc'; updateActivity=recordActivity; callJev=async()=>{throw new Error('Network failure')}; runUiTask(analyzeAndSaveCharacter());`);
-    await new Promise(resolve=>setTimeout(resolve,0));
-    assert.equal(errorToast,false);
-    assert.equal(calls.length,2);
-    assert.equal(calls.at(-1).options.error,true);
-    result('sheet_error_leaves_progress',{progressCalls:calls.length,progressEnded:false,separateErrorToast:true});
 }
 console.log(`Audit regression: ${results.length} scenarios passed.`);

@@ -1,0 +1,18 @@
+import { buildCore } from './profile.js';
+export function defaultCharacterStore() { return { schemaVersion: 5, enabled: false, characters: [], persona: null, npcs: [], updatedAt: null }; }
+export function normalizeCharacterStore(value) {
+    const base = defaultCharacterStore();
+    if (!value || typeof value !== 'object') return base;
+    const normalize = (entry, kind) => {
+        if (!entry || typeof entry !== 'object' || !String(entry.name || '').trim()) return null;
+        const result = { ...entry, id: String(entry.id || `${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}`), kind,
+            name: String(entry.name).trim(), source: String(entry.source || ''), aliases: [...new Set((Array.isArray(entry.aliases) ? entry.aliases : String(entry.aliases || '').split(',')).map(v => String(v).trim()).filter(Boolean))],
+            sourceVisibleToMain: Object.hasOwn(entry, 'sourceVisibleToMain') ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc', sourceHash: String(entry.sourceHash || '') };
+        // Legacy analyses stay in the record for backup/recovery, but never become verified items.
+        result.core = buildCore(result);
+        return result;
+    };
+    return { ...value, ...base, enabled: Boolean(value.enabled), updatedAt: value.updatedAt || null,
+        characters: (Array.isArray(value.characters) ? value.characters : []).map(e => normalize(e, 'character')).filter(Boolean),
+        persona: normalize(value.persona, 'persona'), npcs: (Array.isArray(value.npcs) ? value.npcs : []).map(e => normalize(e, 'npc')).filter(Boolean) };
+}
