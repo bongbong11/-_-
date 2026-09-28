@@ -8,7 +8,7 @@ import {
 } from '../../character-library.js';
 import { applyCharacterPolicy } from '../../src/scene/policy.js';
 import { buildInjection } from '../../prompt-library.js';
-import { parseNpcCandidates, parseNpcSheet } from '../../src/characters/npc-sheet.js';
+import { parseNpcCandidates, suggestNpcAliases } from '../../src/characters/npc-sheet.js';
 import { debugReportText } from '../../src/ui/debug-report.js';
 
 assert.match(PROFILE_SYSTEM, /A sparse sheet may produce 0–3 items/);
@@ -29,6 +29,9 @@ assert.equal(profile.items.length, 1);
 const entry = normalizeCharacterStore({
     enabled: true, npcs: [{ id: 'wade', name: 'Wade', source, sourceHash: 'hash-v2', profile }],
 }).npcs[0];
+assert.equal(entry.npcRole, 'mixed');
+assert.equal(normalizeCharacterStore({npcs:[{name:'Legacy villain',antagonist:true}]}).npcs[0].npcRole, 'villain');
+assert.equal(normalizeCharacterStore({npcs:[{name:'Helper',npcRole:'ally',antagonist:true}]}).npcs[0].antagonist, false);
 assert.equal(currentProfileItems(entry).length, 1);
 assert.equal(currentProfileItems({ ...entry, source: source + ' changed' }).length, 0);
 const plan = buildLiveCharacterPlan([entry], {
@@ -39,6 +42,7 @@ const plan = buildLiveCharacterPlan([entry], {
     transcript: 'Maybe Marcus stole it. Wade enters.',
 });
 assert.equal(plan[0].profileCandidates.length, 1);
+assert.equal(plan[0].npcRole, 'mixed');
 assert.ok(plan[0].contextCandidates.some(item => item.text === 'Maybe Marcus stole it.' && item.speaker === 'Olivia'));
 const questions = buildCharacterTurnQuestions(plan);
 assert.match(questions.character_0_profile_slot_1.criteria[plan[0].profileCandidates[0].id], /family decisions/);
@@ -85,7 +89,9 @@ const castOffPayload = buildInjection({
 });
 assert.match(castOffPayload, /Registered Sheet Cast retain their established identity/, 'ownership survives disabled individual analysis');
 assert.equal(parseNpcCandidates({npcs:[{name:'Wade',aliases:['Mr. Wade']},{name:'Rosa',aliases:[]}]},{existing:['Wade']}).length,1);
-assert.throws(() => parseNpcSheet({source:'ROLE / BACKGROUND: Wade is a businessman.'},'Wade'), /일곱 항목/);
+assert.deepEqual(suggestNpcAliases('Wade Rockwell', 'Alias: Mr. Rockwell\nRole: family head'), ['Wade', 'Mr. Rockwell']);
+assert.deepEqual(suggestNpcAliases('Wade Rockwell', 'Alias: Mr. Rockwell', ['Wade', 'Mr. Rockwell']), []);
+assert.deepEqual(suggestNpcAliases('민수', '역할: 동료'), []);
 const debugText = debugReportText({finalInjection:'Secret private text',request:{state:{recent_roleplay:'Contact me@example.com or 010-1234-5678; key sk-abcdefghijk12345.'}}},'Secret private text');
 assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|Secret private text/);
 

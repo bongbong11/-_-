@@ -186,7 +186,7 @@ function renderCharacterStore() {
     const setList = (id, entries, kind) => {
         const root = document.getElementById(id);
         if (!root) return;
-        root.innerHTML = entries.map((entry) => `<div class="sr-character-list-row"><button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}${entry.antagonist ? ' · 악역' : ''}</strong><small>${escapeHtml(profileStatus(entry))}</small></span><i class="fa-solid fa-pen"></i></button>${kind === 'npc' ? `<button type="button" class="menu_button" data-npc-generate-for="${escapeHtml(entry.id)}">${entry.source ? '다시 생성' : '시트 생성'}</button>` : ''}</div>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
+        root.innerHTML = entries.map((entry) => `<div class="sr-character-list-row"><button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}${kind === 'npc' ? ` · ${escapeHtml(({villain:'악역',ally:'선역',mixed:'양면'})[entry.npcRole] || '양면')}` : ''}</strong><small>${escapeHtml(profileStatus(entry))}</small></span><i class="fa-solid fa-pen"></i></button></div>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
     };
     const enabled = document.getElementById('sr-character-enabled');
     if (enabled) enabled.checked = characterStore.enabled;
@@ -215,7 +215,7 @@ function renderCharacterAnalysisBrowser() {
     const rows = items.map((item) => '<div class="sr-decision-row"><span>' + escapeHtml(ITEM_LABELS[item.kind] || item.kind) + (item.target ? ' · ' + escapeHtml(item.target) : '') + '</span><strong>' + escapeHtml(item.rule) + '</strong></div>').join('');
     const rejectedRows = rejected.map((item) => '<div class="sr-decision-row"><span>제외 · ' + escapeHtml(item.id) + '</span><strong>' + escapeHtml(item.reason) + '</strong></div>').join('');
     result.innerHTML = '<div class="sr-character-analysis-head"><strong>' + escapeHtml(selected.name) + '</strong><button type="button" class="menu_button" data-character-edit-kind="' + selected.kind + '" data-character-edit-id="' + escapeHtml(selected.id) + '">시트 수정</button></div>'
-        + '<p class="sr-help">' + escapeHtml(profileStatus(selected)) + ' · 원본 시트는 메인 모델에 ' + (selected.sourceVisibleToMain ? '이미 보입니다.' : '자동으로 보이지 않습니다.') + (selected.antagonist ? ' · 악역 설정' : '') + '</p>'
+        + '<p class="sr-help">' + escapeHtml(profileStatus(selected)) + ' · 원본 시트는 메인 모델에 ' + (selected.sourceVisibleToMain ? '이미 보입니다.' : '자동으로 보이지 않습니다.') + (selected.kind === 'npc' ? ' · 역할: ' + escapeHtml(({villain:'악역',ally:'선역',mixed:'양면'})[selected.npcRole] || '양면') : '') + '</p>'
         + '<p class="sr-help">아래 규칙은 상시 주입되지 않습니다. Jev가 다음 응답에 실제로 필요한 항목만 최대 두 개 고릅니다.</p>'
         + (rows || '<p class="sr-help">이번 시트에서 저장할 만한 개별 규칙이 없습니다.</p>')
         + (rejectedRows ? '<details class="sr-trace"><summary>제외된 후보와 이유</summary>' + rejectedRows + '</details>' : '');

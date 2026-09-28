@@ -35,7 +35,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.16.0');
+assert.equal(manifest.version, '0.16.1');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -559,7 +559,7 @@ assert.match(npcOverreachPayload, /hunch, suspicion, intuition/);
 
 const emptyCharacterStore = defaultCharacterStore();
 assert.equal(emptyCharacterStore.enabled, false);
-assert.equal(emptyCharacterStore.schemaVersion, 5);
+assert.equal(emptyCharacterStore.schemaVersion, 6);
 assert.equal(selectActiveEntries(emptyCharacterStore, 'Alice is here.', 'Alice').length, 0);
 const sheet = 'Name: Wade\nRole: Family patriarch and business owner.\nHe controls his son on family decisions.';
 const candidate = {id:'c1',kind:'relationship',topic:'family_decisions',target:'son',rule:'Wade tends to control his son on family decisions.'};

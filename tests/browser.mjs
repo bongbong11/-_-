@@ -26,7 +26,7 @@ window.eventSource={on(name,fn){if(!listeners.has(name))listeners.set(name,[]);l
 const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/favicon.ico'){res.statusCode=204;res.end();return;}
     if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end(host);return;}
-    if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}};export async function generateQuietPrompt(){window.mock.quietCalls=(window.mock.quietCalls||0)+1;return JSON.stringify({name:'Wade',aliases:[],source:'ROLE / BACKGROUND: Wade is a businessman.\\nRELATIONSHIP: He is the family patriarch.\\nCORE LOGIC: He presses family interests through direct decisions.\\nPERSONALITY / INTERACTION: He listens before acting.\\nVOICE: He speaks plainly.\\nKNOWLEDGE / ACCESS: His business role does not grant access to private medical records.\\nFRICTION / CONTRADICTION: Family loyalty can conflict with his need for control.'})}`);return;}
+    if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}}`);return;}
     if(req.url==='/scripts/extensions.js'){res.setHeader('Content-Type','application/javascript');res.end('export const extension_settings={};');return;}
     if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){return window.mock.worldBooks[name]||null}");return;}
     if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('Find named individual NPCs'))return {content:JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
@@ -67,15 +67,18 @@ try{
     await page.locator('[data-character-view-id="wade"]').click();await page.locator('#sr-character-analysis-result').getByText('Wade tends to control his son on family matters.').waitFor();
     await page.locator('#sr-tab-characters details').filter({hasText:'NPC 시트'}).first().locator('summary').click();
     await page.locator('#sr-npc-sheet-new').click();
-    await page.locator('#sr-character-name').fill('Rosa');
-    await page.locator('#sr-character-save').click();
-    await page.locator('[data-npc-generate-for]').last().click();
-    await page.waitForFunction(()=>document.getElementById('sr-character-source').value.includes('FRICTION / CONTRADICTION:'));
-    assert.equal(await page.evaluate(()=>mock.quietCalls),1,'NPC sheet generation uses one quiet main-model call');
-    assert.equal(await page.evaluate(()=>mock.chat.length),0,'quiet NPC generation does not add a chat message');
+    assert.match(await page.locator('#sr-character-source').getAttribute('placeholder'),/지식·능력·접근권/,'NPC editor explains minimum sheet content only while empty');
+    assert.equal(await page.locator('#sr-character-npc-role').inputValue(),'mixed','new NPCs default to mixed');
+    await page.locator('#sr-character-name').fill('Rosa Valentine');
+    await page.locator('#sr-character-source').fill('Rosa is Hunter’s colleague. She knows office procedures but not private family secrets. She may help or oppose Hunter when her own interests change.');
+    await page.locator('#sr-character-npc-role').selectOption('ally');
     await page.locator('#sr-character-save').click();
     await page.waitForFunction(()=>document.getElementById('sr-character-task-status').textContent.includes('판독 필요'));
-    assert.ok(store.characters.npcs.some(entry=>entry.name==='Rosa' && entry.provenance?.origin==='main_model_quiet' && entry.provenance?.historicalFact===false),'generated sheet is saved as prospective character setting');
+    assert.ok(store.characters.npcs.some(entry=>entry.name==='Rosa Valentine' && entry.aliases.includes('Rosa') && entry.npcRole==='ally' && !entry.antagonist && entry.source.includes('private family secrets')),'manually entered sheet, ally role, and safe alias are saved');
+    await page.locator('#sr-character-npc-role').selectOption('villain');
+    await page.locator('#sr-character-save').click();
+    assert.ok(store.characters.npcs.some(entry=>entry.name==='Rosa Valentine' && entry.npcRole==='villain' && entry.antagonist),'changing the role updates the same registered NPC');
+    assert.equal(await page.evaluate(()=>mock.chat.length),0,'manual NPC sheet editing does not add a chat message');
     await page.locator('#sr-settings-button').click();await page.locator('#sr-memory-charm').check();await page.locator('#sr-memory-lorebook').check();
     await page.locator('#sr-reasoner-profile').selectOption('test-profile');
     await page.locator('[data-sr-tab="characters"]').click();

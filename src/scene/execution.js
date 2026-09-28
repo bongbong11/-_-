@@ -11,7 +11,7 @@ function sourceRevisionKey(rec, world) {
             wholeWords: deps.worldInfoModule?.world_info_match_whole_words,
         } : null,
         characters: [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases,
-            ...(deps.characterStore.enabled ? { sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, antagonist: entry.antagonist, coreEnglish: entry.coreEnglish, profile: entry.profile } : {}) })),
+            ...(deps.characterStore.enabled ? { sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, npcRole: entry.npcRole, antagonist: entry.antagonist, coreEnglish: entry.coreEnglish, profile: entry.profile } : {}) })),
     });
 }
 
@@ -312,7 +312,11 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         type: 'choice', instructions: 'If a new NPC is needed, choose a naturally present canon person, a setting-compatible original, an existing person, or a group. Presence must follow location, time, role, access, and continuity. Do not create a duplicate of a registered sheet character.',
         criteria: { none: 'No NPC route.', reuse_existing: 'An established NPC fits.', canon_natural: 'A canon character naturally occupies the role.', original_major: 'A lasting original NPC fits.', original_minor: 'A temporary original NPC fits.', group: 'A group fits.' },
     };
-    const structuredCharacterContext = liveCharacters.length ? { policy: deps.CHARACTER_LIVE_SYSTEM, people: liveCharacters } : null;
+    const structuredCharacterContext = liveCharacters.length ? {
+        policy: deps.CHARACTER_LIVE_SYSTEM,
+        npcRolePolicy: 'NPC villain, ally, or mixed is a broad role hint, not a personality or knowledge override. Use the sheet and actual RP to judge this person\'s specific motives and conduct. An ally may disagree; a villain may cooperate for a reason.',
+        people: liveCharacters,
+    } : null;
 
     deps.judgeInFlight = true;
     deps.judgeCompletionPromise = new Promise((resolve) => { deps.resolveJudgeCompletion = resolve; });
@@ -335,7 +339,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
-                registered_sheet_cast: [...deps.characterStore.characters, ...deps.characterStore.npcs].map(entry => ({ name: entry.name, aliases: entry.aliases || [], antagonist: Boolean(entry.antagonist) })),
+                registered_sheet_cast: [...deps.characterStore.characters, ...deps.characterStore.npcs].map(entry => ({ name: entry.name, aliases: entry.aliases || [], ...(entry.kind === 'npc' ? { npc_role_hint: entry.npcRole || (entry.antagonist ? 'villain' : 'mixed') } : {}) })),
                 pending_verification: rec.pendingPlan?.outputText ? { plan: { effects: rec.pendingPlan.effects, decisions: rec.pendingPlan.decisions }, source_user_rp: sourceUserRpForOutput(rec.pendingPlan.outputIndex), character_output: rec.pendingPlan.outputText } : null,
                 continuity_context: deps.settings.continuityEnabled ? { items: continuityContext.items, knowledge: continuityContext.knowledge, dependencies: continuityContext.dependencies } : null,
                 pending_continuity_candidates: pendingCandidates.map((candidate) => ({ id: candidate.id, type: candidate.type, label: candidate.label, evidence: candidate.evidence, data: candidate.data, sourceIdentity: candidate.sourceIdentity })),

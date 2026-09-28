@@ -1,14 +1,15 @@
 import { buildCore } from './profile.js';
-export function defaultCharacterStore() { return { schemaVersion: 5, enabled: false, characters: [], persona: null, npcs: [], updatedAt: null }; }
+export function defaultCharacterStore() { return { schemaVersion: 6, enabled: false, characters: [], persona: null, npcs: [], updatedAt: null }; }
 export function normalizeCharacterStore(value) {
     const base = defaultCharacterStore();
     if (!value || typeof value !== 'object') return base;
     const normalize = (entry, kind) => {
         if (!entry || typeof entry !== 'object' || !String(entry.name || '').trim()) return null;
+        const npcRole = kind === 'npc' && ['villain', 'ally', 'mixed'].includes(entry.npcRole) ? entry.npcRole : entry.antagonist ? 'villain' : 'mixed';
         const result = { ...entry, id: String(entry.id || `${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}`), kind,
             name: String(entry.name).trim(), source: String(entry.source || ''), aliases: [...new Set((Array.isArray(entry.aliases) ? entry.aliases : String(entry.aliases || '').split(',')).map(v => String(v).trim()).filter(Boolean))],
             sourceVisibleToMain: Object.hasOwn(entry, 'sourceVisibleToMain') ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc', sourceHash: String(entry.sourceHash || ''),
-            antagonist: kind === 'npc' && Boolean(entry.antagonist), provenance: entry.provenance && typeof entry.provenance === 'object' ? entry.provenance : null,
+            npcRole: kind === 'npc' ? npcRole : '', antagonist: kind === 'npc' && npcRole === 'villain', provenance: entry.provenance && typeof entry.provenance === 'object' ? entry.provenance : null,
             coreEnglish: kind === 'npc' ? String(entry.coreEnglish || '').trim() : '' };
         // Legacy analyses stay in the record for backup/recovery, but never become verified items.
         result.core = buildCore(result);

@@ -41,7 +41,7 @@ export function fixture() {
         jQuery() {}, document: { getElementById() { return null; } },
         fetch: async () => ({ok:true,json:async()=>({ok:true})}),
         window: {}, localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
-        saveSettingsDebounced() {}, setExtensionPrompt: async () => {}, getRequestHeaders() { return {}; }, generateQuietPrompt: async () => '',
+        saveSettingsDebounced() {}, setExtensionPrompt: async () => {}, getRequestHeaders() { return {}; },
         eventSource: {}, event_types: {},
     };
     sandbox.SillyTavern = { getContext: () => sandbox.currentContext };

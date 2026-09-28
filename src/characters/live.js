@@ -48,7 +48,7 @@ export function buildLiveCharacterPlan(entries = [], { selected = [], transcript
         const profileCandidates = currentProfileItems(entry).map(item => ({
             id: item.id, kind: item.kind, topic: item.topic, target: item.target, rule: item.rule,
         }));
-        return { index, id: entry.id, name: entry.name, kind: entry.kind, antagonist: Boolean(entry.antagonist), sourceVisibleToMain: entry.sourceVisibleToMain, core: buildCore(entry), coreEnglish: entry.coreEnglish || '',
+        return { index, id: entry.id, name: entry.name, kind: entry.kind, npcRole: entry.kind === 'npc' ? entry.npcRole || (entry.antagonist ? 'villain' : 'mixed') : '', antagonist: Boolean(entry.antagonist), sourceVisibleToMain: entry.sourceVisibleToMain, core: buildCore(entry), coreEnglish: entry.coreEnglish || '',
             profileCandidates, contextCandidates: contextItems(entry, selected, knowledge, memory, transcript),
             sourceExcerpt: profileIsCurrent(entry) ? selectRelevantChunks(entry.source, transcript, 1)[0] || '' : '',
             // Persona stays a reference and is never an autonomous response target.
