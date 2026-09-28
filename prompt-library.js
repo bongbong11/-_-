@@ -51,12 +51,12 @@ export const DECISION_LABELS = {
     ambiguity: { low: '해석이 비교적 명확', material: '중요한 모호성 있음', high: '판정 곤란', unclear: '불명확' },
     unresolved: { none: '뚜렷한 미해결 없음', relationship: '관계 문제', conflict: '갈등', goal: '목표·행동', information: '정보·비밀', danger: '위협·위기', multiple: '여러 요소', unclear: '불명확' },
     time_relation: { first_scene: '비교할 이전 장면 없음', immediate: '직전 장면에서 즉시 연속', minutes: '수분~수십 분 후', hours: '몇 시간 후', next_day: '다음날', days: '며칠 후', weeks_months: '수주~수개월 후', unclear: '실제로 판별 불가' },
-    event_state: { none: '진행 중인 중심 사건 없음', introduced: '사건 도입', active: '사건 진행 중', turning: '전환점', resolution_ready: '해결 조건 마련됨', aftermath: '해결 후 여파' },
-    event_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립' },
-    event_blocker: { none: '뚜렷한 방해 없음', information: '정보·단서 부족', action: '실제 행동 필요', choice: '결정·선택 필요', resource: '시간·자원 부족', resistance: '인물·세력의 저항', external: '외부 방해' },
-    resolution_readiness: { none: '해결 근거 없음', partial: '일부 조건 충족', core: '핵심 조건 충족', decisive: '결정적 행동 실행됨' },
-    npc_presence: { none: '활성 NPC 없음', mentioned: '언급만 됨', present: 'NPC가 장면에 참여 중', entering: 'NPC의 등장·접촉이 확정됨', multiple: '여러 NPC가 참여 중' },
-    npc_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립' },
+    event_state: { none: '진행 중인 중심 사건 없음', introduced: '사건 도입', active: '사건 진행 중', turning: '전환점', resolution_ready: '해결 조건 마련됨', aftermath: '해결 후 여파', unclear: '불명확' },
+    event_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립', unclear: '불명확' },
+    event_blocker: { none: '뚜렷한 방해 없음', information: '정보·단서 부족', action: '실제 행동 필요', choice: '결정·선택 필요', resource: '시간·자원 부족', resistance: '인물·세력의 저항', external: '외부 방해', unclear: '불명확' },
+    resolution_readiness: { none: '해결 근거 없음', partial: '일부 조건 충족', core: '핵심 조건 충족', decisive: '결정적 행동 실행됨', unclear: '불명확' },
+    npc_presence: { none: '활성 NPC 없음', mentioned: '언급만 됨', present: 'NPC가 장면에 참여 중', entering: 'NPC의 등장·접촉이 확정됨', multiple: '여러 NPC가 참여 중', unclear: '불명확' },
+    npc_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립', unclear: '불명확' },
     hesitation_drag: { no: '과도한 망설임 없음', yes: '망설임이 진행을 방해함' },
     refusal_stall: { no: '거절이 서술을 막지 않음', yes: '거절 반복으로 상호작용 정체' },
     circularity: { no: '의미 있는 새 내용 있음', yes: '같은 내용이 반복됨' },
@@ -68,6 +68,7 @@ export const DECISION_LABELS = {
     directive_followthrough: { not_applicable: '직전 필수 실행 없음', fulfilled: '직전 지시 이행됨', partial: '일부만 이행됨', missed: '필요한 지시가 이행되지 않음' },
     relationship_direction: RELATIONSHIP_DIRECTIONS,
     relationship_pacing: { hold: '관계 상태 유지', closer_incremental: '조금 가까워짐', closer_significant: '분명히 가까워짐', distant_incremental: '조금 멀어짐', distant_significant: '분명히 멀어짐' },
+    direct_execution: { no: '별도 직접 실행 없음', yes: '현재 장면에서 구체적으로 실행' },
     relationship_beat: { none: '추가 관계 비트 없음', avoidance: '회피·미루기', rejection: '거절·경계 설정', confession: '고백·직접 공개', inner_outer_gap: '속마음과 행동의 불일치', vulnerability: '취약성·신뢰 공개', jealousy_friction: '질투·마찰', repair: '회복·화해 시도', commitment: '관계를 바꾸는 선택' },
     resolution_pacing: { continue: '미해결 상태 유지', partial: '부분 해결·단계 진전', resolve: '실질적 해결 허용' },
     npc_autonomy: { no: '미적용', yes: '갈등 속 NPC 활성화' },
@@ -85,7 +86,7 @@ export const DECISION_LABELS = {
     npc_knowledge: { none: '관련 지식 없음', direct: '직접 경험한 정보', reported: '전달받은 정보', role_based: '직업·지위 기반 정보', public: '공개·일반 정보', partial: '관찰 단서 기반 제한 추론', privileged: '근거 있는 내부 정보' },
     npc_disclosure: { none: '정보 사용 없음', open: '솔직히 공개', selective: '필요한 만큼 공개', conditional: '조건·대가 요구', withhold: '자기 이유로 숨김', distort: '근거 있는 왜곡', uncertain: '불확실성을 구분함' },
     npc_followthrough: { not_applicable: '직전 NPC 지시 없음', fulfilled: 'NPC 지시 이행됨', partial: 'NPC 지시 일부만 이행', missed: 'NPC 지시 미이행' },
-    npc_knowledge_fit: { not_applicable: '판정할 NPC 지식 없음', fit: '지식 범위가 타당함', overreach: '알 수 없는 정보를 사용함' },
+    npc_knowledge_fit: { not_applicable: '판정할 NPC 지식 없음', fit: '지식 범위가 타당함', overreach: '알 수 없는 정보를 사용함', unclear: '판정 근거 불충분' },
     scene_cutoff: { no: '현재 비트가 실행됨', yes: '행동 직전에 장면을 끊음' },
     response_cadence: { compress: '부수 내용 압축', natural: '핵심 중심 자연 호흡', linger: '중요한 순간 확대' },
     advanced_entry: { closed: '진입 근거 없음', latent: '잠재적 진입 가능', open: '즉시 진입 가능' },
@@ -146,7 +147,9 @@ const EXECUTION_CORRECTIONS = {
     repetitive_ending: 'Do not reuse the recent closing architecture. End on a different kind of live consequence, action, decision, pressure, or materially necessary dialogue beat; avoid another question menu, countdown, passive wait, stare, pause, or equivalent handoff.',
     scene_cutoff: 'Do not summarize, time-skip, fade out, or end the scene before the selected immediate action, response, or consequence is materially executed. Complete the current beat and leave the next participant response open.',
 };
-export const EXECUTION_CORRECTION_PRIORITY = ['input_echo', 'user_handoff', 'repetitive_ending', 'scene_cutoff', 'action_evasion', 'circularity', 'refusal_stall', 'hesitation_drag'];
+export const EXECUTION_CORRECTION_PRIORITY = ['action_evasion', 'scene_cutoff', 'user_handoff', 'circularity', 'refusal_stall', 'input_echo', 'repetitive_ending', 'hesitation_drag'];
+const CORE_EXECUTION_CORRECTIONS = ['action_evasion', 'scene_cutoff'];
+const SECONDARY_EXECUTION_CORRECTIONS = ['user_handoff', 'circularity', 'refusal_stall', 'input_echo', 'repetitive_ending', 'hesitation_drag'];
 
 const NPC_COMMON_PROMPT = 'Keep active NPCs consistent and self-directed: let the relevant NPC speak, choose, or act from established motives, knowledge, and immediate stakes—not merely answer {{user}}, deliver exposition, or wait—and do not replace {{char}} or take over unrelated parts of the scene. Suspicion, intuition, body-language reading, coincidence, and genre convention do not grant hidden knowledge: infer only broad surface states from cues this NPC actually observed, never an unavailable fact, cause, relationship, motive, plan, or location.';
 
@@ -381,14 +384,10 @@ export function rollVillainProfile(random = Math.random) {
     return Object.fromEntries(Object.entries(VILLAIN_OPTIONS).map(([key, values]) => [key, pick(values, random)]));
 }
 
-export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {}, previousRoutes = {} }) {
+export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {} }) {
     const progressionMode = preferences.advancedEnabled ? 'off' : preferences.progressionMode;
     const newEventEnabled = preferences.advancedEnabled || progressionMode !== 'off';
-    const posture = {
-        conservative: 'Require direct, explicit evidence. Use unclear when the recent exchange does not establish the answer reliably.',
-        balanced: 'Choose the most likely supported state from the recent exchange. Use unclear only when evidence is insufficient or materially contradictory.',
-        active: 'Use strong contextual signals and reasonable immediate inference. Use unclear only when the state genuinely cannot be distinguished.',
-    }[preferences.judgmentStyle] || 'Choose the most likely supported state from the recent exchange. Use unclear only when evidence is insufficient or materially contradictory.';
+    const posture = 'Use the same evidence standard regardless of routing style. Select none only when the recent exchange affirmatively supports absence; select unclear when relevant evidence exists but is insufficient or contradictory. Do not turn desired next movement into an observed fact.';
     const uncertainProgressionRule = {
         conservative: 'When the scene is unclear or merely maintaining its state, prefer hold. Do not add movement only to avoid uncertainty.',
         balanced: 'When the scene is unclear or merely maintaining its state, advance an already available thread by one modest step when possible; otherwise hold. Do not manufacture a new incident.',
@@ -482,37 +481,37 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         event_state: {
             type: 'choice',
             instructions: 'Classify the primary plot event, task, mystery, danger, negotiation, or practical problem currently in focus. A relationship conversation alone is not a plot event unless it has a concrete external objective or consequence.',
-            criteria: { none: 'No primary event is active.', introduced: 'A concrete problem, objective, or question has just been established.', active: 'Participants are actively pursuing or confronting an established event.', turning: 'A discovery, loss, choice, or reversal has materially changed the event.', resolution_ready: 'The core information, access, choice, or action needed for resolution is now available.', aftermath: 'The central matter is resolved and its consequences are currently being handled.' },
+            criteria: { none: 'No primary event is active.', introduced: 'A concrete problem, objective, or question has just been established.', active: 'Participants are actively pursuing or confronting an established event.', turning: 'A discovery, loss, choice, or reversal has materially changed the event.', resolution_ready: 'The core information, access, choice, or action needed for resolution is now available.', aftermath: 'The central matter is resolved and its consequences are currently being handled.', unclear: 'Relevant event material exists but its current phase cannot be established reliably.' },
         },
         event_valence: {
             type: 'choice',
             instructions: 'Classify the current primary event by its immediate practical direction in the scene, not by genre mood or whether the writing is pleasant. Consider concrete opportunity, relief, success, danger, loss, obstruction, and cost. If no primary event is active, select neutral.',
-            criteria: { positive: 'The event currently provides a concrete benefit, opportunity, relief, recovery, useful success, or favorable opening.', negative: 'The event currently imposes danger, loss, harm, pressure, obstruction, worsening conditions, or an adverse consequence.', mixed: 'The event currently carries both a concrete benefit and a concrete adverse cost or threat.', neutral: 'No active primary event exists, or its current practical direction is neither favorable nor adverse.' },
+            criteria: { positive: 'The event currently provides a concrete benefit, opportunity, relief, recovery, useful success, or favorable opening.', negative: 'The event currently imposes danger, loss, harm, pressure, obstruction, worsening conditions, or an adverse consequence.', mixed: 'The event currently carries both a concrete benefit and a concrete adverse cost or threat.', neutral: 'No active primary event exists, or its current practical direction is neither favorable nor adverse.', unclear: 'An event exists but its practical direction cannot be distinguished.' },
         },
         event_blocker: {
             type: 'choice',
             instructions: 'Identify the main thing preventing the current event from advancing or resolving. Select none when no active event exists or no material blocker remains.',
-            criteria: { none: 'No active event or no material blocker.', information: 'A relevant fact, clue, explanation, or location is still missing.', action: 'A concrete attempt or follow-through has not yet been performed.', choice: 'A participant must make a consequential decision.', resource: 'Time, access, tools, money, personnel, safety, or another resource is insufficient.', resistance: 'A person, group, institution, or opponent is actively resisting.', external: 'An outside event, environment, interruption, or dependency blocks progress.' },
+            criteria: { none: 'No active event or no material blocker.', information: 'A relevant fact, clue, explanation, or location is still missing.', action: 'A concrete attempt or follow-through has not yet been performed.', choice: 'A participant must make a consequential decision.', resource: 'Time, access, tools, money, personnel, safety, or another resource is insufficient.', resistance: 'A person, group, institution, or opponent is actively resisting.', external: 'An outside event, environment, interruption, or dependency blocks progress.', unclear: 'A blocker may exist but its type cannot be established.' },
         },
         resolution_readiness: {
             type: 'choice',
             instructions: 'Judge causal readiness to resolve the current primary event. Count established facts and executed actions, never message count, prose length, or how long the user has waited.',
-            criteria: { none: 'The necessary cause, information, choice, or action is absent.', partial: 'At least one useful condition is met, but a central obstacle or question remains.', core: 'The core conditions are met and a decisive attempt can now occur.', decisive: 'The decisive action has already been executed; the response can establish its result and consequences.' },
+            criteria: { none: 'The necessary cause, information, choice, or action is affirmatively absent.', partial: 'At least one useful condition is met, but a central obstacle or question remains.', core: 'The core conditions are met and a decisive attempt can now occur.', decisive: 'The decisive action has already been executed; the response can establish its result and consequences.', unclear: 'Relevant conditions exist but readiness cannot be established reliably.' },
         },
         npc_presence: {
             type: 'choice',
             instructions: 'Classify whether any non-user, non-primary-character NPC is participating or concretely entering the immediate scene. Distinguish mere mention from presence.',
-            criteria: { none: 'No NPC is present, entering, or materially mentioned.', mentioned: 'An NPC is only mentioned, remembered, or offstage with no current entry or action.', present: 'One NPC is currently participating.', entering: 'An NPC contact, arrival, summons, or intervention is concretely underway.', multiple: 'Two or more NPCs are currently participating or entering.' },
+            criteria: { none: 'No NPC is present, entering, or materially mentioned.', mentioned: 'An NPC is only mentioned, remembered, or offstage with no current entry or action.', present: 'One NPC is currently participating.', entering: 'An NPC contact, arrival, summons, or intervention is concretely underway.', multiple: 'Two or more NPCs are currently participating or entering.', unclear: 'NPC involvement is suggested but cannot be established reliably.' },
         },
         npc_valence: {
             type: 'choice',
             instructions: 'Classify the immediate practical direction of the participating or entering NPCs. Judge their current conduct and effect, not whether they are morally good or likable. When different NPCs pull in opposite directions, select mixed. If no NPC is active, select neutral.',
-            criteria: { positive: 'The relevant NPCs currently provide concrete help, protection, cooperation, access, useful information, or a favorable opportunity.', negative: 'The relevant NPCs currently obstruct, exploit, threaten, harm, deceive, pressure, or impose an adverse consequence.', mixed: 'One NPC or several NPCs currently produce both favorable and adverse effects.', neutral: 'No NPC is active, or the NPC is presently independent/background without a material favorable or adverse effect.' },
+            criteria: { positive: 'The relevant NPCs currently provide concrete help, protection, cooperation, access, useful information, or a favorable opportunity.', negative: 'The relevant NPCs currently obstruct, exploit, threaten, harm, deceive, pressure, or impose an adverse consequence.', mixed: 'One NPC or several NPCs currently produce both favorable and adverse effects.', neutral: 'No NPC is active, or the NPC is presently independent/background without a material favorable or adverse effect.', unclear: 'NPC conduct exists but its practical direction cannot be established.' },
         },
         npc_knowledge_fit: {
             type: 'choice',
             instructions: 'Judge whether participating NPCs used only information available through witnessed events, explicit reports, public facts, or established role and access. Uncertainty wording, intuition, suspicion, body-language reading, coincidence, and genre convention do not excuse a conclusion whose content depends on private, offscreen, or narrator-only information.',
-            criteria: { not_applicable: 'No participating NPC used relevant information.', fit: 'The information has an established source; any inference stays broad and follows only from cues that NPC actually observed.', overreach: 'The NPC states or correctly guesses an unavailable fact, cause, relationship, motive, plan, location, or private thought. If removing inaccessible narration would make the conclusion impossible, it is overreach even when phrased as a hunch or uncertainty.' },
+            criteria: { not_applicable: 'No participating NPC used relevant information.', fit: 'The information has an established source; any inference stays broad and follows only from cues that NPC actually observed.', overreach: 'The NPC states or correctly guesses an unavailable fact, cause, relationship, motive, plan, location, or private thought. If removing inaccessible narration would make the conclusion impossible, it is overreach even when phrased as a hunch or uncertainty.', unclear: 'An NPC used relevant information, but the recent text does not establish its source or accessibility well enough to classify fit versus overreach.' },
         },
         hesitation_drag: {
             type: 'choice',
@@ -549,34 +548,12 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             instructions: 'Detect whether established anger, violence, hostile pressure, negative-bias consequences, threats, or other active execution requirements are repeatedly softened into atmosphere, posture, vague implication, warnings, or aborted action despite means and opportunity. Do not demand unsupported violence or override a concrete blocking cause.',
             criteria: { no: 'Required conduct is executed concretely, or a specific established cause prevents it.', yes: 'The text repeatedly signals imminent or required conduct but evades actual speech, action, follow-through, or consequence without a concrete cause.' },
         },
-        directive_followthrough: {
-            type: 'choice',
-            instructions: 'Compare the latest character output with the previous stored scene-reader routes in state. Judge whether the highest-priority relationship, event, conflict, NPC, or execution route was materially carried out. Evaluate concrete output rather than mentions or atmosphere.',
-            criteria: { not_applicable: 'No previous required route is available or it only required maintaining state.', fulfilled: 'The required route materially appears in speech, action, choice, information, or consequence.', partial: 'The route begins or is mentioned but its required concrete function is incomplete.', missed: 'The response avoids, contradicts, or omits the required route without a concrete in-story cause.' },
-        },
         scene_cutoff: {
             type: 'choice',
             instructions: 'Detect whether the latest output summarizes, time-skips, fades out, or ends immediately before a selected or already-started action, response, or consequence is materially executed.',
             criteria: { no: 'The current beat is executed or stops at a natural point for the user response.', yes: 'The output cuts away, summarizes, or hands off immediately before a non-user action or consequence that should occur now.' },
         },
     };
-    if (['create', 'reuse'].includes(previousRoutes.npc_route)) {
-        questions.npc_followthrough = {
-            type: 'choice',
-            instructions: 'Compare the latest character output with the previous stored NPC route, role, and scene weight. Judge concrete execution, not mention or atmosphere.',
-            criteria: { not_applicable: 'No prior NPC execution route exists.', fulfilled: 'The routed NPC materially performed the required function at the selected weight.', partial: 'The NPC appeared or began the route but did not materially perform its function.', missed: 'The required NPC function was omitted or replaced with passive observation, exposition, or a question without an in-story cause.' },
-        };
-    }
-    if (preferences.fightSustain) {
-        questions.fight_sustain = {
-            type: 'choice',
-            instructions: 'Judge whether the enabled fight-sustain block applies now. Do not create a fight from tension alone.',
-            criteria: {
-                no: 'No actual unresolved confrontation currently requires this block.',
-                yes: 'An actual unresolved confrontation is underway and should remain materially active through speech, conduct, or consequences.',
-            },
-        };
-    }
     if (preferences.villainEnabled) {
         questions.villain_route = {
             type: 'choice',
@@ -649,21 +626,6 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             npc: 'An established or concretely entering NPC or antagonist should make the main move.',
             new_event: newEventEnabled ? 'No stronger unfinished focus exists and one new event compatible with the selected world and progression controls can enter without disrupting the scene.' : 'Do not select: automatic RP progression is disabled.',
             transition: 'The active beat has a natural handoff into another time, place, or phase.',
-        },
-    };
-
-    const resolutionRule = {
-        slow: `Preserve unresolved material unless core conditions and the decisive action are established. Move at most one causal phase. Prior qualified event steps: ${Number(pacingState?.event?.qualifiedSteps) || 0}.`,
-        medium: `Allow one proportionate phase advance or partial resolution when concrete conditions are met; allow full resolution only after a decisive action. Prior qualified event steps: ${Number(pacingState?.event?.qualifiedSteps) || 0}.`,
-        fast: 'Permit efficient partial or full resolution when the core conditions and decisive action are present. Never replace missing causes with summary, coincidence, or skipped action.',
-    }[preferences.resolutionPace] || 'Allow proportionate partial or full resolution when concrete causes and consequences support it.';
-    questions.resolution_pacing = {
-        type: 'choice',
-        instructions: `Choose how far the active event, goal, conflict, or mystery may resolve in the next response. ${resolutionRule}`,
-        criteria: {
-            continue: 'The active matter needs continued action and should remain unresolved.',
-            partial: 'One meaningful obstacle, phase, question, or subgoal can be resolved while the larger matter continues.',
-            resolve: 'Concrete causes support substantially resolving the active matter and carrying its consequences forward.',
         },
     };
 
@@ -752,7 +714,7 @@ function antagonistPrompt(profile, first) {
 function genreNpcPrompt(profile, route) {
     if (!profile) return '';
     if (route === 'background') return `<RP_NPC_ROUTING mode="${profile.mode}" state="background">Keep the established genre NPC offstage for this response without erasing or replacing them.</RP_NPC_ROUTING>`;
-    const state = route === 'create' && profile.status === 'pending' ? 'new' : 'return';
+    const state = ['create', 'replace'].includes(route) && profile.status === 'pending' ? 'new' : 'return';
     const stake = profile.stake || 'their immediate interest';
     const constraint = profile.constraint || 'their established access and ability';
     const turningCondition = profile.turningCondition || 'a concrete change in circumstances';
@@ -766,7 +728,7 @@ ${state === 'new' ? 'Introduce them through an actual interaction and keep this 
 }
 
 function npcExecutionPrompt(decisions) {
-    const routeActive = ['create', 'reuse'].includes(decisions.npc_route);
+    const routeActive = ['create', 'replace', 'reuse'].includes(decisions.npc_route);
     const weight = NPC_WEIGHT_PROMPTS[decisions.npc_weight];
     if (!routeActive || !weight || decisions.npc_weight === 'none') return '';
     const lines = [NPC_COMMON_PROMPT, NPC_ROLE_PROMPTS[decisions.npc_role], weight, NPC_KNOWLEDGE_PROMPTS[decisions.npc_knowledge], NPC_DISCLOSURE_PROMPTS[decisions.npc_disclosure]].filter(Boolean);
@@ -777,7 +739,7 @@ ${lines.join('\n')}
 }
 
 function eventPrompt(profile, route) {
-    if (!profile || !['create', 'continue'].includes(route)) return '';
+    if (!profile || !['create', 'continue', 'replace'].includes(route)) return '';
     return `<RP_PRIMARY_EVENT mode="${profile.mode}" phase="${profile.phase}">
 Event: ${profile.title}. Trigger: ${profile.trigger}. Goal: ${profile.goal}. Pressure: ${profile.pressure}. Resolution condition: ${profile.resolution}.
 ${profile.prompt}
@@ -793,13 +755,25 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         linger: 'Stay close to one decisive action, revelation, sensation, or emotional turn. Include at most one directly dependent secondary reaction; do not broaden the response into coverage of every input point.',
     };
     blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
-    const selectedCorrections = EXECUTION_CORRECTION_PRIORITY.filter((key) => decisions[key] === 'yes').slice(0, 2);
-    const corrections = selectedCorrections.map((key) => EXECUTION_CORRECTIONS[key]);
-    if (!corrections.length && ['partial', 'missed'].includes(decisions.directive_followthrough)) corrections.push('Carry out the highest-priority unfulfilled relationship, event, conflict, NPC, or execution route from the prior response through one concrete action, fact, choice, or consequence now. Do not merely restate the intended development.');
-    if (!corrections.length && ['partial', 'missed'].includes(decisions.npc_followthrough)) corrections.push('Carry out the selected NPC function now through one concrete NPC-driven statement, decision, action, condition, or consequence; do not replace it with passive observation, exposition, or another question.');
-    if (decisions.npc_knowledge_fit === 'overreach' && corrections.length < 2) corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
+    const corrections = [];
+    if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
+    if (corrections.length < 2 && ['partial', 'missed'].includes(decisions.directive_followthrough)) corrections.push('Carry out the highest-priority unfulfilled relationship, event, conflict, NPC, or execution route from the prior response through one concrete action, fact, choice, or consequence now. Do not merely restate the intended development.');
+    for (const key of CORE_EXECUTION_CORRECTIONS) {
+        if (corrections.length >= 2) break;
+        if (decisions[key] === 'yes' && EXECUTION_CORRECTIONS[key]) corrections.push(EXECUTION_CORRECTIONS[key]);
+    }
+    if (corrections.length < 2 && ['partial', 'missed'].includes(decisions.npc_followthrough)) corrections.push('Carry out the selected NPC function now through one concrete NPC-driven statement, decision, action, condition, or consequence; do not replace it with passive observation, exposition, or another question.');
+    for (const key of SECONDARY_EXECUTION_CORRECTIONS) {
+        if (corrections.length >= 2) break;
+        if (decisions[key] === 'yes' && EXECUTION_CORRECTIONS[key]) corrections.push(EXECUTION_CORRECTIONS[key]);
+    }
     if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
     if (String(characterBlock || '').trim()) blocks.push(String(characterBlock).trim());
+
+    if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
+Respond from the current character and scene rather than explaining or recapping the input. When supported, perform one concrete response, decision, refusal, action, next step, or immediate consequence. Do not repeat every input detail or append a generic question merely to hand continuation back. If further progress genuinely requires {{user}}'s unresolved response, stop on a live in-character action, pressure, attempt, or natural question without deciding {{user}}'s response or the outcome.
+Execute the selected move materially in this response. When the character has the motive, information, means, and opportunity, do not stop at intention, atmosphere, preparation, warning, near-action, or another question; complete one bounded causal step and show its immediate effect.
+</DIRECT_SCENE_EXECUTION>`);
 
     const relationshipMoves = {
         hold: 'Preserve the current relationship state in this response. Do not convert attraction, sex, proximity, jealousy, protection, conflict, or vulnerability into unearned trust, intimacy, romance, reconciliation, or rupture.',
@@ -817,7 +791,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         partial: 'Resolve one concrete phase, obstacle, question, or subgoal and preserve the remaining active matter and consequences.',
         resolve: 'A substantial resolution is permitted when the established cause is executed in this response. Show the decisive action and carry forward its consequences; do not use summary, coincidence, or an unsupported time jump as closure.',
     };
-    const hasResolvableMatter = Boolean(eventProfile) || (decisions.event_state && decisions.event_state !== 'none') || ['event', 'conflict'].includes(decisions.primary_focus);
+    const hasResolvableMatter = ['event', 'new_event', 'conflict', 'transition'].includes(decisions.primary_focus) && (Boolean(eventProfile) || (decisions.event_state && !['none', 'unclear'].includes(decisions.event_state)));
     if (hasResolvableMatter && resolutionMoves[decisions.resolution_pacing]) blocks.push(`<EVENT_RESOLUTION_PACING mode="${settings.resolutionPace}">\n${resolutionMoves[decisions.resolution_pacing]}\n</EVENT_RESOLUTION_PACING>`);
 
     if (settings.advancedEnabled) {
@@ -832,7 +806,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         const progressionRelevant = move !== 'hold' || ['event', 'new_event', 'transition'].includes(decisions.primary_focus);
         if (prompt && progressionRelevant) blocks.push(`<RP_PROGRESSION mode="${settings.progressionMode}">\n${prompt}\n</RP_PROGRESSION>`);
         const npc = genreNpcPrompt(npcProfile, decisions.npc_route);
-        if (npc && ['create', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
+        if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
     }
     const npcExecution = npcExecutionPrompt(decisions);
     if (npcExecution) blocks.push(npcExecution);
@@ -843,6 +817,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     const fightBlocks = [];
     if (decisions.npc_autonomy === 'yes') fightBlocks.push(L.AUTONOMOUS_NPC_DYNAMICS);
     if (decisions.villain_route === 'create' && villainProfile) fightBlocks.push(antagonistPrompt(villainProfile, true));
+    if (decisions.villain_route === 'replace' && villainProfile) fightBlocks.push(antagonistPrompt(villainProfile, true));
     if (decisions.villain_route === 'continue' && villainProfile) fightBlocks.push(antagonistPrompt(villainProfile, false));
     if (decisions.fight_sustain === 'yes') fightBlocks.push(L.SUSTAINED_INTERPERSONAL_CONFLICT);
     if (fightBlocks.length) conflictBlocks.push(L.CONFLICT_EXECUTION, ...fightBlocks);
