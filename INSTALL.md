@@ -18,7 +18,7 @@ https://github.com/bongbong11/-_-.git
 SillyTavern/plugins/scene-reader-jev
 ```
 
-최종적으로 아래 파일 두 개가 있어야 합니다. `plugins` 폴더에 원래 있던 파일은 덮어쓰지 않습니다.
+최종적으로 아래 파일 세 개가 있어야 합니다. `plugins` 폴더의 다른 플러그인 파일은 건드리지 않습니다.
 
 ```text
 SillyTavern/plugins/scene-reader-jev/package.json
@@ -40,7 +40,7 @@ SillyTavern을 완전히 종료한 뒤 다시 시작합니다. `enableCorsProxy`
 
 프리셋 안의 원하는 위치에 주입하려면 **설정 → 주입 위치**에서 기본 판정·전개와 세계관 전문의 방식을 각각 선택합니다. `{{scene-reader}}`는 판정·전개 위치에, `{{scene-reader-world}}`는 세계관 위치에 한 번씩 넣습니다. 매크로 모드인 항목은 기본 깊이 0 위치에 중복 주입하지 않습니다.
 
-선택 기능인 Continuity Reasoner를 사용한다면 같은 설정 화면에서 별도의 연결 프로필을 만들고 OpenAI 호환 또는 Gemini API 주소·모델·키를 입력합니다. 새 서버 플러그인에는 `reasoner.cjs`가 추가되므로 기존 플러그인을 사용하던 경우 세 파일을 함께 교체하고 SillyTavern을 재시작하세요. Reasoner를 사용하지 않을 때는 별도 모델 키가 필요 없습니다.
+선택 기능인 Continuity Reasoner를 사용한다면 SillyTavern의 **API 연결 메뉴에 저장된 연결 프로필**을 선택하고 **연결 확인**을 누릅니다. 씬판독기 안에서 모델 주소·키를 다시 저장할 필요가 없습니다. Jev 서버 플러그인 v0.5.0은 그대로 사용할 수 있으며 이번 화면 확장 업데이트 때문에 다시 교체할 필요는 없습니다.
 
 - `404`: 서버 플러그인이 설치되지 않았거나 재시작되지 않은 상태
 - `401` 또는 `403`: 키가 없거나 인증되지 않은 상태

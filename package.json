@@ -1,10 +1,10 @@
 {
   "name": "sillytavern-scene-reader",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "type": "module",
   "main": "server-plugin/index.cjs",
   "scripts": {
-    "check": "node --check index.js && node --check decision-engine.js && node --check state-engine.js && node --check action-coordinator.js && node --check continuity-hooks.js && node --check continuity-engine.js && node --check prompt-library.js && node --check character-library.js && node --check advanced-library.js && node --check world-library.js && node --check runtime-utils.js && node --check security-utils.js && node --check legacy-prompts.js && node --check server-plugin/index.cjs && node --check server-plugin/reasoner.cjs && node test.mjs"
+    "check": "node --check index.js && node --check st-profile-reasoner.js && node --check decision-engine.js && node --check state-engine.js && node --check action-coordinator.js && node --check continuity-hooks.js && node --check continuity-engine.js && node --check prompt-library.js && node --check character-library.js && node --check advanced-library.js && node --check world-library.js && node --check runtime-utils.js && node --check security-utils.js && node --check legacy-prompts.js && node --check server-plugin/index.cjs && node --check server-plugin/reasoner.cjs && node test.mjs"
   }
 }

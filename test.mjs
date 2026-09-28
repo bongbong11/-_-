@@ -16,6 +16,7 @@ import { commitObservedState, commitVerifiedPlan, updateProgressionPressure } fr
 import { selectActionPlan } from './action-coordinator.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
 import { applyContinuityVerdicts, buildContinuityInjection, emptyContinuity, selectContinuityContext, validateReasonerResult } from './continuity-engine.js';
+import { listConnectionProfiles, requestWithConnectionProfile } from './st-profile-reasoner.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -31,10 +32,10 @@ const stateEngineSource = await readFile(new URL('./state-engine.js', import.met
 const runtimeSource = await readFile(new URL('./runtime-utils.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.5.0.zip', import.meta.url));
-await access(new URL('./downloads/scene-reader-sillytavern-v0.11.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-sillytavern-v0.12.0.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.11.0');
+assert.equal(manifest.version, '0.12.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -75,8 +76,9 @@ assert.match(source, /갈등·실행 점검/);
 assert.match(source, /저장 상태·실제 주입문/);
 assert.equal((source.match(/<details class="sr-details"/g) || []).length, 5, 'automatic progression result UI must group results into five accordions');
 assert.match(source, /id="sr-pause-ooc"/);
-for (const id of ['sr-continuity-enabled', 'sr-reasoner-profile', 'sr-reasoner-save', 'sr-reasoner-test', 'sr-continuity-results']) assert.match(source, new RegExp(`id="${id}"`));
-for (const id of ['sr-continuity-enabled', 'sr-reasoner-profile', 'sr-reasoner-new', 'sr-reasoner-edit', 'sr-reasoner-save', 'sr-reasoner-delete', 'sr-reasoner-test']) assert.match(source, new RegExp(`getElementById\\('${id}'\\)\\?\\.addEventListener`), `${id} requires an event handler`);
+for (const id of ['sr-continuity-enabled', 'sr-reasoner-profile', 'sr-reasoner-refresh', 'sr-reasoner-test', 'sr-continuity-results']) assert.match(source, new RegExp(`id="${id}"`));
+for (const id of ['sr-continuity-enabled', 'sr-reasoner-profile', 'sr-reasoner-refresh', 'sr-reasoner-test']) assert.match(source, new RegExp(`getElementById\\('${id}'\\)\\?\\.addEventListener`), `${id} requires an event handler`);
+assert.doesNotMatch(source, /id="sr-reasoner-(?:new|edit|save|delete|key|url|model)"/);
 assert.match(source, /id="sr-reset-current-npc"/);
 assert.match(source, /pauseOnOoc/);
 assert.match(runtimeSource, /ooc\|out\\s\+of\\s\+character\|오오씨\|사담/);
@@ -154,12 +156,16 @@ assert.match(source, /씬판독기 전체 사용/);
 assert.match(source, /판독과 주입 중단/);
 assert.match(source, /document\.execCommand\('copy'\)/);
 assert.match(source, /dialog\?\.open \? dialog : document\.body/);
-assert.doesNotMatch(source, /ConnectionManagerRequestService/);
+assert.match(source, /ConnectionManagerRequestService/);
 assert.doesNotMatch(source, /enableCorsProxy/);
 assert.match(css, /\.sr-tabs \{[^\n]*grid-template-columns: repeat\(4/);
 assert.match(css, /@media[\s\S]*\.sr-tabs \{ grid-template-columns: repeat\(2/);
 assert.match(css, /100dvh/);
 assert.match(css, /@media \(max-width: 600px\)/);
+assert.match(css, /#sr-tab-flow\.active \{ display: grid; grid-template-columns: repeat\(2/);
+assert.match(css, /\.sr-chip-grid \{ grid-template-columns: repeat\(2/);
+assert.match(css, /#sr-tab-conflict > \.sr-settings-card:not\(\.sr-owner-details\)/);
+assert.match(source, /<details class="sr-settings-card sr-settings-collapsible"><summary>제작자 모드/);
 assert.match(css, /\.sr-run-row \.menu_button \{[^\n]*min-width: 150px/);
 assert.match(css, /\[hidden\] \{ display: none !important; \}/);
 assert.match(css, /button \{[^\n]*writing-mode: horizontal-tb !important/);
@@ -168,7 +174,7 @@ assert.match(css, /input:not\(\[type="checkbox"\]\)/);
 assert.match(css, /input\[type="checkbox"\].*appearance: auto/);
 assert.match(css, /#scene-reader-quick-button \{[^\n]*width: 32px/);
 assert.match(css, /\.sr-owner-details:not\(\[open\]\) > \.sr-owner-body \{ display: none; \}/);
-assert.match(css, /\.sr-action-row \{ display: grid; grid-template-columns: minmax\(0, 1fr\); width: 100%; \}/);
+assert.match(css, /\.sr-action-row \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); width: 100%; \}/);
 const dialogIds = [...source.matchAll(/id="(sr-[^"]+)"/g)].map((match) => match[1]);
 assert.equal(new Set(dialogIds).size, dialogIds.length, 'dialog element ids must be unique');
 const referencedDialogIds = [...source.matchAll(/getElementById\('(sr-[^']+)'\)/g)].map((match) => match[1]);
@@ -671,7 +677,13 @@ assert.match(source, /selectActiveEntries\(characterStore, transcript/);
 assert.match(source, /carriedCharacterIds/);
 assert.match(source, /characterTrace/);
 assert.match(source, /id="sr-character-turn-results"/);
-assert.match(source, /저장된 기본 경계 · 매턴 최종판정 아님/);
+assert.match(source, /id="sr-character-analysis-list"/);
+assert.match(source, /id="sr-character-analysis-result"/);
+assert.match(source, /characterAnalysisSelection = \{ kind, id: entry\.id \};\s*renderCharacterStore\(\)/, 'saving must select the saved person in the analysis browser');
+assert.match(source, /data-character-view-kind/);
+assert.match(source, /data-character-edit-kind/);
+assert.match(source, /고정 능력치나 매턴 주입문이 아닙니다/);
+assert.doesNotMatch(source, /id="sr-character-analysis"/, 'the old editor-bound analysis panel must be removed');
 assert.match(source, /id="sr-world-edit-franchise"/);
 assert.match(characterLibrarySource, /carried\.has\(entry\.id\)/);
 assert.match(characterLibrarySource, /\.slice\(0, 3\)/);
@@ -708,6 +720,26 @@ assert.equal(continuityPlan.secondary.kind, 'continuity');
 assert.match(buildContinuityInjection(selectContinuityContext(followupState, 'Wade may contact the family', { opportunity: 3 }), followupCandidate), /Optional secondary beat/);
 followupState.followups[0].lastOffered = 3;
 assert.equal(selectContinuityContext(followupState, 'Wade may contact the family', { opportunity: 3 }).followups.length, 0, 'the same scene opportunity cannot repeatedly offer a follow-up');
+const stProfile = { id: 'st-profile-1', name: '빠른 모델', model: 'example-small', api: 'custom', mode: 'cc' };
+const stCalls = [];
+const stRequestService = {
+    getSupportedProfiles: () => [stProfile],
+    getProfile: (id) => { assert.equal(id, stProfile.id); return stProfile; },
+    validateProfile: (profile) => { assert.equal(profile, stProfile); },
+    sendRequest: async (...args) => { stCalls.push(args); return { content: args[1][1].content.includes('exactly') ? '{"ok":true}' : '```json\n{"new_items":[]}\n```' }; },
+};
+assert.deepEqual(listConnectionProfiles(stRequestService), [{ id: 'st-profile-1', name: '빠른 모델', model: 'example-small', mode: 'cc' }]);
+const checkedProfile = await requestWithConnectionProfile(stRequestService, stProfile.id, '', {}, { testing: true });
+assert.equal(checkedProfile.profile.model, 'example-small');
+assert.equal(checkedProfile.result.ok, true);
+const liveProfile = await requestWithConnectionProfile(stRequestService, stProfile.id, 'Analyze continuity.', { source_rp: continuitySource });
+assert.deepEqual(liveProfile.result, { new_items: [] });
+assert.equal(stCalls[1][0], stProfile.id, 'Reasoner must call the selected SillyTavern profile');
+assert.equal(stCalls[1][1][0].role, 'system');
+assert.equal(stCalls[1][1][1].role, 'user');
+assert.equal(stCalls[1][3].includePreset, false, 'RP generation presets must not leak into the Reasoner call');
+assert.equal(stCalls[1][3].stream, false);
+await assert.rejects(() => requestWithConnectionProfile({ ...stRequestService, sendRequest: async () => ({ content: '{"ok":false}' }) }, stProfile.id, '', {}, { testing: true }), /연결 확인 응답/);
 assert.equal(reasonerModule._test.apiEndpoint(reasonerModule._test.safeProfile({ id: 'gemini-1', name: 'Gemini', adapter: 'gemini', model: 'gemini-flash' })), 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash:generateContent');
 assert.throws(() => reasonerModule._test.safeProfile({ id: 'bad-1', name: 'Bad', adapter: 'openai_compatible', baseUrl: 'http://example.com/v1', model: 'x' }), /HTTPS/);
 

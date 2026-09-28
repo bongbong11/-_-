@@ -43,6 +43,7 @@ import { archiveCurrentEvent, commitObservedState, commitVerifiedPlan, updatePro
 import { actionPlanSummary, selectActionPlan } from './action-coordinator.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
 import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from './continuity-engine.js';
+import { listConnectionProfiles, requestWithConnectionProfile } from './st-profile-reasoner.js';
 import { sha256Hex } from './security-utils.js';
 import {
     PROFILE_LABELS,
@@ -238,6 +239,8 @@ let serverStoreAvailable = false;
 let serverKeyStatus = '확인 전';
 let backupList = [];
 let reasonerProfiles = [];
+let reasonerProfileError = '';
+let connectionRequestService = null;
 const reasonerJobs = new Map();
 let reasonerGeneration = 0;
 
@@ -248,6 +251,7 @@ function invalidateReasonerJobs() {
 let characterStore = normalizeCharacterStore(null);
 let characterEditorKind = '';
 let characterEditorId = '';
+let characterAnalysisSelection = { kind: '', id: '' };
 let privateOwnerPrompt = '';
 const stateHistoryCache = new Map();
 
@@ -278,19 +282,15 @@ async function storagePost(route, body = {}, { allowFailure = false } = {}) {
     }
 }
 
-async function reasonerPost(route, body = {}) {
-    const response = await fetch(`/api/plugins/scene-reader-jev/reasoner/${route}`, {
-        method: 'POST', headers: { ...getRequestHeaders(), 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body),
-    });
-    let data;
-    try { data = await response.json(); } catch { data = {}; }
-    if (!response.ok) throw new Error(data?.error ? apiError(data, `Reasoner 응답 오류 (${response.status})`) : pluginError(response.status, data, `Reasoner 응답 오류 (${response.status})`));
-    return data;
-}
-
 async function loadReasonerProfiles() {
-    try { reasonerProfiles = (await reasonerPost('profiles')).profiles || []; }
-    catch { reasonerProfiles = []; }
+    try {
+        connectionRequestService ||= (await import('/scripts/extensions/shared.js')).ConnectionManagerRequestService;
+        reasonerProfiles = listConnectionProfiles(connectionRequestService);
+        reasonerProfileError = '';
+    } catch (error) {
+        reasonerProfiles = [];
+        reasonerProfileError = error?.message || 'SillyTavern 연결 프로필을 읽을 수 없습니다.';
+    }
     renderReasonerProfiles();
 }
 
@@ -1214,7 +1214,7 @@ function sourceUserRpForOutput(outputIndex) {
 
 async function postVerifiedCharacterOutput(rec, pending, verification, trigger) {
     const identity = sourceIdentityForPending(pending);
-    if (!settings.continuityEnabled || !settings.reasonerProfileId || !trigger || trigger === 'none' || !pending.outputText) return;
+    if (!settings.continuityEnabled || !settings.reasonerProfileId || !connectionRequestService || !trigger || trigger === 'none' || !pending.outputText) return;
     if (rec.lastReasonerSource?.outputFingerprint === identity.outputFingerprint
         && rec.lastReasonerSource?.assistantIndex === identity.assistantIndex
         && rec.lastReasonerSource?.sourceRevision === identity.sourceRevision) return;
@@ -1227,9 +1227,7 @@ async function postVerifiedCharacterOutput(rec, pending, verification, trigger) 
     rec.lastContinuityTrace = { status: 'analyzing', trigger, profileId: settings.reasonerProfileId, sourceIdentity: identity, candidates: [] };
     const job = (async () => {
         try {
-            const data = await reasonerPost('run', {
-                profileId: settings.reasonerProfileId, system: REASONER_SYSTEM,
-                state: {
+            const data = await requestWithConnectionProfile(connectionRequestService, settings.reasonerProfileId, REASONER_SYSTEM, {
                     trigger,
                     source_rp: sourceText,
                     active_continuity: {
@@ -1238,7 +1236,6 @@ async function postVerifiedCharacterOutput(rec, pending, verification, trigger) 
                         dependencies: normalizeContinuity(rec.continuity).dependencies.map(({ stateId, pressure, reason }) => ({ stateId, pressure, reason })),
                     },
                     existing_state_refs: { event: rec.eventProfile ? { id: 'event:current', title: rec.eventProfile.title } : null, relationship: rec.relationshipState ? { id: 'relationship:current', ...rec.relationshipState } : null },
-                },
             });
             const current = record(true);
             const output = (getContext().chat || [])[identity.assistantIndex];
@@ -1811,6 +1808,29 @@ function renderCharacterStore() {
     setList('sr-character-list', characterStore.characters, 'character');
     setList('sr-npc-sheet-list', characterStore.npcs, 'npc');
     setList('sr-persona-list', characterStore.persona ? [characterStore.persona] : [], 'persona');
+    renderCharacterAnalysisBrowser();
+}
+
+function renderCharacterAnalysisBrowser() {
+    const list = document.getElementById('sr-character-analysis-list');
+    const result = document.getElementById('sr-character-analysis-result');
+    if (!list || !result) return;
+    const entries = [
+        ...characterStore.characters.map((entry) => ({ ...entry, kind: 'character' })),
+        ...(characterStore.persona ? [{ ...characterStore.persona, kind: 'persona' }] : []),
+        ...characterStore.npcs.map((entry) => ({ ...entry, kind: 'npc' })),
+    ];
+    const selected = entries.find((entry) => entry.kind === characterAnalysisSelection.kind && entry.id === characterAnalysisSelection.id) || entries[0];
+    characterAnalysisSelection = selected ? { kind: selected.kind, id: selected.id } : { kind: '', id: '' };
+    list.innerHTML = entries.map((entry) => `<button type="button" class="sr-character-view${selected?.id === entry.id && selected?.kind === entry.kind ? ' active' : ''}" data-character-view-kind="${entry.kind}" data-character-view-id="${escapeHtml(entry.id)}" aria-pressed="${selected?.id === entry.id && selected?.kind === entry.kind}"><span>${escapeHtml(entry.name)}</span><small>${entry.kind === 'npc' ? 'NPC' : entry.kind === 'persona' ? '페르소나' : '캐릭터'}</small></button>`).join('') || '<div class="sr-empty-small">저장된 인물 없음</div>';
+    if (!selected) { result.innerHTML = '<div class="sr-empty-small">시트를 저장하면 여기서 판독 기준을 확인할 수 있습니다.</div>'; return; }
+    const groups = [
+        ['시트에서 확인한 범위', [['sheet_density', '시트 정보량'], ['role_inference', '역할에서 추론할 범위'], ['trait_scope', '성향 적용 범위'], ['canon_status', '원작 인물 여부']]],
+        ['지식·능력·접근 경계', [['knowledge_scope', '지식 근거 범위'], ['expertise_depth', '명시된 전문성'], ['institutional_access', '기관·비밀 접근'], ['practical_competence', '실무 능력']]],
+        ['대화·행동 참고', [['speech_register', '말투'], ['initiative', '행동 성향'], ['disclosure_style', '정보 공개'], ['memory_precision', '기억 정밀도'], ['history_use', '과거 활용']]],
+    ];
+    const rows = groups.map(([heading, fields]) => `<div class="sr-section-divider">${heading}</div>${fields.map(([key, label]) => `<div class="sr-decision-row"><span>${label}</span><strong>${escapeHtml(PROFILE_LABELS[key]?.[selected.analysis?.[key]] || '미지정')}</strong></div>`).join('')}`).join('');
+    result.innerHTML = `<div class="sr-character-analysis-head"><strong>${escapeHtml(selected.name)}</strong><button type="button" class="menu_button" data-character-edit-kind="${selected.kind}" data-character-edit-id="${escapeHtml(selected.id)}">시트 수정</button></div><p class="sr-help">저장된 기본 경계입니다. 고정 능력치나 매턴 주입문이 아닙니다. 실제 장면의 지식·반응은 위의 ‘이번 턴 인물 판정’에서 따로 확인하세요.</p><div class="sr-decision-row"><span>메인 RP 모델의 원본 시트 접근</span><strong>${selected.sourceVisibleToMain ? '이미 읽음' : '씬판독기에만 저장됨'}</strong></div>${rows}`;
 }
 
 function renderBackups() {
@@ -1822,11 +1842,13 @@ function renderBackups() {
 function renderReasonerProfiles() {
     const select = document.getElementById('sr-reasoner-profile');
     if (!select) return;
-    select.innerHTML = `<option value="">연결 프로필 선택</option>${reasonerProfiles.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(item.adapter)}</option>`).join('')}`;
-    select.value = settings.reasonerProfileId || '';
+    select.innerHTML = `<option value="">연결 프로필 선택</option>${reasonerProfiles.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(item.model)}</option>`).join('')}`;
     const active = reasonerProfiles.find((item) => item.id === settings.reasonerProfileId);
+    select.value = active?.id || '';
     const status = document.getElementById('sr-reasoner-status');
-    if (status) status.textContent = active ? `${active.name} · ${active.keyStatus || '키 상태 미확인'}` : '연결 프로필을 선택하면 Reasoner를 사용할 수 있습니다.';
+    if (status) status.textContent = active
+        ? `${active.name} · ${active.model} · SillyTavern 연결 설정 사용`
+        : reasonerProfileError || (settings.reasonerProfileId ? '선택했던 SillyTavern 연결 프로필을 찾을 수 없습니다.' : 'SillyTavern의 API 연결 메뉴에서 프로필을 만든 뒤 선택하세요.');
 }
 
 function renderContinuity() {
@@ -1850,21 +1872,6 @@ function renderContinuity() {
     for (const item of state.knowledge.slice(-4)) rows.push(`<div class="sr-decision-row"><span>${escapeHtml(item.character)} · ${escapeHtml(item.summary || item.factId)}</span><strong>${escapeHtml(item.source)}</strong></div>`);
     for (const item of state.followups.slice(-4)) rows.push(`<div class="sr-decision-row"><span>${escapeHtml(item.action)}</span><strong>${escapeHtml(item.status)}${item.lastOffered === rec?.sceneOpportunity ? ' · 이번 계기 사용' : ''}</strong></div>`);
     root.innerHTML = rows.join('');
-}
-
-function fillReasonerEditor(profile = null) {
-    const values = {
-        'sr-reasoner-id': profile?.id || '',
-        'sr-reasoner-name': profile?.name || '',
-        'sr-reasoner-adapter': profile?.adapter || 'openai_compatible',
-        'sr-reasoner-url': profile?.baseUrl || '',
-        'sr-reasoner-model': profile?.model || '',
-        'sr-reasoner-timeout': profile?.timeoutMs || 30000,
-        'sr-reasoner-tokens': profile?.maxTokens || 1200,
-    };
-    for (const [id, value] of Object.entries(values)) { const node = document.getElementById(id); if (node) node.value = value; }
-    const key = document.getElementById('sr-reasoner-key');
-    if (key) key.value = '';
 }
 
 function renderAll() {
@@ -2044,10 +2051,6 @@ function showCharacterEditor(kind, entry = null) {
     const visibleToggle = document.getElementById('sr-character-source-visible');
     if (visibleToggle) visibleToggle.checked = entry ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc';
     document.getElementById('sr-character-delete').hidden = !entry;
-    const analysis = document.getElementById('sr-character-analysis');
-    if (analysis) analysis.innerHTML = entry?.analysis
-        ? Object.entries(entry.analysis).map(([key, value]) => `<div class="sr-decision-row"><span>${escapeHtml({ sheet_density: '시트 밀도', knowledge_scope: '지식 범위', expertise_depth: '전문성', institutional_access: '기관 접근', practical_competence: '실무 능력', speech_register: '말투 수준', initiative: '능동성', disclosure_style: '정보 공개', memory_precision: '기억 정밀도', history_use: '과거 활용', canon_status: '원작 여부', role_inference: '역할 추론 한계', trait_scope: '성향 적용 범위' }[key] || key)}</span><strong>${escapeHtml(PROFILE_LABELS[key]?.[value] || value)}</strong></div>`).join('')
-        : '<div class="sr-empty-small">저장하면 Jev 판독값이 표시됩니다.</div>';
     editor.scrollIntoView?.({ block: 'nearest' });
 }
 
@@ -2088,7 +2091,9 @@ async function analyzeAndSaveCharacter() {
     await persistChat();
     await clearInjection();
     closeCharacterEditor();
+    characterAnalysisSelection = { kind, id: entry.id };
     renderCharacterStore();
+    document.getElementById('sr-character-analysis-result')?.scrollIntoView?.({ block: 'nearest' });
     updateActivity(`${name} 판독을 저장했습니다.`, { done: true });
 }
 
@@ -2312,56 +2317,27 @@ function bindForm() {
         await storagePost('settings', { settings: settingsSnapshot() });
         const rec = record(true);
         rec.pendingContinuityCandidates = [];
+        rec.lastReasonerSource = null;
         rec.lastJudgment = null;
         await persistChat();
         await clearInjection();
         renderReasonerProfiles();
     })(), 'Reasoner 프로필을 변경하지 못했습니다.'));
-    document.getElementById('sr-reasoner-new')?.addEventListener('click', () => {
-        fillReasonerEditor();
-        document.getElementById('sr-reasoner-editor').open = true;
-    });
-    document.getElementById('sr-reasoner-edit')?.addEventListener('click', () => {
-        const profile = reasonerProfiles.find((item) => item.id === settings.reasonerProfileId);
-        if (!profile) { window.toastr?.warning?.('수정할 프로필을 먼저 선택하세요.', '씬판독기'); return; }
-        fillReasonerEditor(profile);
-        document.getElementById('sr-reasoner-editor').open = true;
-    });
-    document.getElementById('sr-reasoner-save')?.addEventListener('click', () => runUiTask((async () => {
-        invalidateReasonerJobs();
-        const value = (id) => document.getElementById(id)?.value || '';
-        const id = value('sr-reasoner-id') || `reasoner-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-        const data = await reasonerPost('profile/save', {
-            profile: { id, name: value('sr-reasoner-name'), adapter: value('sr-reasoner-adapter'), baseUrl: value('sr-reasoner-url'), model: value('sr-reasoner-model'), timeoutMs: Number(value('sr-reasoner-timeout')), maxTokens: Number(value('sr-reasoner-tokens')), temperature: 0.1 },
-            apiKey: value('sr-reasoner-key'),
-        });
-        reasonerProfiles = data.profiles || [];
-        saveGlobal('reasonerProfileId', id);
-        await storagePost('settings', { settings: settingsSnapshot() });
-        fillReasonerEditor(reasonerProfiles.find((item) => item.id === id));
-        renderReasonerProfiles();
-        window.toastr?.success?.('Reasoner 연결 프로필을 저장했습니다.', '씬판독기');
-    })(), 'Reasoner 프로필을 저장하지 못했습니다.'));
-    document.getElementById('sr-reasoner-delete')?.addEventListener('click', () => runUiTask((async () => {
-        invalidateReasonerJobs();
-        const id = document.getElementById('sr-reasoner-id')?.value || settings.reasonerProfileId;
-        if (!id) throw new Error('삭제할 프로필을 선택하세요.');
-        const data = await reasonerPost('profile/delete', { id });
-        reasonerProfiles = data.profiles || [];
-        if (settings.reasonerProfileId === id) saveGlobal('reasonerProfileId', '');
-        await storagePost('settings', { settings: settingsSnapshot() });
-        const rec = record(true); rec.pendingContinuityCandidates = []; rec.lastJudgment = null;
-        await persistChat(); await clearInjection();
-        fillReasonerEditor(); renderReasonerProfiles();
-        window.toastr?.success?.('Reasoner 연결 프로필을 삭제했습니다.', '씬판독기');
-    })(), 'Reasoner 프로필을 삭제하지 못했습니다.'));
+    document.getElementById('sr-reasoner-refresh')?.addEventListener('click', () => runUiTask((async () => {
+        await loadReasonerProfiles();
+        if (reasonerProfileError) throw new Error(reasonerProfileError);
+        window.toastr?.info?.(`SillyTavern 연결 프로필 ${reasonerProfiles.length}개를 읽었습니다.`, '씬판독기', { timeOut: 1800 });
+    })(), 'SillyTavern 연결 프로필을 새로 읽지 못했습니다.'));
     document.getElementById('sr-reasoner-test')?.addEventListener('click', () => runUiTask((async () => {
         if (!settings.reasonerProfileId) throw new Error('연결 프로필을 선택하세요.');
         const status = document.getElementById('sr-reasoner-status');
         if (status) status.textContent = '연결 확인 중…';
-        await reasonerPost('test', { profileId: settings.reasonerProfileId });
-        renderReasonerProfiles();
-        window.toastr?.success?.('Reasoner 연결에 성공했습니다.', '씬판독기');
+        if (!connectionRequestService) await loadReasonerProfiles();
+        if (!connectionRequestService) throw new Error(reasonerProfileError || 'SillyTavern 연결 기능을 찾지 못했습니다.');
+        try {
+            const result = await requestWithConnectionProfile(connectionRequestService, settings.reasonerProfileId, '', {}, { testing: true });
+            window.toastr?.success?.(`연결 성공 · ${result.profile.model}`, '씬판독기');
+        } finally { renderReasonerProfiles(); }
     })(), 'Reasoner 연결 확인에 실패했습니다.'));
     document.getElementById('sr-copy-macro')?.addEventListener('click', async () => {
         try {
@@ -2521,6 +2497,18 @@ function bindForm() {
     document.getElementById('sr-character-save')?.addEventListener('click', () => runUiTask(analyzeAndSaveCharacter(), '인물 시트를 판독·저장하지 못했습니다.'));
     document.getElementById('sr-character-delete')?.addEventListener('click', () => runUiTask(deleteCharacterEntry(), '인물 시트를 삭제하지 못했습니다.'));
     dialog.addEventListener('click', (event) => {
+        const view = event.target.closest('[data-character-view-id]');
+        if (view) {
+            characterAnalysisSelection = { kind: view.dataset.characterViewKind, id: view.dataset.characterViewId };
+            renderCharacterAnalysisBrowser();
+            return;
+        }
+        const edit = event.target.closest('[data-character-edit-id]');
+        if (edit) {
+            const entry = characterEntries(edit.dataset.characterEditKind).find((value) => value.id === edit.dataset.characterEditId);
+            if (entry) showCharacterEditor(edit.dataset.characterEditKind, entry);
+            return;
+        }
         const item = event.target.closest('.sr-character-item');
         if (item) {
             const entry = characterEntries(item.dataset.characterKind).find((value) => value.id === item.dataset.characterId);
@@ -2612,14 +2600,18 @@ function createDialog() {
                     <details class="sr-settings-card" open><summary>캐릭터</summary><div class="sr-world-toolbar"><p class="sr-help">주요 캐릭터 시트를 한 명씩 저장합니다.</p><button id="sr-character-new" type="button" class="menu_button sr-plus-button" aria-label="캐릭터 추가"><i class="fa-solid fa-plus"></i></button></div><div id="sr-character-list" class="sr-world-list"></div></details>
                     <details class="sr-settings-card"><summary>페르소나</summary><div class="sr-world-toolbar"><p class="sr-help">이 채팅의 유저 페르소나 한 명을 저장합니다.</p><button id="sr-persona-new" type="button" class="menu_button sr-plus-button" aria-label="페르소나 추가"><i class="fa-solid fa-plus"></i></button></div><div id="sr-persona-list" class="sr-world-list"></div></details>
                     <details class="sr-settings-card"><summary>NPC 시트</summary><div class="sr-world-toolbar"><p class="sr-help">시트 NPC도 한 명씩 저장합니다. 정보가 적으면 추측 대신 허용 범위를 좁게 저장합니다.</p><button id="sr-npc-sheet-new" type="button" class="menu_button sr-plus-button" aria-label="NPC 추가"><i class="fa-solid fa-plus"></i></button></div><div id="sr-npc-sheet-list" class="sr-world-list"></div></details>
-                    <section id="sr-character-editor" class="sr-settings-card" hidden><div class="sr-world-editor-head"><strong id="sr-character-editor-title">인물 추가</strong><button id="sr-character-editor-cancel" type="button" class="sr-icon-button" aria-label="편집 닫기"><i class="fa-solid fa-xmark"></i></button></div><label for="sr-character-name">이름</label><input id="sr-character-name" class="text_pole"><label for="sr-character-aliases">별칭</label><input id="sr-character-aliases" class="text_pole" placeholder="선택 사항 · 직접 필요한 이름만 쉼표로 구분"><label for="sr-character-source">시트 원문</label><textarea id="sr-character-source" class="text_pole" rows="12" placeholder="이 인물 한 명의 시트를 붙여 넣으세요."></textarea><label class="checkbox_label"><input id="sr-character-source-visible" type="checkbox"><span><strong>메인 RP 모델도 이 원본 시트를 이미 읽음</strong></span></label><p class="sr-help">캐릭터 카드·페르소나·활성 로어북으로 같은 원문이 전달되면 켭니다. 씬판독기에만 저장한 NPC는 끄면 활성 턴에 현재 장면과 관련된 핵심 정보만 짧게 함께 주입합니다.</p><details><summary>저장된 기본 경계 · 매턴 최종판정 아님</summary><p class="sr-help">시트에서 확인되는 지식·접근·말투·행동 범위의 상한입니다. 실제 이번 턴 판정은 위의 별도 영역에 표시됩니다.</p><div id="sr-character-analysis"></div></details><div class="sr-action-row"><button id="sr-character-save" class="menu_button">Jev 판독 후 저장</button><button id="sr-character-delete" class="menu_button">삭제</button></div></section>
+                    <section class="sr-settings-card"><h3>저장된 인물 판독 기준</h3><p class="sr-help">왼쪽에서 인물을 선택하면 저장된 시트 기준이 오른쪽에 표시됩니다.</p><div class="sr-character-analysis-browser"><div id="sr-character-analysis-list" class="sr-character-analysis-list"></div><div id="sr-character-analysis-result" class="sr-character-analysis-result"></div></div></section>
+                    <section id="sr-character-editor" class="sr-settings-card" hidden><div class="sr-world-editor-head"><strong id="sr-character-editor-title">인물 추가</strong><button id="sr-character-editor-cancel" type="button" class="sr-icon-button" aria-label="편집 닫기"><i class="fa-solid fa-xmark"></i></button></div><label for="sr-character-name">이름</label><input id="sr-character-name" class="text_pole"><label for="sr-character-aliases">별칭</label><input id="sr-character-aliases" class="text_pole" placeholder="선택 사항 · 직접 필요한 이름만 쉼표로 구분"><label for="sr-character-source">시트 원문</label><textarea id="sr-character-source" class="text_pole" rows="12" placeholder="이 인물 한 명의 시트를 붙여 넣으세요."></textarea><label class="checkbox_label"><input id="sr-character-source-visible" type="checkbox"><span><strong>메인 RP 모델도 이 원본 시트를 이미 읽음</strong></span></label><p class="sr-help">캐릭터 카드·페르소나·활성 로어북으로 같은 원문이 전달되면 켭니다. 씬판독기에만 저장한 NPC는 끄면 활성 턴에 현재 장면과 관련된 핵심 정보만 짧게 함께 주입합니다.</p><div class="sr-action-row"><button id="sr-character-save" class="menu_button">Jev 판독 후 저장</button><button id="sr-character-delete" class="menu_button">삭제</button></div></section>
                 </div>
                 <div id="sr-tab-settings" class="sr-tab-panel">
                     <section class="sr-settings-card"><h3>기본 설정</h3><label class="checkbox_label"><input id="sr-enabled" type="checkbox"><span><strong>씬판독기 전체 사용</strong></span></label><p class="sr-help">끄면 Jev 판독, 기본 주입, 프리셋 매크로 출력을 모두 중단합니다.</p><label class="checkbox_label"><input id="sr-auto" type="checkbox"><span>생성 직전에 자동 판독</span></label><label class="checkbox_label"><input id="sr-pause-ooc" type="checkbox"><span>OOC-only 건너뜀 알림 표시</span></label><p class="sr-help">대소문자를 구분하지 않는 <code>(OOC: ...)</code>·<code>[OOC: ...]</code>와 OOC_CHAT 표식을 인식합니다. RP와 OOC가 섞인 입력은 RP만 장면 근거로 읽고 OOC는 이번 진행의 참고·제약으로만 사용합니다.</p><div class="sr-action-row"><button id="sr-arm-ooc-debug" type="button" class="menu_button">다음 OOC에 직전 주입문 유지</button></div><p id="sr-ooc-debug-status" class="sr-help">문제 확인용 1회 기능입니다. 다음 입력이 OOC-only일 때만 직전 주입문을 그대로 유지하며, 그 응답은 관계·사건·NPC 상태나 이행 검증에 반영하지 않습니다.</p><label class="checkbox_label"><input id="sr-confidence" type="checkbox"><span>화면에 확신도 표시</span></label><label for="sr-recent-turns">최근 채팅 범위</label><select id="sr-recent-turns" class="text_pole"><option value="1">최근 1턴</option><option value="2">최근 2턴</option><option value="3">최근 3턴</option><option value="4">최근 4턴</option><option value="5">최근 5턴</option></select><p class="sr-help">한 턴은 유저 입력에서 시작해 뒤따르는 캐릭터 출력까지입니다. 생성 직전에는 현재 유저 입력이 최신 미완성 턴으로 포함됩니다. 매우 긴 기록은 최신 내용을 우선해 자동으로 제한합니다.</p></section>
-                    <section class="sr-settings-card"><h3>제작자 모드</h3><label for="sr-owner-password">제작자 비밀번호</label><div class="sr-owner-unlock-row"><input id="sr-owner-password" class="text_pole" type="password" autocomplete="off" placeholder="비밀번호"><button id="sr-owner-unlock" type="button" class="menu_button">잠금 해제</button></div><div id="sr-owner-status" class="sr-key-status">잠금 상태</div><p class="sr-help">한 번 해제하면 이 SillyTavern 설치의 확장 설정에 유지되며, 갈등용 진행 탭에 로컬 전용 입력 영역이 나타납니다.</p></section>
+                    <details class="sr-settings-card sr-settings-collapsible"><summary>제작자 모드</summary><label for="sr-owner-password">제작자 비밀번호</label><div class="sr-owner-unlock-row"><input id="sr-owner-password" class="text_pole" type="password" autocomplete="off" placeholder="비밀번호"><button id="sr-owner-unlock" type="button" class="menu_button">잠금 해제</button></div><div id="sr-owner-status" class="sr-key-status">잠금 상태</div><p class="sr-help">한 번 해제하면 이 SillyTavern 설치의 확장 설정에 유지되며, 갈등용 진행 탭에 로컬 전용 입력 영역이 나타납니다.</p></details>
                     <section class="sr-settings-card"><h3>주입 위치</h3><label for="sr-injection-mode">1. 기본 판정·전개 주입</label><select id="sr-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader}}</code><button id="sr-copy-macro" class="menu_button">복사</button></div><label for="sr-world-injection-mode">2. 세계관 전문 주입</label><select id="sr-world-injection-mode" class="text_pole"><option value="depth">기본 · 깊이 0 · system</option><option value="macro">프리셋 · 매크로 위치</option></select><div class="sr-macro-row"><code>{{scene-reader-world}}</code><button id="sr-copy-world-macro" class="menu_button">복사</button></div><p class="sr-help">각 매크로 방식은 기본 위치와 중복 주입하지 않습니다. 세계관 전문은 Jev 판독 요청에 보내지 않고 최종 프리셋에만 넣습니다.</p><div id="sr-macro-status" class="sr-key-status"></div></section>
-                    <section class="sr-settings-card"><h3>Jev API</h3><p class="sr-help">공식 TypeSafe Jev 주소와 <code>jev-latest</code>는 동봉 서버 플러그인에 고정되어 있습니다. 화면에는 키만 입력합니다.</p><label for="sr-jev-key">API 키</label><div class="sr-key-row"><input id="sr-jev-key" class="text_pole" type="password" autocomplete="new-password" placeholder="새 키 입력 (빈 값 저장 시 삭제)"><button id="sr-jev-toggle" class="menu_button" aria-label="키 표시 전환"><i class="fa-solid fa-eye"></i></button></div><div id="sr-jev-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-jev-save" class="menu_button">키 저장</button><button id="sr-jev-test" class="menu_button">연결 확인</button></div></section>
-                    <section class="sr-settings-card"><h3>Continuity Reasoner</h3><label class="checkbox_label"><input id="sr-continuity-enabled" type="checkbox"><span><strong>연속성 추론 사용</strong></span></label><p class="sr-help">확정된 약속·일정·위임·중요 정보가 바뀔 때만 보조 모델로 후보를 찾습니다. Jev가 다음 판독에서 검증하기 전에는 상태나 주입문에 반영하지 않습니다.</p><label for="sr-reasoner-profile">연결 프로필</label><select id="sr-reasoner-profile" class="text_pole"></select><div id="sr-reasoner-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-reasoner-new" type="button" class="menu_button">새 프로필</button><button id="sr-reasoner-edit" type="button" class="menu_button">선택 프로필 수정</button><button id="sr-reasoner-test" type="button" class="menu_button">연결 확인</button></div><details id="sr-reasoner-editor" class="sr-settings-card"><summary>연결 프로필 관리</summary><input id="sr-reasoner-id" type="hidden"><label for="sr-reasoner-name">이름</label><input id="sr-reasoner-name" class="text_pole"><label for="sr-reasoner-adapter">API 방식</label><select id="sr-reasoner-adapter" class="text_pole"><option value="openai_compatible">OpenAI 호환</option><option value="gemini">Gemini</option></select><label for="sr-reasoner-url">API 기본 주소</label><input id="sr-reasoner-url" class="text_pole" placeholder="https://.../v1 또는 Gemini 기본 주소"><label for="sr-reasoner-model">모델</label><input id="sr-reasoner-model" class="text_pole" placeholder="모델 ID"><label for="sr-reasoner-key">API 키</label><input id="sr-reasoner-key" class="text_pole" type="password" autocomplete="new-password" placeholder="비우면 기존 키 유지"><label for="sr-reasoner-timeout">제한 시간(ms)</label><input id="sr-reasoner-timeout" class="text_pole" type="number" min="3000" max="60000"><label for="sr-reasoner-tokens">최대 출력 토큰</label><input id="sr-reasoner-tokens" class="text_pole" type="number" min="256" max="3000"><div class="sr-action-row"><button id="sr-reasoner-save" type="button" class="menu_button">프로필 저장</button><button id="sr-reasoner-delete" type="button" class="menu_button">선택 프로필 삭제</button></div></details></section>                    <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>
+                    <section class="sr-settings-card sr-connection-card"><h3>모델 연결</h3><div class="sr-connection-grid">
+                        <div class="sr-connection-pane"><h4>Jev 판독</h4><p class="sr-help">주소와 모델은 플러그인에 고정되어 있습니다. Jev 키만 저장하세요.</p><label for="sr-jev-key">Jev API 키</label><div class="sr-key-row"><input id="sr-jev-key" class="text_pole" type="password" autocomplete="new-password" placeholder="새 키 입력"><button id="sr-jev-toggle" class="menu_button" aria-label="키 표시 전환"><i class="fa-solid fa-eye"></i></button></div><div id="sr-jev-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-jev-save" class="menu_button">키 저장</button><button id="sr-jev-test" class="menu_button">연결 확인</button></div></div>
+                        <div class="sr-connection-pane"><h4>연속성 추론 · SillyTavern 연결</h4><label class="checkbox_label"><input id="sr-continuity-enabled" type="checkbox"><span><strong>연속성 추론 사용</strong></span></label><p class="sr-help">중요한 변화가 있을 때만 보조 모델이 후보를 찾고, 다음 Jev 판독에서 검증합니다.</p><label for="sr-reasoner-profile">SillyTavern 연결 프로필</label><select id="sr-reasoner-profile" class="text_pole"></select><div id="sr-reasoner-status" class="sr-key-status"></div><div class="sr-action-row"><button id="sr-reasoner-refresh" type="button" class="menu_button">프로필 새로고침</button><button id="sr-reasoner-test" type="button" class="menu_button">연결 확인</button></div><p class="sr-help">모델·주소·키는 SillyTavern의 API 연결 메뉴에서 관리합니다.</p></div>
+                    </div></section>
+                    <section class="sr-settings-card"><h3>현재 채팅 초기화</h3><p class="sr-help">확장이 이 채팅에 저장한 구조화 상태만 지웁니다. 실제 채팅 내용은 건드리지 않습니다.</p><div class="sr-action-row"><button id="sr-reset-relationship" class="menu_button">관계 누적만 초기화</button><button id="sr-reset-event" class="menu_button">현재 사건 종료</button><button id="sr-reset-current-npc" class="menu_button">현재 일반 NPC 종료</button><button id="sr-reset-npc" class="menu_button">판정·관계·사건·인물 전체 초기화</button></div></section>
                     <section class="sr-settings-card"><h3>데이터 백업</h3><p class="sr-help">전용 저장소의 설정·채팅 상태·세계관·인물 시트와 Jev 키를 날짜·시간 기준으로 백업합니다. 복원 전 현재 상태도 자동 백업됩니다.</p><div class="sr-action-row"><button id="sr-backup-create" class="menu_button">지금 백업</button><label class="menu_button sr-file-button">백업 가져오기<input id="sr-backup-import" type="file" accept="application/json,.json" hidden></label></div><div id="sr-backup-list" class="sr-backup-list"></div></section>
                 </div>
             </main>
@@ -2646,6 +2638,7 @@ function openSceneReader() {
     setFormValues();
     renderAll();
     if (!dialog.open) dialog.showModal();
+    void loadReasonerProfiles();
 }
 
 function createQuickEntry() {
@@ -2809,6 +2802,21 @@ async function init() {
     if (event_types.MESSAGE_SWIPED) eventSource.on(event_types.MESSAGE_SWIPED, (messageId) => runEventTask(() => onAssistantOutputChanged(messageId, 'swiped'), '리롤 상태를 복원하지 못했습니다.'));
     if (event_types.MESSAGE_EDITED) eventSource.on(event_types.MESSAGE_EDITED, (messageId) => runEventTask(() => onAssistantOutputChanged(messageId, 'edited'), '수정된 출력 상태를 반영하지 못했습니다.'));
     if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, (messageId) => runEventTask(() => onAssistantOutputChanged(messageId, pendingGenerationType === 'regenerate' ? 'regenerated' : 'deleted'), '삭제된 출력 상태를 복원하지 못했습니다.'));
+    if (event_types.CONNECTION_PROFILE_CREATED) eventSource.on(event_types.CONNECTION_PROFILE_CREATED, () => { void loadReasonerProfiles(); });
+    for (const type of [event_types.CONNECTION_PROFILE_UPDATED, event_types.CONNECTION_PROFILE_DELETED].filter(Boolean)) {
+        eventSource.on(type, (...profiles) => runEventTask(async () => {
+            invalidateReasonerJobs();
+            await loadReasonerProfiles();
+            if (!profiles.some((profile) => profile?.id === settings.reasonerProfileId)) return;
+            const rec = record(true);
+            rec.pendingContinuityCandidates = [];
+            rec.lastReasonerSource = null;
+            rec.lastJudgment = null;
+            await persistChat();
+            await clearInjection();
+            renderAll();
+        }, '연결 프로필 변경을 반영하지 못했습니다.'));
+    }
     if (event_types.GENERATION_STOPPED) eventSource.on(event_types.GENERATION_STOPPED, () => {
         const wasDebug = activeGenerationCycle?.mode === 'ooc_debug';
         pendingGenerationType = '';
