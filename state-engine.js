@@ -17,6 +17,12 @@ export function addQualifiedEvidence(bucket, direction, fingerprint, amount = 1)
 }
 
 export function commitObservedState(rec, decisions, evidenceKey) {
+    // These choices describe an already completed role, not a proposed exit action.
+    if (evidenceKey) {
+        if (decisions.event_route === 'retire' && rec.eventProfile) { archiveCurrentEvent(rec, 'completed'); rec.eventProfile = null; }
+        if (decisions.npc_route === 'retire') rec.npcProfile = null;
+        if (decisions.villain_route === 'retire') rec.villainProfile = null;
+    }
     const relationship = rec.relationshipState;
     rec.observationState = {
         relationshipMotion: String(decisions.relationship_motion || 'unclear'),

@@ -814,6 +814,7 @@ Execute the selected move materially in this response. When the character has th
     const hasResolvableMatter = (['event', 'new_event', 'conflict'].includes(decisions.primary_focus) || decisions.secondary_focus === 'event') && (Boolean(eventProfile) || (decisions.event_state && !['none', 'unclear'].includes(decisions.event_state)));
     if (hasResolvableMatter && resolutionMoves[decisions.resolution_pacing]) blocks.push(`<EVENT_RESOLUTION_PACING mode="${settings.resolutionPace}">\n${resolutionMoves[decisions.resolution_pacing]}\n</EVENT_RESOLUTION_PACING>`);
 
+    if (decisions.primary_focus === 'transition') blocks.push('<SCENE_TRANSITION>Carry the established scene into its next supported time, place, or situation. Do not invent elapsed time, bypass unresolved user participation, or override a no-time-skip instruction. Show only the meaningful change and its immediate consequence.</SCENE_TRANSITION>');
     if (settings.advancedEnabled) {
         let advanced = buildAdvancedInjection({ decisions, eventProfile });
         if (advanced && decisions.secondary_focus === 'event') advanced = advanced.replace('<ADVANCED_PROGRESSION ', '<ADVANCED_PROGRESSION role="secondary" ');

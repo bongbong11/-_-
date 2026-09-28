@@ -152,7 +152,7 @@ export function selectContinuityContext(continuity, transcript, { opportunity = 
         items: current.items.filter(relevant).slice(-3),
         knowledge: current.knowledge.filter(relevant).slice(-3),
         dependencies: current.dependencies.filter((entry) => relevant(entry) || entry.stateId === 'event:current' || entry.stateId === 'relationship:current').slice(-2),
-        followups: current.followups.filter((entry) => entry.status === 'available' && !entry.executed && entry.expiry >= opportunity && entry.lastOffered !== opportunity && relevant(entry)).slice(-2),
+        followups: current.followups.filter((entry) => entry.status === 'available' && !entry.executed && entry.expiry >= opportunity && entry.lastOffered !== opportunity && (relevant(entry) || current.items.some((item) => item.id === entry.relatedStateId && relevant(item)))).slice(-2),
     };
 }
 

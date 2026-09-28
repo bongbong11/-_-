@@ -152,8 +152,11 @@ export function advancedChance(style) {
     return { conservative: 18, balanced: 35, active: 58, very_active: 75 }[style] || 35;
 }
 
-export function rollAdvancedEvent(element, { random = Math.random, worldId = 'current', worldName = '현재 설정 따름' } = {}) {
-    const table = EVENT_TABLES[element] || EVENT_TABLES.objective;
+export function rollAdvancedEvent(element, { random = Math.random, worldId = 'current', worldName = '현재 설정 따름', supernatural = false } = {}) {
+    const sourceTable = EVENT_TABLES[element] || EVENT_TABLES.objective;
+    const allowsSupernatural = supernatural || ['fantasy', 'urban-supernatural', 'occult'].includes(worldId);
+    const table = element === 'horror' && !allowsSupernatural
+        ? sourceTable.filter((_, index) => ![2, 4].includes(index)) : sourceTable;
     const [title, trigger, goal, pressure, prompt, cast] = pick(table, random);
     return {
         id: `advanced-event-${Date.now()}-${Math.floor(random() * 10000)}`,

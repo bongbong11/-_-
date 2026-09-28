@@ -15,7 +15,7 @@
 
 #scene-reader-dialog::backdrop { background: rgba(0, 0, 0, .64); backdrop-filter: blur(3px); }
 #scene-reader-dialog button { writing-mode: horizontal-tb !important; text-orientation: mixed !important; white-space: normal; word-break: keep-all; overflow-wrap: normal; line-height: 1.25; }
-#scene-reader-dialog .menu_button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: auto; max-width: 100%; min-height: 42px; padding: 9px 14px; }
+#scene-reader-dialog .menu_button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: auto; max-width: 100%; min-height: 42px; padding: 9px 14px; color: var(--SmartThemeBodyColor); background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, var(--SmartThemeBlurTintColor)); border: 1px solid var(--SmartThemeBorderColor); }
 #scene-reader-quick-button { display: inline-flex !important; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; min-width: 32px; height: 32px; padding: 0; cursor: pointer; opacity: .78; touch-action: manipulation; }
 #scene-reader-quick-button:hover,
 #scene-reader-quick-button:focus-visible { opacity: 1; }
@@ -213,3 +213,13 @@
     #scene-reader-dialog .sr-details summary { grid-template-columns: 1fr; }
     #scene-reader-dialog .sr-details summary small { text-align: left; }
 }
+
+/* Descriptive results need flexible text columns, not enum-sized cells. */
+#scene-reader-dialog .sr-character-turn-card .sr-decision-row,
+#scene-reader-dialog .sr-character-analysis-result .sr-decision-row { grid-template-columns: 1fr; }
+#scene-reader-dialog .sr-character-turn-card .sr-decision-row strong,
+#scene-reader-dialog .sr-character-analysis-result .sr-decision-row strong { text-align: left; font-weight: 500; line-height: 1.45; }
+#scene-reader-dialog .sr-trace { grid-column: 1 / -1; font-size: .8rem; line-height: 1.4; }
+#scene-reader-dialog .sr-trace > summary { cursor: pointer; opacity: .8; padding: 5px 0; }
+#scene-reader-dialog .sr-trace small { display: block; text-align: left; opacity: .85; }
+#scene-reader-dialog .sr-decision-row { overflow-wrap: anywhere; }

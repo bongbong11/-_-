@@ -41,7 +41,14 @@ export function splitOocText(value) {
         if (!match || match.index !== start + 1) { cursor = start + 1; continue; }
         const closeChar = text[start] === '(' ? ')' : ']';
         const contentStart = OOC_PREFIX.lastIndex;
-        const close = text.indexOf(closeChar, contentStart);
+        let close = -1;
+        const stack = [closeChar];
+        for (let i = contentStart; i < text.length; i += 1) {
+            if (text[i] === '\\') { i += 1; continue; }
+            if (text[i] === '(') stack.push(')');
+            else if (text[i] === '[') stack.push(']');
+            else if (text[i] === stack.at(-1)) { stack.pop(); if (!stack.length) { close = i; break; } }
+        }
         const end = close >= 0 ? close + 1 : text.length;
         const content = text.slice(contentStart, close >= 0 ? close : text.length).trim();
         if (content) blocks.push(content);

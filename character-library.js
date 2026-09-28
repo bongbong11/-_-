@@ -1,3 +1,4 @@
+import { normalizeAnchors } from './src/characters/anchors.js';
 export const PROFILE_FIELDS = {
     sheet_density: ['sparse', 'compact', 'detailed'],
     knowledge_scope: ['unspecified', 'narrow', 'ordinary', 'broad', 'specialist'],
@@ -50,6 +51,7 @@ export function normalizeCharacterStore(value) {
             source,
             sourceVisibleToMain: Object.hasOwn(entry, 'sourceVisibleToMain') ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc',
             sourceHash: String(entry.sourceHash || ''),
+            anchors: normalizeAnchors(entry, source),
             analysis: normalizeProfileAnalysis(entry.analysis),
             updatedAt: String(entry.updatedAt || ''),
         };
@@ -134,7 +136,7 @@ export function selectActiveEntries(store, transcript, primaryCharacterName = ''
         if (!name) return -1;
         if (!/^[\p{L}\p{N}_]+$/u.test(name)) return haystack.lastIndexOf(name);
         const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'giu');
+        const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_]|(?:은|는|이|가|을|를|에게|한테|께|의|와|과|도|만|에서|으로|로)(?=$|[^\\p{L}\\p{N}_]))`, 'giu');
         let latest = -1;
         for (const match of haystack.matchAll(pattern)) latest = Math.max(latest, match.index + match[1].length);
         return latest;
@@ -143,9 +145,9 @@ export function selectActiveEntries(store, transcript, primaryCharacterName = ''
     const all = [...normalized.characters, ...normalized.npcs];
     const scored = all.map((entry, order) => {
         const latest = latestMention(entry);
-        let score = latest >= 0 ? 2000 + latest : 0;
+        let score = latest >= 0 ? 2000 + (latest / Math.max(1, haystack.length)) * 500 : 0;
         if (carried.has(entry.id)) score = Math.max(score, 1000);
-        if (isPrimary(entry)) score = Math.max(score, 4000 + Math.max(0, latest));
+        if (isPrimary(entry)) score = Math.max(score, 4000);
         return { entry, order, score };
     }).filter((item) => item.score > 0);
     if (!scored.length && normalized.characters.length === 1) scored.push({ entry: normalized.characters[0], order: 0, score: 500 });
@@ -180,7 +182,7 @@ export function buildCharacterTurnQuestions(entries = [], { franchiseWorld = fal
     return { ...questions, ...buildCharacterTurnQuestions([], { franchiseWorld }) };
 }
 
-export function characterContext(entries, persona, transcript) {
+export function characterContext(entries, persona, transcript, knowledge = []) {
     const compact = (entry) => {
         const explicitAnchors = selectRelevantChunks(entry.source, transcript, 2).join('\n');
         return {
@@ -188,7 +190,14 @@ export function characterContext(entries, persona, transcript) {
             kind: entry.kind,
             name: entry.name,
             aliases: entry.aliases,
+            acquired_knowledge: knowledge.filter(item => {
+                if (item.characterId) return item.characterId === entry.id;
+                const name = String(item.character || '').trim().toLocaleLowerCase();
+                const matches = [...entries, ...(persona ? [persona] : [])].filter(person => [person.name, ...(person.aliases || [])].some(alias => String(alias).trim().toLocaleLowerCase() === name));
+                return matches.length === 1 && matches[0].id === entry.id;
+            }).slice(-8),
             explicit_anchors: explicitAnchors,
+            verified_sheet_boundaries: entry.anchors || [],
             boundary_profile: {
                 sparse: entry.analysis?.sheet_density === 'sparse',
                 sheet_density: entry.analysis?.sheet_density,

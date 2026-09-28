@@ -1,7 +1,7 @@
+const { readJson, writeJsonAtomic, validateSnapshot, portableSnapshot, restoreFiles, serialize } = require('./storage.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { registerReasonerRoutes } = require('./reasoner.cjs');
 
 const UPSTREAM = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
@@ -32,22 +32,10 @@ function pathsFor(request, chatKey = '') {
         secret: path.join(root, 'secrets.json'),
         chat: path.join(root, 'chats', `${id}.json`),
         history: path.join(root, 'history', `${id}.json`),
+        session: path.join(root, 'sessions', `${id}.json`),
         characters: path.join(root, 'characters', `${id}.json`),
         backups: path.join(root, 'backups'),
     };
-}
-
-async function readJson(file, fallback) {
-    try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return fallback; }
-}
-
-async function writeJsonAtomic(file, value) {
-    const body = JSON.stringify(value, null, 2);
-    if (Buffer.byteLength(body, 'utf8') > MAX_STORAGE_BYTES) throw new Error('Scene Reader storage record is too large.');
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporary, body, { encoding: 'utf8', mode: 0o600 });
-    await fs.rename(temporary, file);
 }
 
 async function removeFile(file) {
@@ -83,61 +71,46 @@ async function listBackups(request) {
     try { entries = await fs.readdir(backups, { withFileTypes: true }); } catch { return []; }
     const rows = [];
     for (const entry of entries.filter((item) => item.isFile() && item.name.endsWith('.json'))) {
-        const snapshot = await readJson(path.join(backups, entry.name), null);
+        let snapshot;
+        try { snapshot = await readJson(path.join(backups, entry.name), null); } catch { continue; }
         if (snapshot?.id && Array.isArray(snapshot.files)) rows.push({ id: snapshot.id, createdAt: snapshot.createdAt, reason: snapshot.reason || 'manual', fileCount: snapshot.files.length });
     }
     return rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-}
-
-function validateSnapshot(snapshot) {
-    if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.files)) throw new Error('Invalid Scene Reader backup.');
-    for (const entry of snapshot.files) {
-        if (!entry || typeof entry.path !== 'string' || typeof entry.text !== 'string') throw new Error('Invalid Scene Reader backup entry.');
-        const normalized = path.posix.normalize(entry.path);
-        if (normalized.startsWith('../') || normalized === '..' || path.isAbsolute(normalized) || normalized.startsWith('backups/')) throw new Error('Unsafe Scene Reader backup path.');
-    }
-    return snapshot;
 }
 
 async function restoreSnapshot(request, snapshot) {
     validateSnapshot(snapshot);
     const { root } = pathsFor(request);
     await createSnapshot(request, 'before_restore');
-    // Restore is exact: remove current records while preserving the backup archive.
-    let current = [];
-    try { current = await fs.readdir(root, { withFileTypes: true }); } catch { current = []; }
-    for (const entry of current) {
-        if (entry.name === 'backups') continue;
-        const target = path.resolve(root, entry.name);
-        if (!target.startsWith(`${path.resolve(root)}${path.sep}`)) throw new Error('Unsafe Scene Reader cleanup path.');
-        await fs.rm(target, { recursive: true, force: true });
-    }
-    for (const entry of snapshot.files) {
-        const target = path.resolve(root, ...entry.path.split('/'));
-        if (!target.startsWith(`${path.resolve(root)}${path.sep}`)) throw new Error('Unsafe Scene Reader restore path.');
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        await fs.writeFile(target, entry.text, { encoding: 'utf8', mode: 0o600 });
-    }
+    await restoreFiles(root, snapshot);
 }
 
 function storageHandler(handler) {
     return async (request, response) => {
-        try { return await handler(request, response); }
+        try { return await serialize(safeRoot(request), () => handler(request, response)); }
         catch (error) { return sendError(response, 500, error?.message || 'Scene Reader storage failed.'); }
     };
 }
 
+async function readSession(files) {
+    return await readJson(files.session, null) || { chat: await readJson(files.chat, null), history: await readJson(files.history, []) };
+}
+async function writeSession(files, session) {
+    await writeJsonAtomic(files.session, session);
+    // Remove legacy duplicates only after the combined replacement is durable.
+    await removeFile(files.chat); await removeFile(files.history);
+}
 async function init(router) {
     router.get('/health', (_request, response) => response.json({ ok: true, service: 'scene-reader-jev', model: MODEL, storage: true }));
-    registerReasonerRoutes(router, { rootFor: (request) => pathsFor(request).root, storageHandler });
 
     router.post('/storage/bootstrap', storageHandler(async (request, response) => {
         const chatKey = String(request.body?.chatKey || 'unsaved');
         const files = pathsFor(request, chatKey);
+        const session = await readSession(files);
         const [settings, chat, history, characters, secret, backups] = await Promise.all([
-            readJson(files.settings, {}), readJson(files.chat, null), readJson(files.history, []), readJson(files.characters, null), readJson(files.secret, {}), listBackups(request),
+            readJson(files.settings, {}), session.chat, session.history, readJson(files.characters, null), readJson(files.secret, {}), listBackups(request),
         ]);
-        response.json({ ok: true, settings, chat, history: Array.isArray(history) ? history : [], characters, keyStatus: secret.jevKey ? `저장됨 ····${String(secret.jevKey).slice(-4)}` : '저장된 키 없음', backups });
+        response.json({ ok: true, storageVersion: 2, migrated: Boolean(await readJson(files.session, null)), settings, chat, history: Array.isArray(history) ? history : [], characters, keyStatus: secret.jevKey ? `저장됨 ····${String(secret.jevKey).slice(-4)}` : '저장된 키 없음', backups });
     }));
 
     router.post('/storage/settings', storageHandler(async (request, response) => {
@@ -148,13 +121,24 @@ async function init(router) {
     for (const [route, field] of [['chat', 'chat'], ['history', 'history'], ['characters', 'characters']]) {
         router.post(`/storage/${route}`, storageHandler(async (request, response) => {
             const chatKey = String(request.body?.chatKey || 'unsaved');
-            const file = pathsFor(request, chatKey)[field];
+            const files = pathsFor(request, chatKey);
+            const file = files[field];
             const value = request.body?.value;
-            if (value === null) await removeFile(file); else await writeJsonAtomic(file, value);
+            if (field !== 'characters') {
+                const session = await readSession(files);
+                session[field] = value === null ? (field === 'history' ? [] : null) : value;
+                await writeSession(files, session);
+            } else if (value === null) await removeFile(file); else await writeJsonAtomic(file, value);
             response.json({ ok: true });
         }));
     }
 
+    router.post('/storage/transaction', storageHandler(async (request,response) => {
+        const {chatKey,chat,history} = request.body || {};
+        if (typeof chatKey !== 'string' || !chat || typeof chat !== 'object' || !Array.isArray(history)) throw new Error('Invalid scene transaction.');
+        await writeSession(pathsFor(request,chatKey), {chat,history});
+        response.json({ok:true});
+    }));
     router.post('/storage/key', storageHandler(async (request, response) => {
         const key = String(request.body?.key || '').trim();
         const file = pathsFor(request).secret;
@@ -177,7 +161,7 @@ async function init(router) {
         if (!/^\d{4}-\d{2}-\d{2}T[\d-]+Z$/.test(id)) throw new Error('Invalid backup id.');
         const snapshot = await readJson(path.join(pathsFor(request).backups, `${id}.json`), null);
         validateSnapshot(snapshot);
-        response.json({ ok: true, snapshot });
+        response.json({ ok: true, snapshot: portableSnapshot(snapshot) });
     }));
     router.post('/storage/backup/restore', storageHandler(async (request, response) => {
         const id = String(request.body?.id || '');
