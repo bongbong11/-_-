@@ -4,6 +4,7 @@ export const INITIAL_CUSTOM_WORLDS = [
     {
         id: 'custom-general-world',
         name: '일반세계',
+        franchise: false,
         hint: 'Apply the active world, accumulated changes, continuity, physical limits, institutions, logistics, and consequences without resetting omitted history.',
         prompt: `## WORLD_INFERENCE
 Immediately before output, apply the active world and accumulated changes with higher sources overriding lower ones:
@@ -33,6 +34,7 @@ Use surrounding details only when they change what a character notices, says, do
     {
         id: 'custom-harry-potter',
         name: '해리포터',
+        franchise: true,
         hint: 'Harry Potter canon logic appropriate to the established continuity, location, and year, with active roleplay and lore taking precedence.',
         prompt: `## HARRY_POTTER_WORLD_CHECK
 
@@ -67,6 +69,7 @@ Keep this check internal. Never mention canon verification, prompts, or these in
     {
         id: 'custom-canon',
         name: '메이저장르 통으로',
+        franchise: true,
         hint: 'Established-franchise fidelity: identify the active franchise, continuity, adaptation, era, timeline, and location, then apply its specific world and character logic.',
         prompt: `## CANON_FIDELITY_PASS
 
@@ -124,6 +127,7 @@ Keep recall, comparison, and evaluation internal. Output only the narrative and 
     {
         id: 'custom-werewolf',
         name: '웨어울프',
+        franchise: false,
         hint: 'Lycan and werewolf-romance world logic, pack structure, mate bonds, instinct, shifting, territoriality, and exclusions.',
         prompt: `## LYCAN_WEREWOLF_WORLD_CHECK
 
@@ -164,6 +168,7 @@ Keep this check internal. Never mention genre conventions, trope inference, prom
     {
         id: 'custom-omegaverse',
         name: '오메가버스',
+        franchise: false,
         hint: 'Fixed Omegaverse baseline covering secondary sex, pheromones, heat and rut, reproduction, bonds, social rules, agency, and consequences.',
         prompt: `## OMEGAVERSE_WORLD_CHECK
 
@@ -220,6 +225,25 @@ export function makeWorldHint(name, prompt) {
     return `${String(name || 'Custom world').trim()}: ${excerpt || 'Follow the stored world prompt and active roleplay continuity.'}`;
 }
 
+function normalizeCustomWorld(world) {
+    const prompt = String(world.prompt || '');
+    return {
+        id: String(world.id),
+        name: String(world.name),
+        hint: String(world.hint || makeWorldHint(world.name, prompt)),
+        prompt,
+        franchise: Object.hasOwn(world, 'franchise')
+            ? Boolean(world.franchise)
+            : /CANON_FIDELITY_PASS|HARRY_POTTER_WORLD_CHECK|established[- ]franchise|원작\s*(?:세계|인물|캐릭터)/i.test(`${world.id} ${world.name} ${world.hint || ''} ${prompt}`),
+    };
+}
+
+export function isFranchiseWorld(world) {
+    if (!world || typeof world !== 'object') return false;
+    if (Object.hasOwn(world, 'franchise')) return Boolean(world.franchise);
+    return /CANON_FIDELITY_PASS|HARRY_POTTER_WORLD_CHECK|established[- ]franchise|\bcanon\b|원작\s*(?:세계|인물|캐릭터)/i.test(`${world.id || ''} ${world.name || ''} ${world.hint || ''} ${world.prompt || ''}`);
+}
+
 export function loadCustomWorlds() {
     try {
         const parsed = JSON.parse(localStorage.getItem(CUSTOM_WORLD_STORAGE) || 'null');
@@ -231,7 +255,7 @@ export function loadCustomWorlds() {
                 if (seen.has(world.id)) return false;
                 seen.add(world.id);
                 return true;
-            }).map((world) => ({ id: String(world.id), name: String(world.name), hint: String(world.hint || makeWorldHint(world.name, world.prompt)), prompt: String(world.prompt) }));
+            }).map(normalizeCustomWorld);
         }
     } catch { /* use bundled defaults */ }
     const initial = structuredClone(INITIAL_CUSTOM_WORLDS);
@@ -241,7 +265,8 @@ export function loadCustomWorlds() {
 
 export function saveCustomWorlds(worlds) {
     try {
-        localStorage.setItem(CUSTOM_WORLD_STORAGE, JSON.stringify(worlds));
+        const normalized = (Array.isArray(worlds) ? worlds : []).filter((world) => world?.id && world?.name && world?.prompt).map(normalizeCustomWorld);
+        localStorage.setItem(CUSTOM_WORLD_STORAGE, JSON.stringify(normalized));
         return true;
     } catch {
         return false;
@@ -249,5 +274,5 @@ export function saveCustomWorlds(worlds) {
 }
 
 export function allWorlds(builtins, customs = loadCustomWorlds()) {
-    return [...builtins.map((world) => ({ ...world, builtin: true })), ...customs.map((world) => ({ ...world, hint: world.hint || makeWorldHint(world.name, world.prompt), builtin: false }))];
+    return [...builtins.map((world) => ({ ...world, franchise: Boolean(world.franchise), builtin: true })), ...customs.map((world) => ({ ...normalizeCustomWorld(world), builtin: false }))];
 }

@@ -2,7 +2,7 @@ export const OBSERVATION_KEYS = new Set([
     'scene_state', 'conversation_tone', 'conflict_state', 'relationship_motion', 'trust_signal',
     'intimacy_signal', 'romance_evidence', 'continuity_change', 'counterevidence', 'ambiguity',
     'unresolved', 'time_relation', 'event_state', 'event_valence', 'event_blocker',
-    'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit',
+    'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'context_change_source',
 ]);
 
 export const DIAGNOSTIC_KEYS = new Set([
@@ -12,7 +12,7 @@ export const DIAGNOSTIC_KEYS = new Set([
 ]);
 
 export function decisionPolicyKind(key) {
-    if (String(key).startsWith('verification_')) return 'verification';
+    if (String(key).startsWith('verification_') || String(key).startsWith('continuity_candidate_')) return 'verification';
     if (OBSERVATION_KEYS.has(key) || /_knowledge$|_competence$|_access$|_certainty$/.test(key)) return 'observation';
     if (DIAGNOSTIC_KEYS.has(key)) return 'diagnostic';
     return 'routing';
@@ -53,7 +53,9 @@ export function applyDecisionPolicy({ key, answer, style = 'balanced', allowedCh
 }
 
 export function pendingPlanEffects(decisions = {}) {
-    const effects = [];
+    // Progress is verified for every completed RP output. It drives the
+    // stalled-scene pressure without treating raw message count as progress.
+    const effects = ['progress'];
     if (decisions.relationship_pacing && decisions.relationship_pacing !== 'hold') effects.push('relationship');
     if (decisions.relationship_beat && decisions.relationship_beat !== 'none' && !effects.includes('relationship')) effects.push('relationship');
     if (['create', 'continue', 'retire', 'replace'].includes(decisions.event_route)
@@ -68,6 +70,7 @@ export function pendingPlanEffects(decisions = {}) {
 }
 
 const EFFECT_LABELS = {
+    progress: 'material scene progress rather than repetition, preparation, or another handoff',
     relationship: 'relationship movement or relationship beat',
     event: 'event creation, event movement, or event resolution',
     npc: 'NPC or antagonist route',
@@ -79,7 +82,9 @@ export function buildVerificationQuestions(pendingPlan) {
     if (!pendingPlan?.outputText || !Array.isArray(pendingPlan.effects)) return {};
     return Object.fromEntries(pendingPlan.effects.map((effect) => [`verification_${effect}`, {
         type: 'choice',
-        instructions: `Compare the prior pending plan with the immediately following CHARACTER output. Verify only actual execution of the planned ${EFFECT_LABELS[effect] || effect}. A mention, intention, atmosphere, or setup without material execution is not fulfillment. Do not use the current USER reaction as proof that the prior output executed the plan.`,
+        instructions: effect === 'progress'
+            ? 'Evaluate only the immediately following CHARACTER output. Material progress means that the output actually changes an active exchange, decision, relationship pressure, event, access condition, knowledge state, action, or consequence. Rephrasing, atmosphere, preparation, warning, repeated questions, or handing the turn back without a concrete step is not progress. Do not use the current USER reaction as proof.'
+            : `Compare the prior pending plan with the immediately following CHARACTER output. Verify only actual execution of the planned ${EFFECT_LABELS[effect] || effect}. A mention, intention, atmosphere, or setup without material execution is not fulfillment. Do not use the current USER reaction as proof that the prior output executed the plan.`,
         criteria: {
             fulfilled: 'The prior CHARACTER output materially executed the planned effect.',
             partial: 'The prior CHARACTER output executed a real but incomplete part of the planned effect.',
@@ -97,36 +102,6 @@ export function verificationSummary(pendingPlan, decisions = {}) {
 
 export function isVerified(status) {
     return status === 'fulfilled' || status === 'partial';
-}
-
-export function hasPrimaryAction(decisions = {}) {
-    if (decisions.direct_execution === 'yes') return true;
-    if (decisions.relationship_pacing && decisions.relationship_pacing !== 'hold') return true;
-    if (decisions.relationship_beat && decisions.relationship_beat !== 'none') return true;
-    if (['create', 'continue', 'replace'].includes(decisions.event_route)) return true;
-    if (['create', 'continue'].includes(decisions.advanced_route)) return true;
-    if (decisions.progression_move && !['hold', 'quiet'].includes(decisions.progression_move)) return true;
-    if (['create', 'reuse', 'replace'].includes(decisions.npc_route)) return true;
-    if (['create', 'continue', 'replace'].includes(decisions.villain_route)) return true;
-    return decisions.fight_sustain === 'yes';
-}
-
-export function activeFallbackRoute({ decisions = {}, hasStoredEvent = false, canContinueStoredEvent = false, advanced = false } = {}) {
-    if (hasStoredEvent && canContinueStoredEvent) {
-        if (advanced) return { primary_focus: 'event', advanced_route: 'continue', advanced_move: 'advance', direct_execution: 'no', reason: 'existing_event' };
-        const move = ({
-            information: 'reveal',
-            action: 'advance',
-            choice: 'advance',
-            resource: 'complication',
-            resistance: 'consequence',
-            external: 'consequence',
-        })[decisions.event_blocker] || 'advance';
-        return { primary_focus: 'event', event_route: 'continue', progression_move: move, direct_execution: 'no', reason: 'existing_event' };
-    }
-    if (decisions.conflict_state === 'active') return { primary_focus: 'conflict', direct_execution: 'yes', reason: 'active_conflict' };
-    if (['relationship', 'conflict'].includes(decisions.unresolved)) return { primary_focus: 'relationship', direct_execution: 'yes', reason: 'relationship_pressure' };
-    return { primary_focus: 'direct', direct_execution: 'yes', reason: decisions.continuity_change === 'change' ? 'prior_consequence' : 'current_interaction' };
 }
 
 export function stableFingerprint(value) {

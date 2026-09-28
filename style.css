@@ -101,6 +101,10 @@
 #scene-reader-dialog .sr-backup-item small { opacity: .68; }
 #scene-reader-dialog #sr-character-editor { gap: 8px; }
 #scene-reader-dialog #sr-character-source { width: 100%; resize: vertical; }
+#scene-reader-dialog #sr-character-turn-results { display: grid; gap: 9px; }
+#scene-reader-dialog .sr-character-turn-card { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent); }
+#scene-reader-dialog .sr-character-turn-card h4 { display: flex; align-items: baseline; gap: 7px; margin: 0 0 3px; color: var(--SmartThemeBodyColor); }
+#scene-reader-dialog .sr-character-turn-card h4 small { color: var(--SmartThemeEmColor); font-size: .76em; font-weight: 500; }
 #scene-reader-dialog .sr-backup-list { display: grid; gap: 8px; }
 #scene-reader-dialog .sr-backup-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; }
 #scene-reader-dialog .sr-backup-item > div { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }

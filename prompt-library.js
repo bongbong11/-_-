@@ -51,6 +51,7 @@ export const DECISION_LABELS = {
     ambiguity: { low: '해석이 비교적 명확', material: '중요한 모호성 있음', high: '판정 곤란', unclear: '불명확' },
     unresolved: { none: '뚜렷한 미해결 없음', relationship: '관계 문제', conflict: '갈등', goal: '목표·행동', information: '정보·비밀', danger: '위협·위기', multiple: '여러 요소', unclear: '불명확' },
     time_relation: { first_scene: '비교할 이전 장면 없음', immediate: '직전 장면에서 즉시 연속', minutes: '수분~수십 분 후', hours: '몇 시간 후', next_day: '다음날', days: '며칠 후', weeks_months: '수주~수개월 후', unclear: '실제로 판별 불가' },
+    context_change_source: { none: '새 장면 기회 없음', user_established: '유저가 새 상황 확정', character_established: '캐릭터 출력이 새 상황 확정', both: '양쪽에서 새 상황 확정', unclear: '변화 출처 불명확' },
     event_state: { none: '진행 중인 중심 사건 없음', introduced: '사건 도입', active: '사건 진행 중', turning: '전환점', resolution_ready: '해결 조건 마련됨', aftermath: '해결 후 여파', unclear: '불명확' },
     event_valence: { positive: '긍정', negative: '부정', mixed: '양쪽', neutral: '중립', unclear: '불명확' },
     event_blocker: { none: '뚜렷한 방해 없음', information: '정보·단서 부족', action: '실제 행동 필요', choice: '결정·선택 필요', resource: '시간·자원 부족', resistance: '인물·세력의 저항', external: '외부 방해', unclear: '불명확' },
@@ -80,6 +81,7 @@ export const DECISION_LABELS = {
     progression_move: { hold: '현재 흐름 유지', advance: '기존 행동·목표 진전', complication: '장애물·압박', positive: '유리한 기회·성과', reveal: '정보·단서', consequence: '기존 행동의 결과', turning_point: '국면 전환', transition: '장면·시간 전환' },
     event_route: { none: '새 사건 없음', waiting: '사건 추첨 대기', continue: '현재 사건 유지', create: '새 사건 추첨·도입', retire: '현재 사건 종료', replace: '현재 사건 종료·새 추첨' },
     primary_focus: { direct: '현재 대화·행동에 직접 응답', relationship: '관계·로맨스 진행', event: '현재 사건 진행', conflict: '갈등 실행', npc: 'NPC·빌런 개입', new_event: '새 사건 도입', transition: '장면 전환' },
+    secondary_focus: { none: '보조 진행 없음', relationship: '관계·로맨스 보조 진행', event: '사건·결과 보조 진행', conflict: '갈등 보조 실행', npc: '일반 NPC 보조 개입', villain: '빌런 보조 개입', continuity: '연속성 후속 결과' },
     npc_route: { none: '미적용', waiting: '확률 추첨 대기', reuse: '기존 NPC 행동·재등장', create: '새 일반 NPC 생성', background: 'NPC를 배경으로 전환', retire: '기존 NPC 종료', replace: '기존 NPC 교체 추첨' },
     npc_role: { none: '역할 없음', participant: '사건 당사자', witness: '목격자', information: '정보 보유자', support: '도움·자원 제공자', gatekeeper: '접근 통제자', opposition: '방해·반대 인물', mediator: '중재자', authority: '권한 행사자', exploiter: '갈등 이용자', consequence: '결과 전달자', protector: '보호·구조 인물', self_directed: '자기 목적 추구자' },
     npc_weight: { none: '미적용', background: '배경 유지', brief: '짧은 반응', supporting: '보조 역할', primary: '이번 턴 주요 역할', exit: '퇴장·후퇴' },
@@ -387,6 +389,10 @@ export function rollVillainProfile(random = Math.random) {
 export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {} }) {
     const progressionMode = preferences.advancedEnabled ? 'off' : preferences.progressionMode;
     const newEventEnabled = preferences.advancedEnabled || progressionMode !== 'off';
+    const stalledOutputs = Math.max(0, Number(pacingState?.progression?.turnsSinceMeaningfulProgress) || 0);
+    const progressPressure = stalledOutputs
+        ? `The last ${stalledOutputs} verified CHARACTER output${stalledOutputs === 1 ? '' : 's'} did not fully deliver material progress. This is routing pressure toward a concrete supported step, never evidence for an unsupported fact, event, relationship change, or time jump.`
+        : 'There is no accumulated verified progression stall.';
     const posture = 'Use the same evidence standard regardless of routing style. Select none only when the recent exchange affirmatively supports absence; select unclear when relevant evidence exists but is insufficient or contradictory. Do not turn desired next movement into an observed fact.';
     const uncertainProgressionRule = {
         conservative: 'When the scene is unclear or merely maintaining its state, prefer hold. Do not add movement only to avoid uncertainty.',
@@ -477,6 +483,17 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             type: 'choice',
             instructions: 'Infer the current scene\'s temporal relation to the previous established scene. Prioritize explicit info blocks or timestamps, then dialogue, activity, location, routine, and environmental cues. Select first_scene when no previous scene is present. Never equate message count with elapsed in-world time and never invent precision.',
             criteria: { first_scene: 'No earlier established scene is available for comparison.', immediate: 'The scene is a direct continuation with no meaningful gap.', minutes: 'A short gap of minutes to tens of minutes is supported.', hours: 'A gap of several hours within roughly the same day is supported.', next_day: 'An overnight or next-day transition is supported.', days: 'A gap of multiple days is supported.', weeks_months: 'A gap of weeks to months or longer is supported.', unclear: 'A previous scene exists but no reliable temporal relation can be inferred.' },
+        },
+        context_change_source: {
+            type: 'choice',
+            instructions: 'Identify whether a materially new time, location, situation, access condition, or scene phase was actually established in the latest exchange, and who established it. A planned, threatened, intended, or merely suggested transition is not an established context change.',
+            criteria: {
+                none: 'No materially new scene opportunity was actually established.',
+                user_established: 'The latest USER roleplay directly establishes the new time, place, situation, access condition, or phase.',
+                character_established: 'The immediately prior CHARACTER output actually establishes it rather than merely planning or suggesting it.',
+                both: 'Both the prior CHARACTER output and latest USER roleplay establish material parts of the new context.',
+                unclear: 'A material context change may exist but its source or completion cannot be distinguished.',
+            },
         },
         event_state: {
             type: 'choice',
@@ -617,7 +634,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
 
     questions.primary_focus = {
         type: 'choice',
-        instructions: `Choose the single primary function for the next response. Immediate danger and already-started action outrank new material; a direct user question or choice outranks optional intervention. Do not let a new event or NPC interrupt a meaningful active relationship exchange without a concrete cause. ${preferences.judgmentStyle === 'active' ? 'When several choices fit, prefer the one that produces a concrete genre-appropriate change now instead of passive maintenance; this still permits only one primary beat.' : ''}`,
+        instructions: `Choose the single primary function for the next response. Immediate danger and already-started action outrank new material; a direct user question or choice outranks optional intervention. Do not let a new event or NPC interrupt a meaningful active relationship exchange without a concrete cause. ${progressPressure} ${preferences.judgmentStyle === 'active' ? 'When several choices fit, prefer the one that produces a concrete genre-appropriate change now instead of passive maintenance; this still permits only one primary beat.' : ''}`,
         criteria: {
             direct: 'Respond to the user\'s immediate speech, choice, or already-started action.',
             relationship: 'The active relationship question or interpersonal change should receive the main development.',
@@ -632,7 +649,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     if (progressionMode !== 'off') {
         questions.event_route = {
             type: 'choice',
-            instructions: `Route the stored primary event under the ${progressionMode} progression mode. A complication, clue, or consequence inside an active event is not a new event. New creation is allowed only when no stronger unfinished interaction or event would be displaced.`,
+            instructions: `Route the stored primary event under the ${progressionMode} progression mode. A complication, clue, or consequence inside an active event is not a new event. New creation is allowed only when no stronger unfinished interaction or event would be displaced. ${progressPressure}`,
             criteria: {
                 none: hasEvent ? 'Keep the stored event in the background this response without erasing it.' : 'No new event is appropriate.',
                 continue: hasEvent ? 'The stored event remains the primary event and should be acted on now.' : 'Do not select: no stored event exists.',
@@ -643,7 +660,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         };
         questions.progression_move = {
             type: 'choice',
-            instructions: `Choose at most one major progression function for the next response under the ${progressionMode} progression mode. This controls plot movement only and must not alter preset genre, tone, style, or setting. ${uncertainProgressionRule}`,
+            instructions: `Choose at most one major progression function for the next response under the ${progressionMode} progression mode. This controls plot movement only and must not alter preset genre, tone, style, or setting. ${uncertainProgressionRule} ${progressPressure}`,
             criteria: {
                 hold: 'The current interaction already has meaningful unfinished material and needs no added movement.',
                 advance: 'One existing aim, event, or thread should move through concrete action or consequence.',
@@ -738,12 +755,13 @@ ${lines.join('\n')}
 </NPC_SCENE_EXECUTION>`;
 }
 
-function eventPrompt(profile, route) {
+function eventPrompt(profile, route, role = 'primary') {
     if (!profile || !['create', 'continue', 'replace'].includes(route)) return '';
-    return `<RP_PRIMARY_EVENT mode="${profile.mode}" phase="${profile.phase}">
+    return `<RP_EVENT_BEAT role="${role}" mode="${profile.mode}" phase="${profile.phase}">
 Event: ${profile.title}. Trigger: ${profile.trigger}. Goal: ${profile.goal}. Pressure: ${profile.pressure}. Resolution condition: ${profile.resolution}.
 ${profile.prompt}
-</RP_PRIMARY_EVENT>`;
+${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or consequence. Keep the primary interaction central; do not force a full scene transition or resolution.' : ''}
+</RP_EVENT_BEAT>`;
 }
 
 export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '' }) {
@@ -791,14 +809,15 @@ Execute the selected move materially in this response. When the character has th
         partial: 'Resolve one concrete phase, obstacle, question, or subgoal and preserve the remaining active matter and consequences.',
         resolve: 'A substantial resolution is permitted when the established cause is executed in this response. Show the decisive action and carry forward its consequences; do not use summary, coincidence, or an unsupported time jump as closure.',
     };
-    const hasResolvableMatter = ['event', 'new_event', 'conflict', 'transition'].includes(decisions.primary_focus) && (Boolean(eventProfile) || (decisions.event_state && !['none', 'unclear'].includes(decisions.event_state)));
+    const hasResolvableMatter = (['event', 'new_event', 'conflict'].includes(decisions.primary_focus) || decisions.secondary_focus === 'event') && (Boolean(eventProfile) || (decisions.event_state && !['none', 'unclear'].includes(decisions.event_state)));
     if (hasResolvableMatter && resolutionMoves[decisions.resolution_pacing]) blocks.push(`<EVENT_RESOLUTION_PACING mode="${settings.resolutionPace}">\n${resolutionMoves[decisions.resolution_pacing]}\n</EVENT_RESOLUTION_PACING>`);
 
     if (settings.advancedEnabled) {
-        const advanced = buildAdvancedInjection({ decisions, eventProfile });
+        let advanced = buildAdvancedInjection({ decisions, eventProfile });
+        if (advanced && decisions.secondary_focus === 'event') advanced = advanced.replace('<ADVANCED_PROGRESSION ', '<ADVANCED_PROGRESSION role="secondary" ');
         if (advanced) blocks.push(advanced);
     } else if (settings.progressionMode !== 'off') {
-        const activeEvent = eventPrompt(eventProfile, decisions.event_route);
+        const activeEvent = eventPrompt(eventProfile, decisions.event_route, decisions.secondary_focus === 'event' ? 'secondary' : 'primary');
         if (activeEvent) blocks.push(activeEvent);
         if (eventProfile?.phase === 'aftermath') blocks.push('<EVENT_AFTERMATH>Carry one concrete aftermath into the scene—a changed relationship, cost, injury, obligation, reputation, access condition, loss, or limitation—before replacing the resolved event with unrelated material.</EVENT_AFTERMATH>');
         const move = decisions.progression_move || 'hold';

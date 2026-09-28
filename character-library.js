@@ -31,7 +31,7 @@ export const PROFILE_LABELS = {
 };
 
 export function defaultCharacterStore() {
-    return { schemaVersion: 3, enabled: false, characters: [], persona: null, npcs: [], updatedAt: null };
+    return { schemaVersion: 4, enabled: false, characters: [], persona: null, npcs: [], updatedAt: null };
 }
 
 export function normalizeCharacterStore(value) {
@@ -109,7 +109,8 @@ function terms(value) {
 
 export function selectRelevantChunks(source, query, limit = 2) {
     const chunks = chunkSheet(source);
-    if (String(source || '').length <= 2800) return chunks;
+    const safeLimit = Math.max(1, Number(limit) || 1);
+    if (chunks.length <= safeLimit) return chunks;
     const queryTerms = terms(query);
     const ranked = chunks.map((text, index) => {
         const textTerms = terms(text);
@@ -118,25 +119,39 @@ export function selectRelevantChunks(source, query, limit = 2) {
         if (/occupation|profession|education|background|relationship|family|skill|ability|직업|학력|교육|배경|관계|가족|능력|기술/i.test(text)) score += 3;
         return { text, index, score };
     }).sort((a, b) => b.score - a.score || a.index - b.index);
-    const selected = [{ text: chunks[0], index: 0 }, ...ranked].filter((item, index, all) => all.findIndex((other) => other.index === item.index) === index);
-    return selected.slice(0, Math.max(2, limit + 1)).map((v) => v.text);
+    return ranked.slice(0, safeLimit).map((v) => v.text);
 }
 
-function mentioned(entry, transcript) {
-    const haystack = String(transcript || '').toLocaleLowerCase();
-    return [entry.name, ...(entry.aliases || [])].some((name) => name && haystack.includes(String(name).toLocaleLowerCase()));
-}
-
-export function selectActiveEntries(store, transcript, primaryCharacterName = '') {
+export function selectActiveEntries(store, transcript, primaryCharacterName = '', carriedEntryIds = []) {
     const normalized = normalizeCharacterStore(store);
     if (!normalized.enabled) return [];
     const haystack = String(transcript || '').toLocaleLowerCase();
-    const latestMention = (entry) => Math.max(...[entry.name, ...(entry.aliases || [])].map((name) => haystack.lastIndexOf(String(name || '').toLocaleLowerCase())));
-    const chars = normalized.characters.filter((entry) => entry.name === primaryCharacterName || mentioned(entry, transcript));
-    if (!chars.length && normalized.characters.length === 1) chars.push(normalized.characters[0]);
-    const npcs = normalized.npcs.filter((entry) => mentioned(entry, transcript));
-    return [...chars, ...npcs]
-        .sort((a, b) => Number(b.name === primaryCharacterName) - Number(a.name === primaryCharacterName) || latestMention(b) - latestMention(a))
+    const primary = String(primaryCharacterName || '').trim().toLocaleLowerCase();
+    const carried = new Set((Array.isArray(carriedEntryIds) ? carriedEntryIds : []).map(String));
+    const names = (entry) => [entry.name, ...(entry.aliases || [])].map((name) => String(name || '').trim().toLocaleLowerCase()).filter(Boolean);
+    const isPrimary = (entry) => Boolean(primary && names(entry).includes(primary));
+    const mentionIndex = (name) => {
+        if (!name) return -1;
+        if (!/^[\p{L}\p{N}_]+$/u.test(name)) return haystack.lastIndexOf(name);
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'giu');
+        let latest = -1;
+        for (const match of haystack.matchAll(pattern)) latest = Math.max(latest, match.index + match[1].length);
+        return latest;
+    };
+    const latestMention = (entry) => Math.max(-1, ...names(entry).map(mentionIndex));
+    const all = [...normalized.characters, ...normalized.npcs];
+    const scored = all.map((entry, order) => {
+        const latest = latestMention(entry);
+        let score = latest >= 0 ? 2000 + latest : 0;
+        if (carried.has(entry.id)) score = Math.max(score, 1000);
+        if (isPrimary(entry)) score = Math.max(score, 4000 + Math.max(0, latest));
+        return { entry, order, score };
+    }).filter((item) => item.score > 0);
+    if (!scored.length && normalized.characters.length === 1) scored.push({ entry: normalized.characters[0], order: 0, score: 500 });
+    return scored
+        .sort((a, b) => b.score - a.score || b.order - a.order)
+        .map((item) => item.entry)
         .slice(0, 3);
 }
 
@@ -153,7 +168,7 @@ export function buildCharacterTurnQuestions(entries = [], { franchiseWorld = fal
     const questions = {};
     entries.forEach((entry, index) => {
         const prefix = `character_${index}`;
-        questions[`${prefix}_presence`] = { type: 'choice', instructions: `Judge ${entry.name}'s role in the next response.`, criteria: { absent: 'No material role.', background: 'Continuity only.', active: 'A concrete action, decision, or line is warranted.' } };
+        questions[`${prefix}_presence`] = { type: 'choice', instructions: `Judge ${entry.name}'s role in the next response from the actual RP. A previously active person may remain present without being named again; mark absent only when the scene supports their absence.`, criteria: { absent: 'No material role or no longer present.', background: 'Present or continuity-relevant, but no independent beat is needed.', active: 'A concrete action, decision, or line is warranted.' } };
         questions[`${prefix}_knowledge`] = { type: 'choice', instructions: `Choose the narrowest basis ${entry.name} may use about the current topic. Model, sheet, narrator, or other-character access is not character knowledge. A hunch requires cues this person actually observed and cannot identify an unavailable hidden truth.`, criteria: { none: 'No relevant knowledge source.', observed: 'Directly observed cues or events.', reported: 'Explicitly told, with the report\'s omissions and possible errors.', public: 'Public or ordinary locally available information.', role_based: 'Established role or experience supports this topic.', privileged: 'Explicitly established private or institutional access supports this exact information.' } };
         questions[`${prefix}_competence`] = { type: 'choice', instructions: `Judge ${entry.name}'s competence for the current topic only. Occupation supports adjacent work knowledge, not unrelated specialist certainty.`, criteria: { unsupported: 'No basis beyond bounded ordinary inference.', ordinary: 'Ordinary practical or cultural familiarity.', familiar: 'Repeated exposure supports useful familiarity, not mastery.', practical: 'Established hands-on ability supports competent action.', professional: 'Explicit training or role supports professional precision on this topic.' } };
         questions[`${prefix}_access`] = { type: 'choice', instructions: `Judge ${entry.name}'s actual access now, not theoretical status or what the model can see.`, criteria: { none: 'No established access.', indirect: 'May request, hear, or reach information through another person or process.', direct: 'Established location, possession, permission, or role gives direct access.', privileged: 'Explicit exceptional authority or private access applies here.' } };
@@ -183,16 +198,51 @@ export function characterContext(entries, persona, transcript) {
                     expertise_depth: entry.analysis?.expertise_depth,
                     institutional_access: entry.analysis?.institutional_access,
                 },
+                practical_competence: entry.analysis?.practical_competence,
+                speech_register: entry.analysis?.speech_register,
+                initiative: entry.analysis?.initiative,
+                disclosure_style: entry.analysis?.disclosure_style,
+                memory_precision: entry.analysis?.memory_precision,
+                history_use: entry.analysis?.history_use,
+                canon_status: entry.analysis?.canon_status,
                 trait_scope: entry.analysis?.trait_scope,
                 source_visible_to_main: entry.sourceVisibleToMain,
             },
         };
     };
-    return { active: entries.map(compact), persona: persona ? compact(persona) : null };
+    return {
+        policy: 'Stored profiles are compact priors and ceilings for Jev, not current-scene facts and not prose to copy into the main model. Missing sheet detail is neither incompetence nor permission to invent. Determine current presence, topic knowledge, access, certainty, response, and relevant traits separately for each person from the RP. Persona and narrator-visible material are not automatically another character\'s knowledge.',
+        active: entries.map(compact),
+        persona: persona ? compact(persona) : null,
+    };
 }
 
-export function buildCharacterInjection(entries = [], decisions = {}) {
+export function selectMainModelCore(entry, transcript = '') {
+    if (!entry || entry.sourceVisibleToMain) return '';
+    const sourceChunks = chunkSheet(entry.source);
+    const relevant = selectRelevantChunks(entry.source, `${entry.name || ''}\n${transcript}`, 1)[0] || '';
+    return [sourceChunks[0] || '', relevant]
+        .filter((part, index, all) => part && all.indexOf(part) === index)
+        .map((part) => part.replace(/\s+/g, ' ').trim().slice(0, 210))
+        .join(' · ')
+        .slice(0, 420);
+}
+
+export function buildCharacterTrace(entries = [], decisions = {}) {
+    const fields = ['presence', 'knowledge', 'competence', 'access', 'certainty', 'trait', 'response', 'history'];
+    return entries.map((entry, index) => ({
+        index,
+        id: entry.id,
+        name: entry.name,
+        kind: entry.kind,
+        sourceVisibleToMain: entry.sourceVisibleToMain,
+        final: Object.fromEntries(fields.map((field) => [field, decisions[`character_${index}_${field}`] || (field === 'presence' ? 'absent' : 'none')])),
+    }));
+}
+
+export function buildCharacterInjection(entries = [], decisions = {}, transcript = '') {
     const lines = [];
+    const background = [];
     entries.forEach((entry, index) => {
         const prefix = `character_${index}`;
         const presence = decisions[`${prefix}_presence`];
@@ -204,12 +254,22 @@ export function buildCharacterInjection(entries = [], decisions = {}) {
         const trait = decisions[`${prefix}_trait`] || 'none';
         const response = decisions[`${prefix}_response`] || 'selective';
         const history = decisions[`${prefix}_history`] || 'none';
+        if (presence === 'background') {
+            background.push(entry.name);
+            return;
+        }
         if (!entry.sourceVisibleToMain && presence === 'active') {
-            const core = String(selectRelevantChunks(entry.source, entry.name, 1)[0] || entry.source).replace(/\s+/g, ' ').trim().slice(0, 420);
+            const core = selectMainModelCore(entry, transcript);
             lines.push(`${entry.name} core: ${core}${core.length >= 420 ? '…' : ''}`);
         }
-        lines.push(`${entry.name}: ${presence}; knowledge=${knowledge}; competence=${competence}; access=${access}; certainty=${certainty}; trait=${trait}; response=${response}; history=${history}. Use only evidence this person could actually observe, receive, access, or know through established life and role. Suspicion must remain broad and cannot identify a hidden fact, cause, culprit, relationship, motive, or private thought without proportionate evidence. Treat sparse traits as local tendencies shaped by current stakes, relationship, mood, and pressure; do not fill gaps with a stock archetype or unsupported expertise.`);
+        const boundaries = [];
+        if (knowledge === 'none' || access === 'none') boundaries.push('Do not supply unavailable hidden information');
+        if (certainty === 'suspicion') boundaries.push('Keep suspicion broad and leave multiple causes open');
+        if (certainty === 'bounded') boundaries.push('Keep unsupported details unresolved');
+        if (trait === 'flattening_risk') boundaries.push('Avoid the stock reaction implied by the most obvious trait');
+        lines.push(`${entry.name}: knowledge=${knowledge}; competence=${competence}; access=${access}; certainty=${certainty}; response=${response}; trait=${trait}; history=${history}.${boundaries.length ? ` ${boundaries.join('; ')}.` : ''}`);
     });
+    if (background.length) lines.push(`Background continuity only: ${background.join(', ')}. Do not force them to speak or act.`);
     const identity = {
         reuse_existing: 'For the needed NPC function, reuse a suitable established person and preserve their accumulated continuity.',
         canon_natural: 'Use a canon character only when their location, time, duties, relationships, access, and current continuity naturally place them in this exact role; otherwise use no canon appearance.',
@@ -219,5 +279,5 @@ export function buildCharacterInjection(entries = [], decisions = {}) {
     }[decisions.npc_identity_route];
     if (identity) lines.push(`NPC route: ${identity}`);
     if (!lines.length) return '';
-    return `<CHARACTER_EXECUTION>\nTreat sheet/model knowledge as authorial material, not automatic character knowledge. Use ordinary life inference only within established background; preserve human gaps, selective attention, uneven competence, imperfect memory, and personal motives. Do not answer every input point like an assistant. Let established history shape present conduct or consequences only when naturally relevant.\n${lines.join('\n')}\n</CHARACTER_EXECUTION>`;
+    return `<CHARACTER_EXECUTION>\nKeep each person's knowledge, access, competence, memory, attention, and motives separate. Model-visible information is not automatic character knowledge. Preserve human gaps and selective response; do not answer every input point like an assistant.\n${lines.join('\n')}\n</CHARACTER_EXECUTION>`;
 }

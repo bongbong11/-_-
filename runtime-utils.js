@@ -64,6 +64,20 @@ export function splitOocText(value) {
     return { rpText: rpText.replace(/\n{3,}/g, '\n\n').trim(), oocBlocks: blocks, malformed };
 }
 
+export function filterNonRpHistory(chat, nonRpOutputIndices = [], pendingUserText = '') {
+    const messages = Array.isArray(chat) ? chat : [];
+    const excluded = new Set(Array.isArray(nonRpOutputIndices) ? nonRpOutputIndices : []);
+    const preserveLatestUser = !String(pendingUserText || '').trim();
+    const latestUserIndex = preserveLatestUser ? messages.findLastIndex((message) => message?.is_user && isVisibleRoleplayMessage(message)) : -1;
+    return messages.filter((message, index) => {
+        if (excluded.has(index)) return false;
+        if (!message?.is_user || index === latestUserIndex) return true;
+        if (message?.extra?.ooc_chat === true) return false;
+        const split = splitOocText(message.mes);
+        return !(split.oocBlocks.length && !split.rpText);
+    });
+}
+
 function hashText(value) {
     const text = String(value ?? '');
     let hash = 2166136261;

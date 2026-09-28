@@ -7,12 +7,14 @@ import { join } from 'node:path';
 import { LEGACY_PROMPTS } from './legacy-prompts.js';
 import { buildInjection, buildQuestions, rollEventProfile, rollNpcProfile } from './prompt-library.js';
 import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvancedEvent } from './advanced-library.js';
-import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, loadCustomWorlds, makeWorldHint } from './world-library.js';
-import { appendPendingUserMessage, buildInputKey, buildRecentContext, buildRecentTranscript, generationCycleSalt, latestUserMessageText, pendingComposerText, selectRecentMessages, splitOocText } from './runtime-utils.js';
+import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
+import { appendPendingUserMessage, buildInputKey, buildRecentContext, buildRecentTranscript, filterNonRpHistory, generationCycleSalt, latestUserMessageText, pendingComposerText, selectRecentMessages, splitOocText } from './runtime-utils.js';
 import { sha256Fallback, sha256Hex } from './security-utils.js';
-import { buildCharacterInjection, buildCharacterTurnQuestions, buildProfileQuestions, characterContext, chunkSheet, defaultCharacterStore, normalizeCharacterStore, normalizeProfileAnalysis, selectActiveEntries, selectRelevantChunks } from './character-library.js';
-import { activeFallbackRoute, applyDecisionPolicy, buildVerificationQuestions, decisionPolicyKind, hasPrimaryAction, pendingPlanEffects, verificationSummary } from './decision-engine.js';
-import { commitObservedState, commitVerifiedPlan } from './state-engine.js';
+import { buildCharacterInjection, buildCharacterTrace, buildCharacterTurnQuestions, buildProfileQuestions, characterContext, chunkSheet, defaultCharacterStore, normalizeCharacterStore, normalizeProfileAnalysis, selectActiveEntries, selectMainModelCore, selectRelevantChunks } from './character-library.js';
+import { applyDecisionPolicy, buildVerificationQuestions, decisionPolicyKind, pendingPlanEffects, stableFingerprint, verificationSummary } from './decision-engine.js';
+import { commitObservedState, commitVerifiedPlan, updateProgressionPressure } from './state-engine.js';
+import { selectActionPlan } from './action-coordinator.js';
+import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -27,10 +29,10 @@ const stateEngineSource = await readFile(new URL('./state-engine.js', import.met
 const runtimeSource = await readFile(new URL('./runtime-utils.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
 await access(new URL('./downloads/scene-reader-jev-plugin-v0.4.0.zip', import.meta.url));
-await access(new URL('./downloads/scene-reader-sillytavern-v0.9.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-sillytavern-v0.10.0.zip', import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.9.0');
+assert.equal(manifest.version, '0.10.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -215,14 +217,73 @@ assert.equal(relationshipActive.threshold, relationshipBalanced.threshold, 'acti
 const pendingFixture = { outputText: 'He finally acted.', effects: ['relationship', 'event', 'direct'] };
 const verificationQuestions = buildVerificationQuestions(pendingFixture);
 assert.deepEqual(Object.keys(verificationQuestions), ['verification_relationship', 'verification_event', 'verification_direct']);
+assert.match(buildVerificationQuestions({ outputText: 'A reply', effects: ['progress'] }).verification_progress.instructions, /Material progress/);
 assert.deepEqual(verificationSummary(pendingFixture, { verification_relationship: 'missed', verification_event: 'partial', verification_direct: 'fulfilled' }), { relationship: 'missed', event: 'partial', direct: 'fulfilled' });
-assert.deepEqual(pendingPlanEffects({ relationship_pacing: 'hold', relationship_beat: 'none', event_route: 'none', progression_move: 'hold', resolution_pacing: 'continue', primary_focus: 'direct', direct_execution: 'yes' }), ['direct']);
-assert.equal(hasPrimaryAction({ event_route: 'waiting', progression_move: 'hold', direct_execution: 'no' }), false);
-assert.deepEqual(activeFallbackRoute({ decisions: { event_blocker: 'information', conflict_state: 'none', unresolved: 'goal' }, hasStoredEvent: true, canContinueStoredEvent: true }), { primary_focus: 'event', event_route: 'continue', progression_move: 'reveal', direct_execution: 'no', reason: 'existing_event' });
-assert.deepEqual(activeFallbackRoute({ decisions: {}, hasStoredEvent: true, canContinueStoredEvent: true, advanced: true }), { primary_focus: 'event', advanced_route: 'continue', advanced_move: 'advance', direct_execution: 'no', reason: 'existing_event' });
-assert.equal(activeFallbackRoute({ decisions: { conflict_state: 'tension', unresolved: 'relationship' } }).primary_focus, 'relationship');
-assert.equal(activeFallbackRoute({ decisions: { conflict_state: 'none', unresolved: 'none' } }).direct_execution, 'yes', 'active route cancellation must fall back to a concrete direct interaction');
-assert.equal(hasPrimaryAction({ event_route: 'replace', progression_move: 'hold', direct_execution: 'no' }), true, 'a prepared replacement is a primary action');
+assert.deepEqual(pendingPlanEffects({ relationship_pacing: 'hold', relationship_beat: 'none', event_route: 'none', progression_move: 'hold', resolution_pacing: 'continue', primary_focus: 'direct', direct_execution: 'yes' }), ['progress', 'direct']);
+const actionSettings = { progressionMode: 'investigation', resolutionPace: 'fast', relationshipPace: 'medium', judgmentStyle: 'active' };
+const directEventPlan = selectActionPlan({
+    decisions: { primary_focus: 'direct', scene_state: 'normal', event_state: 'active', event_route: 'continue', progression_move: 'reveal', relationship_pacing: 'hold', npc_route: 'none' },
+    settings: actionSettings,
+    hasEventProfile: true,
+});
+assert.equal(directEventPlan.primary.kind, 'direct', 'a direct answer remains the primary beat');
+assert.equal(directEventPlan.secondary.kind, 'event', 'an ongoing event can advance as a compatible secondary beat');
+const eventFirstPlan = selectActionPlan({
+    decisions: { primary_focus: 'event', event_state: 'active', event_route: 'continue', progression_move: 'advance', npc_route: 'reuse', npc_role: 'witness', npc_weight: 'supporting', relationship_pacing: 'closer_incremental' },
+    settings: actionSettings,
+    hasEventProfile: true,
+    hasNpcProfile: true,
+});
+assert.equal(eventFirstPlan.primary.kind, 'event');
+assert.equal(eventFirstPlan.secondary.kind, 'relationship');
+assert.equal(eventFirstPlan.allowedCandidateIds.length, 2, 'one primary and at most one secondary action survive');
+assert.ok(eventFirstPlan.excluded.some((item) => item.kind === 'npc' && item.reason), 'excluded executable candidates explain why they lost');
+const failedNewEventPlan = selectActionPlan({
+    decisions: { primary_focus: 'new_event', event_route: 'waiting', progression_move: 'hold', relationship_pacing: 'closer_incremental', relationship_beat: 'vulnerability' },
+    settings: actionSettings,
+    hasEventProfile: false,
+});
+assert.equal(failedNewEventPlan.primary.kind, 'relationship', 'a failed new-event roll must fall back to a concrete relationship route');
+const directFallbackPlan = selectActionPlan({ decisions: { primary_focus: 'new_event', event_route: 'waiting', progression_move: 'hold' }, settings: actionSettings });
+assert.equal(directFallbackPlan.primary.kind, 'direct', 'active routing must retain a concrete direct action when plot routes fail');
+const transitionPlan = selectActionPlan({
+    decisions: { primary_focus: 'transition', progression_move: 'transition', npc_route: 'reuse', npc_role: 'witness', npc_weight: 'brief' },
+    settings: actionSettings,
+    hasNpcProfile: true,
+});
+assert.equal(transitionPlan.primary.kind, 'transition');
+assert.equal(transitionPlan.secondary, null, 'a scene transition cannot become or take a secondary action');
+const externalConflictPlan = selectActionPlan({
+    decisions: { primary_focus: 'relationship', relationship_pacing: 'closer_incremental', relationship_beat: 'vulnerability' },
+    settings: actionSettings,
+    externalCandidates: [{ id: 'dependent-followup', kind: 'continuity', label: 'Dependent follow-up', compatibleWith: ['event'] }],
+});
+assert.ok(externalConflictPlan.excluded.some((item) => item.id === 'external:dependent-followup'), 'external candidates obey the same primary compatibility gate');
+const candidateOutput = 'He accepted responsibility.';
+const pendingCandidate = { id: 'responsibility', label: 'Brother begins his accepted task', evidence: 'He accepted responsibility.', compatibleWith: ['direct'], sourceIdentity: { chatKey: 'chat-a', assistantIndex: 1, outputFingerprint: stableFingerprint(candidateOutput), sourceRevision: 'source-a' } };
+const sourceChat = [{ is_user: true, mes: 'Take care of it.' }, { is_user: false, mes: candidateOutput }];
+const validCandidates = activePendingCandidates([pendingCandidate], { chatKey: 'chat-a', chat: sourceChat, sourceRevision: 'source-a' });
+assert.equal(validCandidates.length, 1);
+assert.equal(activePendingCandidates([pendingCandidate], { chatKey: 'chat-a', chat: [{ ...sourceChat[0] }, { ...sourceChat[1], mes: 'He declined.' }], sourceRevision: 'source-a' }).length, 0, 'a changed swipe invalidates an async candidate');
+assert.equal(activePendingCandidates([pendingCandidate], { chatKey: 'chat-a', chat: sourceChat, sourceRevision: 'source-b' }).length, 0, 'source revisions invalidate old candidates');
+assert.ok(buildPendingCandidateQuestions(validCandidates).continuity_candidate_0);
+assert.equal(verifiedSecondaryCandidates(validCandidates, { continuity_candidate_0: 'reject' }).length, 0);
+assert.equal(verifiedSecondaryCandidates(validCandidates, { continuity_candidate_0: 'accept' }).length, 1);
+const pressureState = { progressionState: { turnsSinceMeaningfulProgress: 0, lastOutputFingerprint: '' } };
+updateProgressionPressure(pressureState, { outputFingerprint: 'output-a' }, { progress: 'missed' }, { activeThread: true });
+assert.equal(pressureState.progressionState.turnsSinceMeaningfulProgress, 1);
+updateProgressionPressure(pressureState, { outputFingerprint: 'output-a' }, { progress: 'missed' }, { activeThread: true });
+assert.equal(pressureState.progressionState.turnsSinceMeaningfulProgress, 1, 'the same output cannot create additional stall pressure');
+updateProgressionPressure(pressureState, { outputFingerprint: 'output-b' }, { progress: 'fulfilled' }, { activeThread: true });
+assert.equal(pressureState.progressionState.turnsSinceMeaningfulProgress, 0, 'actual verified progress releases stall pressure');
+const oocFiltered = filterNonRpHistory([
+    { is_user: true, mes: 'Open the door.' },
+    { is_user: false, mes: 'She opens it.' },
+    { is_user: true, mes: '(OoC: Explain the injection.)', extra: { ooc_chat: true } },
+    { is_user: false, mes: 'The injected prompt was...' },
+    { is_user: true, mes: 'What is outside?' },
+], [3]);
+assert.deepEqual(oocFiltered.map((message) => message.mes), ['Open the door.', 'She opens it.', 'What is outside?'], 'prior OOC-only exchanges cannot become RP evidence or consume a recent-turn slot');
 const stateFixture = () => ({
     pacingState: { relationship: { closer: 0, distant: 0, lastBeat: 'none', evidence: [] }, event: { qualifiedSteps: 3, evidence: [{ fingerprint: 'old' }] } },
     relationshipState: { motion: 'closer', trust: 'positive', intimacy: 'positive', romance: 'established', lastBeat: 'commitment' },
@@ -278,6 +339,14 @@ assert.equal(npc.role, 'witness');
 assert.equal(npc.stake, 'personal safety');
 assert.equal(npc.constraint, 'limited time or access');
 const event = rollEventProfile('investigation', () => 0);
+const directWithEventPayload = buildInjection({
+    settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'investigation', advancedEnabled: false, relationshipPace: 'medium', resolutionPace: 'fast', roleplayPace: 'medium' },
+    decisions: { response_cadence: 'natural', primary_focus: 'direct', secondary_focus: 'event', direct_execution: 'yes', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'active', event_route: 'continue', progression_move: 'reveal', resolution_pacing: 'continue', npc_route: 'none', villain_route: 'none', fight_sustain: 'no' },
+    eventProfile: event,
+});
+assert.match(directWithEventPayload, /<DIRECT_SCENE_EXECUTION>/, 'direct primary must reach the actual injection');
+assert.match(directWithEventPayload, /<RP_EVENT_BEAT role="secondary"/, 'compatible stored-event progress must survive into the actual injection');
+assert.match(directWithEventPayload, /Use only one directly dependent sign/, 'secondary event must stay proportionate to the active interaction');
 assert.equal(event.title, '진술의 핵심 모순');
 assert.equal(advancedChance('conservative'), 18);
 assert.equal(advancedChance('balanced'), 35);
@@ -289,6 +358,8 @@ assert.equal(presetWorld?.name, '프리셋 기본 세계관 사용');
 assert.equal(presetWorld?.prompt, '', 'preset world option must not inject a separate world prompt');
 assert.match(presetWorld?.hint || '', /No preset or lorebook text is supplied to Jev here/);
 assert.equal(INITIAL_CUSTOM_WORLDS.length, 5);
+assert.equal(isFranchiseWorld(INITIAL_CUSTOM_WORLDS.find((world) => world.id === 'custom-harry-potter')), true);
+assert.equal(isFranchiseWorld(INITIAL_CUSTOM_WORLDS.find((world) => world.id === 'custom-general-world')), false);
 assert.match(makeWorldHint('테스트', '## TEST_WORLD\nUse established rules.\n<LOCK>Keep continuity.</LOCK>'), /^테스트: TEST WORLD Use established rules/);
 assert.ok(makeWorldHint('테스트', 'x'.repeat(800)).length <= 365);
 const savedLocalStorage = globalThis.localStorage;
@@ -298,6 +369,9 @@ const recoveredWorlds = loadCustomWorlds();
 assert.equal(recoveredWorlds.length, 1);
 assert.equal(recoveredWorlds[0].id, 'custom-ok');
 assert.match(recoveredWorlds[0].hint, /^정상:/);
+assert.equal(recoveredWorlds[0].franchise, false);
+assert.equal(saveCustomWorlds([{ id: 'legacy-canon', name: '원작', prompt: '## CANON_FIDELITY_PASS' }]), true);
+assert.equal(JSON.parse(localValues.get(CUSTOM_WORLD_STORAGE))[0].franchise, true, 'legacy imported canon prompt must migrate to explicit franchise metadata');
 if (savedLocalStorage === undefined) delete globalThis.localStorage; else globalThis.localStorage = savedLocalStorage;
 const baseChat = [
     { is_user: true, mes: '첫 질문', name: 'U' },
@@ -382,7 +456,7 @@ assert.ok(continuingAdvancedQuestions.advanced_element.criteria.threat, 'stored 
 assert.match(continuingAdvancedQuestions.advanced_element.instructions, /stored event, keep its fixed element/);
 assert.match(source, /progression\.disabled = prefs\.advancedEnabled/);
 assert.match(source, /eventChance\.disabled = prefs\.advancedEnabled/);
-assert.match(source, /decisions\.advanced_route === 'create' && focus !== 'new_event'/);
+assert.doesNotMatch(source, /decisions\.advanced_route === 'create' && focus !== 'new_event'/, 'a direct primary must not erase an otherwise compatible advanced event candidate');
 assert.match(source, /진행 중인 사건의 기존 요소 유지/);
 assert.equal((source.match(/id="sr-world-profile"/g) || []).length, 1, 'active world selector must exist only once');
 assert.ok(source.indexOf('id="sr-world-profile"') < source.indexOf('id="sr-tab-advanced"'), 'active world selector must stay in the first tab');
@@ -433,7 +507,7 @@ const eventPayload = buildInjection({
     npcProfile: null,
     eventProfile: event,
 });
-assert.match(eventPayload, /<RP_PRIMARY_EVENT mode="investigation" phase="introduced">/);
+assert.match(eventPayload, /<RP_EVENT_BEAT role="primary" mode="investigation" phase="introduced">/);
 assert.match(eventPayload, /진술의 핵심 모순/);
 assert.match(eventPayload, /Introduce at most one limited clue/);
 assert.doesNotMatch(eventPayload, /<CONFLICT_PROGRESSION>/);
@@ -463,6 +537,7 @@ assert.match(npcOverreachPayload, /hunch, suspicion, intuition/);
 
 const emptyCharacterStore = defaultCharacterStore();
 assert.equal(emptyCharacterStore.enabled, false);
+assert.equal(emptyCharacterStore.schemaVersion, 4);
 assert.equal(selectActiveEntries(emptyCharacterStore, 'Alice is here.', 'Alice').length, 0, 'disabled character mode must select nothing');
 const profileQuestions = buildProfileQuestions('npc');
 assert.deepEqual(Object.keys(profileQuestions), ['sheet_density', 'knowledge_scope', 'expertise_depth', 'institutional_access', 'practical_competence', 'speech_register', 'initiative', 'disclosure_style', 'memory_precision', 'history_use', 'canon_status', 'role_inference', 'trait_scope']);
@@ -476,8 +551,12 @@ assert.equal(migratedSparseAnalysis.initiative, 'unspecified');
 const characterStoreFixture = normalizeCharacterStore({ enabled: true, characters: [{ id: 'alice', name: 'Alice', aliases: ['A'], source: 'Alice is a surgeon.\n\nShe grew up in London.', analysis: { knowledge_scope: 'specialist' } }], npcs: [{ id: 'bob', name: 'Bob', source: 'Bob runs the local shop.', analysis: {} }] });
 assert.equal(selectActiveEntries(characterStoreFixture, 'A entered. Bob stayed outside.', 'Alice').length, 2);
 assert.equal(selectActiveEntries(characterStoreFixture, 'No names here.', 'Alice')[0].name, 'Alice');
+assert.equal(selectActiveEntries(characterStoreFixture, 'No names here either.', 'ALICE')[0].name, 'Alice', 'primary character matching must be case-insensitive');
+assert.equal(selectActiveEntries(characterStoreFixture, 'He remained by the door.', 'Alice', ['bob']).some((entry) => entry.id === 'bob'), true, 'a recently present NPC must remain a candidate in pronoun-only continuation');
+assert.equal(selectActiveEntries(characterStoreFixture, 'Bob said the rain stayed steady.', '', []).some((entry) => entry.id === 'alice'), false, 'a one-letter alias must match a complete token rather than a substring');
 assert.ok(chunkSheet('a'.repeat(3000), 1000).length >= 3);
 assert.ok(selectRelevantChunks(characterStoreFixture.characters[0].source, 'London', 1).some((chunk) => /London/.test(chunk)));
+assert.equal(selectRelevantChunks('first section\n\nsecond London section\n\nthird section', 'London', 1).length, 1, 'relevant sheet extraction must honor its token budget');
 const activeEntries = selectActiveEntries(characterStoreFixture, 'Alice spoke.', 'Alice');
 const turnQuestions = buildCharacterTurnQuestions(activeEntries, { franchiseWorld: true });
 assert.ok(turnQuestions.character_0_presence);
@@ -488,15 +567,23 @@ const contextFixture = characterContext(activeEntries, null, 'surgeon');
 assert.equal(contextFixture.active.length, 1);
 assert.match(contextFixture.active[0].explicit_anchors, /surgeon/i);
 assert.ok(Object.hasOwn(contextFixture.active[0].boundary_profile, 'knowledge_access_ceiling'));
-const charBlock = buildCharacterInjection(activeEntries, { character_0_presence: 'active', character_0_knowledge: 'role_based', character_0_competence: 'professional', character_0_access: 'direct', character_0_certainty: 'bounded', character_0_trait: 'relevant', character_0_response: 'act', character_0_history: 'influence', npc_identity_route: 'canon_natural' });
+for (const field of ['practical_competence', 'speech_register', 'initiative', 'disclosure_style', 'memory_precision', 'history_use', 'canon_status']) assert.ok(Object.hasOwn(contextFixture.active[0].boundary_profile, field), `stored ${field} boundary must reach Jev`);
+assert.match(contextFixture.policy, /priors and ceilings/i);
+const characterDecisions = { character_0_presence: 'active', character_0_knowledge: 'role_based', character_0_competence: 'professional', character_0_access: 'direct', character_0_certainty: 'bounded', character_0_trait: 'relevant', character_0_response: 'act', character_0_history: 'influence', npc_identity_route: 'canon_natural' };
+const charTrace = buildCharacterTrace(activeEntries, characterDecisions);
+assert.deepEqual(charTrace[0].final, { presence: 'active', knowledge: 'role_based', competence: 'professional', access: 'direct', certainty: 'bounded', trait: 'relevant', response: 'act', history: 'influence' });
+const charBlock = buildCharacterInjection(activeEntries, characterDecisions, 'surgeon');
 assert.match(charBlock, /<CHARACTER_EXECUTION>/);
-assert.match(charBlock, /Alice: active/);
+assert.match(charBlock, /Alice: knowledge=role_based/);
 assert.match(charBlock, /competence=professional; access=direct; certainty=bounded/);
 assert.match(charBlock, /canon character only/);
 const privateNpcStore = normalizeCharacterStore({ enabled: true, npcs: [{ id: 'wade', name: 'Wade', source: 'Wade is the family patriarch and a controlling business owner.', analysis: { sheet_density: 'sparse', role_inference: 'role_adjacent', trait_scope: 'local' } }] });
 assert.equal(privateNpcStore.npcs[0].sourceVisibleToMain, false, 'extension-only NPC sheets must default to hidden from the main model');
-const privateNpcBlock = buildCharacterInjection(privateNpcStore.npcs, { character_0_presence: 'active', character_0_knowledge: 'observed', character_0_competence: 'ordinary', character_0_access: 'none', character_0_certainty: 'suspicion', character_0_trait: 'relevant', character_0_response: 'act', character_0_history: 'none' });
+const privateNpcContext = characterContext(privateNpcStore.npcs, null, 'The family contract is on the desk.');
+const privateNpcBlock = buildCharacterInjection(privateNpcStore.npcs, { character_0_presence: 'active', character_0_knowledge: 'observed', character_0_competence: 'ordinary', character_0_access: 'none', character_0_certainty: 'suspicion', character_0_trait: 'relevant', character_0_response: 'act', character_0_history: 'none' }, 'The family contract is on the desk.');
 assert.match(privateNpcBlock, /Wade core:/, 'active extension-only NPC must receive a short core rather than a boundary with no identity');
+assert.doesNotMatch(JSON.stringify(privateNpcContext), /main_model_core/, 'main-model core must not be duplicated into Jev input');
+assert.match(selectMainModelCore(privateNpcStore.npcs[0], 'The family contract is on the desk.'), /family patriarch/i, 'extension-only NPC core must use identity and current relevance');
 assert.ok(privateNpcBlock.length < 1800, 'a sparse extension-only NPC must remain compact');
 const visibleNpc = normalizeCharacterStore({ enabled: true, npcs: [{ id: 'seen', name: 'Seen', source: 'Seen is already in the active lore.', sourceVisibleToMain: true, analysis: {} }] }).npcs[0];
 assert.doesNotMatch(buildCharacterInjection([visibleNpc], { character_0_presence: 'active', character_0_knowledge: 'observed', character_0_response: 'act' }), /Seen core:/, 'main-visible source must not be duplicated');
@@ -510,9 +597,13 @@ const twoNpcBlock = buildCharacterInjection(twoNpcStore.npcs, {
     character_0_presence: 'active', character_0_knowledge: 'observed', character_0_competence: 'ordinary', character_0_access: 'none', character_0_certainty: 'suspicion', character_0_trait: 'relevant', character_0_response: 'withhold', character_0_history: 'none',
     character_1_presence: 'active', character_1_knowledge: 'privileged', character_1_competence: 'professional', character_1_access: 'privileged', character_1_certainty: 'confident', character_1_trait: 'none', character_1_response: 'act', character_1_history: 'influence',
 });
-assert.match(twoNpcBlock, /One: active; knowledge=observed/);
-assert.match(twoNpcBlock, /Two: active; knowledge=privileged/);
-assert.doesNotMatch(twoNpcBlock, /One: active; knowledge=privileged/, 'one NPC knowledge decision must not leak into another NPC');
+assert.match(twoNpcBlock, /One: knowledge=observed/);
+assert.match(twoNpcBlock, /Two: knowledge=privileged/);
+assert.doesNotMatch(twoNpcBlock, /One: knowledge=privileged/, 'one NPC knowledge decision must not leak into another NPC');
+assert.equal((twoNpcBlock.match(/Model-visible information is not automatic character knowledge/g) || []).length, 1, 'shared character boundary must be emitted once');
+const backgroundBlock = buildCharacterInjection(twoNpcStore.npcs, { character_0_presence: 'background', character_1_presence: 'absent' });
+assert.match(backgroundBlock, /Background continuity only: One/);
+assert.doesNotMatch(backgroundBlock, /One core:/, 'background-only extension NPC must not duplicate its sheet core');
 const charPayload = buildInjection({
     settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'slow' },
     decisions: { response_cadence: 'linger', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'direct', npc_route: 'none', villain_route: 'none', fight_sustain: 'no', repetitive_ending: 'yes', user_handoff: 'yes', input_echo: 'yes' },
@@ -551,16 +642,16 @@ for (const advancedEnabled of [false, true]) {
 const injectionBase = { worldDirection: 'natural', relationshipDirection: 'dynamic', negativePriority: false, progressionMode: 'natural', advancedEnabled: false, relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', socialEnabled: false, worldHostility: false, npcToUser: false, userMisfortune: false };
 const directPayload = buildInjection({ settings: injectionBase, decisions: { response_cadence: 'natural', primary_focus: 'direct', direct_execution: 'yes', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', event_route: 'none', progression_move: 'hold', npc_route: 'none', villain_route: 'none', fight_sustain: 'no' } });
 assert.match(directPayload, /<DIRECT_SCENE_EXECUTION>/);
-assert.doesNotMatch(directPayload, /<RP_PRIMARY_EVENT|<RP_PROGRESSION|<ADVANCED_PROGRESSION|<NPC_SCENE_EXECUTION|<CONFLICT_PROGRESSION/);
+assert.doesNotMatch(directPayload, /<RP_EVENT_BEAT|<RP_PROGRESSION|<ADVANCED_PROGRESSION|<NPC_SCENE_EXECUTION|<CONFLICT_PROGRESSION/);
 assert.doesNotMatch(directPayload, /아직 화해하지 마|OOC_CHAT 본문/, 'raw OOC guidance must never be copied into the scene-reader injection');
 const replacementEventPayload = buildInjection({ settings: injectionBase, decisions: { response_cadence: 'natural', primary_focus: 'new_event', direct_execution: 'no', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'aftermath', resolution_pacing: 'continue', event_route: 'replace', progression_move: 'advance', npc_route: 'none', villain_route: 'none', fight_sustain: 'no' }, eventProfile: event });
-assert.match(replacementEventPayload, /<RP_PRIMARY_EVENT/, 'a prepared replacement event must be injected without rewriting its route to create');
+assert.match(replacementEventPayload, /<RP_EVENT_BEAT/, 'a prepared replacement event must be injected without rewriting its route to create');
 const relationshipPayload = buildInjection({ settings: injectionBase, decisions: { response_cadence: 'natural', primary_focus: 'relationship', direct_execution: 'no', relationship_pacing: 'closer_incremental', relationship_beat: 'vulnerability', event_state: 'none', resolution_pacing: 'continue', event_route: 'none', progression_move: 'hold', npc_route: 'none', villain_route: 'none', fight_sustain: 'no' } });
 assert.match(relationshipPayload, /<RELATIONSHIP_PACING/);
 assert.match(relationshipPayload, /<RELATIONSHIP_BEAT type="vulnerability">/);
-assert.doesNotMatch(relationshipPayload, /<DIRECT_SCENE_EXECUTION|<RP_PRIMARY_EVENT|<RP_PROGRESSION|<NPC_SCENE_EXECUTION|<CONFLICT_PROGRESSION/);
+assert.doesNotMatch(relationshipPayload, /<DIRECT_SCENE_EXECUTION|<RP_EVENT_BEAT|<RP_PROGRESSION|<NPC_SCENE_EXECUTION|<CONFLICT_PROGRESSION/);
 assert.doesNotMatch(eventPayload, /<DIRECT_SCENE_EXECUTION|<RELATIONSHIP_BEAT|<NPC_SCENE_EXECUTION|<CONFLICT_PROGRESSION/);
-assert.doesNotMatch(npcPayload, /<DIRECT_SCENE_EXECUTION|<RELATIONSHIP_BEAT|<RP_PRIMARY_EVENT|<CONFLICT_PROGRESSION/);
+assert.doesNotMatch(npcPayload, /<DIRECT_SCENE_EXECUTION|<RELATIONSHIP_BEAT|<RP_EVENT_BEAT|<CONFLICT_PROGRESSION/);
 assert.doesNotMatch(advancedPayload, /<DIRECT_SCENE_EXECUTION|<RP_PROGRESSION|<NPC_SCENE_EXECUTION|<CONFLICT_PROGRESSION/);
 for (const [name, payload] of Object.entries({ directPayload, relationshipPayload, eventPayload, npcPayload, advancedPayload })) {
     assert.ok(payload.length < 6000, `${name} should remain compact unless an exact legacy conflict block is enabled`);
@@ -573,7 +664,12 @@ assert.match(source, /\[\['sr-character-new', 'character'\], \['sr-persona-new',
 assert.match(source, /characterStore\.enabled \? buildCharacterInjection/);
 assert.match(source, /if \(characterStore\.enabled\) Object\.assign\(questions, buildCharacterTurnQuestions/);
 assert.match(source, /selectActiveEntries\(characterStore, transcript/);
-assert.match(characterLibrarySource, /latestMention\(b\) - latestMention\(a\)/);
+assert.match(source, /carriedCharacterIds/);
+assert.match(source, /characterTrace/);
+assert.match(source, /id="sr-character-turn-results"/);
+assert.match(source, /저장된 기본 경계 · 매턴 최종판정 아님/);
+assert.match(source, /id="sr-world-edit-franchise"/);
+assert.match(characterLibrarySource, /carried\.has\(entry\.id\)/);
 assert.match(characterLibrarySource, /\.slice\(0, 3\)/);
 
 assert.equal(plugin.info.id, 'scene-reader-jev');
