@@ -11,7 +11,7 @@ const ROUTE_LABELS = {
 };
 
 function activeEventCandidate(decisions, settings, hasEventProfile, allowUnpreparedCreates) {
-    const advanced = Boolean(settings.advancedEnabled);
+    const advanced = Boolean(settings.advancedEnabled && ['create', 'continue'].includes(decisions.advanced_route));
     const route = advanced ? decisions.advanced_route : decisions.event_route;
     const move = advanced ? decisions.advanced_move : decisions.progression_move;
     const create = advanced ? route === 'create' : ['create', 'replace'].includes(route);
@@ -25,7 +25,16 @@ function activeEventCandidate(decisions, settings, hasEventProfile, allowUnprepa
             isNew: false, transition: true, executable: true,
         };
     }
-    if (!((continuing && hasEventProfile) || (create && profileReady) || movingObservedEvent)) return null;
+    if (!((continuing && (hasEventProfile || observedEvent)) || (create && profileReady) || movingObservedEvent)) {
+        const sceneMove = String(decisions.advanced_move || '');
+        if (settings.advancedEnabled && ['latent', 'open'].includes(decisions.advanced_entry)
+            && decisions.advanced_element && decisions.advanced_element !== 'none'
+            && decisions.advanced_cause && decisions.advanced_cause !== 'none'
+            && ['seed', 'obstacle', 'reveal', 'aftermath'].includes(sceneMove)) {
+            return { id: 'advanced_scene', kind: 'event', focus: 'event', label: '고급 요소의 작은 장면 변화', isNew: false, transition: false, move: sceneMove, executable: true };
+        }
+        return null;
+    }
     if (advanced && ['quiet', undefined, ''].includes(move)) return null;
     const isNew = create;
     return {
@@ -100,7 +109,7 @@ function focusMatches(candidate, requested) {
 }
 
 function primaryFallbackScore(candidate, decisions, settings) {
-    const base = {
+    const base = candidate.id === 'advanced_scene' ? 68 : {
         transition: 120,
         event: candidate.isNew ? 62 : 105,
         conflict: 100,
@@ -115,7 +124,8 @@ function primaryFallbackScore(candidate, decisions, settings) {
     if (candidate.kind === 'event' && !candidate.isNew) return base + active + stalled * 8 + (settings.resolutionPace === 'fast' ? 12 : settings.resolutionPace === 'slow' ? -8 : 0);
     if (candidate.kind === 'relationship') return base + (settings.relationshipPace === 'fast' ? 10 : settings.relationshipPace === 'slow' ? -6 : 0);
     if (candidate.kind === 'conflict' && decisions.conflict_state === 'active') return base + 20;
-    return base + (candidate.kind === 'direct' ? 0 : active) + Number(candidate.priority || 0);
+    const deferred = Math.min(3, Math.max(0, Number(settings.deferredRoutes?.[candidate.id]) || 0));
+    return base + (candidate.kind === 'direct' ? 0 : active) + Number(candidate.priority || 0) + deferred * 8;
 }
 
 function secondaryCompatible(primary, candidate, decisions, settings) {
@@ -146,7 +156,7 @@ function secondaryCompatible(primary, candidate, decisions, settings) {
 
 function secondaryScore(candidate, decisions, settings) {
     const stalled = Math.min(3, Math.max(0, Number(settings.turnsSinceMeaningfulProgress) || 0));
-    let score = {
+    let score = candidate.id === 'advanced_scene' ? 62 : {
         event: candidate.isNew ? 54 : 92,
         conflict: 96,
         relationship: 78,
@@ -159,12 +169,15 @@ function secondaryScore(candidate, decisions, settings) {
         if (settings.resolutionPace === 'fast') score += 14;
         if (settings.resolutionPace === 'slow') score -= 10;
         if (candidate.isNew && settings.judgmentStyle === 'conservative') score -= 18;
-        // A Jev-approved new event must reach its configured probability roll.
-        // Otherwise the routine relationship beat always wins the only secondary slot.
-        if (candidate.isNew && settings.advancedEnabled && decisions.advanced_route === 'create') score += 30;
+        // Creation is only eligibility for a draw. Give an active-mode candidate
+        // a fair chance to reach that draw before a routine relationship beat.
+        if (candidate.isNew && settings.judgmentStyle === 'active') score += 32;
+        if (candidate.isNew && settings.advancedEnabled && decisions.advanced_route === 'create') score += 20;
     }
     if (candidate.kind === 'relationship') score += settings.relationshipPace === 'fast' ? 10 : settings.relationshipPace === 'slow' ? -8 : 0;
     if (candidate.kind === 'conflict' && decisions.conflict_state === 'active') score += 15;
+    if (candidate.kind === 'npc' && candidate.isNew && settings.judgmentStyle === 'active') score += 24;
+    score += Math.min(3, Math.max(0, Number(settings.deferredRoutes?.[candidate.id]) || 0)) * 10;
     score += Number(candidate.priority || 0);
     return score;
 }
@@ -216,4 +229,12 @@ export function actionPlanSummary(plan) {
         secondary: plan?.secondary ? { id: plan.secondary.id, kind: plan.secondary.kind, focus: plan.secondary.focus, label: plan.secondary.label } : null,
         excluded: Array.isArray(plan?.excluded) ? plan.excluded.map((item) => ({ ...item })) : [],
     };
+}
+
+export function nextDeferredRoutes(previous = {}, plan = {}) {
+    const eligible = new Set((plan.candidates || []).map((candidate) => candidate.id));
+    const selected = new Set([plan.primary?.id, plan.secondary?.id].filter(Boolean));
+    return Object.fromEntries(['event', 'advanced_event', 'advanced_scene', 'npc', 'villain']
+        .filter((id) => eligible.has(id) && !selected.has(id))
+        .map((id) => [id, Math.min(3, (Number(previous[id]) || 0) + 1)]));
 }

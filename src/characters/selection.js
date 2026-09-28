@@ -52,11 +52,13 @@ export function selectActiveEntries(store, transcript, primaryCharacterName = ''
     };
     const latestMention = (entry) => Math.max(-1, ...names(entry).map(mentionIndex));
     const all = [...normalized.characters, ...normalized.npcs, ...(allowUserImpersonation && normalized.persona ? [normalized.persona] : [])];
+    const soleCharacterId = normalized.characters.length === 1 ? normalized.characters[0].id : null;
     const scored = all.map((entry, order) => {
         const latest = latestMention(entry);
         let score = latest >= 0 ? 2000 + (latest / Math.max(1, haystack.length)) * 500 : 0;
         if (carried.has(entry.id)) score = Math.max(score, 1000);
         if (isPrimary(entry)) score = Math.max(score, 4000);
+        if (entry.id === soleCharacterId) score = Math.max(score, 4000);
         if (allowUserImpersonation && entry.kind === 'persona') score = Math.max(score, 3900);
         return { entry, order, score };
     }).filter((item) => item.score > 0);

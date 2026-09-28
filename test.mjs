@@ -13,11 +13,13 @@ import { sha256Fallback, sha256Hex } from './security-utils.js';
 import { buildCharacterInjection, buildCharacterTurnQuestions, buildLiveCharacterPlan, resolveLiveCharacterPlan, prepareProfileItems, createProfile, currentProfileItems, profileStatus, chunkSheet, defaultCharacterStore, normalizeCharacterStore, selectActiveEntries, selectRelevantChunks } from './character-library.js';
 import { applyDecisionPolicy, buildVerificationQuestions, decisionPolicyKind, pendingPlanEffects, stableFingerprint, verificationSummary } from './decision-engine.js';
 import { commitObservedState, commitVerifiedPlan, updateProgressionPressure } from './state-engine.js';
-import { selectActionPlan } from './action-coordinator.js';
-import { coordinateDecisions } from './src/scene/coordinator.js';
+import { selectActionPlan, nextDeferredRoutes } from './action-coordinator.js';
+import { coordinateDecisions, coordinateActionBudget } from './src/scene/coordinator.js';
+import { applyPolicy } from './src/scene/policy.js';
+import { createDraws } from './src/scene/draws.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from './continuity-hooks.js';
 import { applyContinuityVerdicts, buildContinuityInjection, emptyContinuity, selectContinuityContext, validateReasonerResult } from './continuity-engine.js';
-import { listConnectionProfiles, requestWithConnectionProfile } from './st-profile-reasoner.js';
+import { listConnectionProfiles, parseReasonerReply, requestWithConnectionProfile } from './st-profile-reasoner.js';
 
 const require = createRequire(import.meta.url);
 const plugin = require('./server-plugin/index.cjs');
@@ -35,7 +37,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.16.1');
+assert.equal(manifest.version, '0.16.3');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -221,7 +223,7 @@ const retireActive = applyDecisionPolicy({ key: 'villain_route', answer: { choic
 assert.equal(retireActive.effective, 'none', 'active must not make destructive retire routes easy');
 const advancedBalanced = applyDecisionPolicy({ key: 'advanced_route', answer: { choice: 'create', confidence: 0.65 }, style: 'balanced', allowedChoices: ['none', 'create'], fallback: 'none', baseThreshold: 0.7 });
 const advancedActive = applyDecisionPolicy({ key: 'advanced_route', answer: { choice: 'create', confidence: 0.65 }, style: 'active', allowedChoices: ['none', 'create'], fallback: 'none', baseThreshold: 0.7 });
-assert.equal(advancedActive.threshold, advancedBalanced.threshold, 'advancedStyle probability must not be amplified again by judgmentStyle threshold');
+assert.ok(advancedActive.threshold < advancedBalanced.threshold, 'active routing may admit an advanced candidate while the separate configured draw still controls occurrence');
 const relationshipBalanced = applyDecisionPolicy({ key: 'relationship_pacing', answer: { choice: 'closer_incremental', confidence: 0.68 }, style: 'balanced', allowedChoices: ['hold', 'closer_incremental'], fallback: 'hold', baseThreshold: 0.72 });
 const relationshipActive = applyDecisionPolicy({ key: 'relationship_pacing', answer: { choice: 'closer_incremental', confidence: 0.68 }, style: 'active', allowedChoices: ['hold', 'closer_incremental'], fallback: 'hold', baseThreshold: 0.72 });
 assert.equal(relationshipActive.threshold, relationshipBalanced.threshold, 'active execution style must not accelerate relationship pacing confidence');
@@ -469,14 +471,17 @@ assert.equal(sha256Fallback('모바일 테스트'), createHash('sha256').update(
 assert.equal(await sha256Hex('모바일 테스트', null), sha256Fallback('모바일 테스트'), 'owner unlock hashing must work without Web Crypto');
 const advancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ADVANCED_DEFAULT_ELEMENTS, worldHint: 'campus', advancedEventTitle: '' }, hasVillain: false, hasNpc: false, hasEvent: false });
 for (const key of ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move']) assert.ok(advancedQuestions[key], `${key} question missing`);
-assert.equal(advancedQuestions.event_route, undefined, 'advanced mode must replace basic event routing');
+assert.ok(advancedQuestions.event_route, 'advanced mode adds to ordinary event routing');
 assert.doesNotMatch(advancedQuestions.primary_focus.criteria.new_event, /Do not select/, 'advanced mode must keep new-event focus available');
-assert.match(advancedQuestions.advanced_element.instructions, /Ignore the saved basic RP progression type/);
+assert.match(advancedQuestions.advanced_element.instructions, /ordinary RP progression type remains active/);
 const continuingAdvancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedStyle: 'active', advancedElements: ['social'], worldHint: 'campus', advancedEventTitle: '저장 사건', advancedEventElement: 'threat' }, hasVillain: false, hasNpc: false, hasEvent: true });
 assert.ok(continuingAdvancedQuestions.advanced_element.criteria.threat, 'stored event element must remain routable after its creation toggle is disabled');
-assert.match(continuingAdvancedQuestions.advanced_element.instructions, /stored event, keep its fixed element/);
-assert.match(source, /progression\.disabled = prefs\.advancedEnabled/);
-assert.match(source, /eventChance\.disabled = prefs\.advancedEnabled/);
+assert.match(continuingAdvancedQuestions.advanced_element.instructions, /stored advanced event, keep its fixed element/);
+const storedAdvancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedElements: ['social'] }, hasVillain: false, hasNpc: false, hasEvent: true, eventSource: 'advanced' });
+assert.equal(storedAdvancedQuestions.event_route, undefined, 'a stored advanced event has one owner and no duplicate ordinary event route');
+assert.equal(storedAdvancedQuestions.primary_focus.criteria.new_event, undefined, 'a second central event is not offered while one is stored');
+assert.match(source, /progression\.disabled = false/);
+assert.match(source, /eventChance\.disabled = prefs\.progressionMode === 'off'/);
 assert.doesNotMatch(source, /decisions\.advanced_route === 'create' && focus !== 'new_event'/, 'a direct primary must not erase an otherwise compatible advanced event candidate');
 assert.match(source, /진행 중인 사건의 기존 요소 유지/);
 assert.equal((source.match(/id="sr-world-profile"/g) || []).length, 1, 'active world selector must exist only once');
@@ -489,6 +494,59 @@ const advancedPayload = buildInjection({
 });
 assert.match(advancedPayload, /<ADVANCED_PROGRESSION element="exploration" move="seed" cause="location">/);
 assert.doesNotMatch(advancedPayload, /<RP_PROGRESSION/);
+
+// A low-confidence future route is an eligible draw in active mode, not an
+// observed fact. The same decision must survive coordination and assembly.
+const activeCreate = applyPolicy('event_route', { choice: 'create', confidence: 0.48, probabilities: { create: 0.59, continue: 0.24, none: 0.04 } }, 'active', ['none', 'continue', 'create']);
+assert.equal(activeCreate.effective, 'create');
+const routingRecord = {
+    preferences: { ...preferences, progressionMode: 'investigation', advancedEnabled: false, advancedElements: [], judgmentStyle: 'active', relationshipPace: 'medium', resolutionPace: 'medium', eventChance: 100, appearanceChance: 100 },
+    pacingState: { relationship: { closer: 0, distant: 0 }, event: { qualifiedSteps: 0 } },
+    progressionState: { turnsSinceMeaningfulProgress: 0 }, sceneOpportunity: 1,
+};
+const routingDecisions = { primary_focus: 'direct', scene_state: 'normal', event_state: 'unclear', event_route: activeCreate.effective, progression_move: 'reveal', relationship_pacing: 'closer_incremental', relationship_beat: 'vulnerability', resolution_readiness: 'unclear', resolution_pacing: 'continue', npc_route: 'none', advanced_route: 'none', advanced_move: 'quiet' };
+const routingDetails = {};
+coordinateDecisions(routingRecord, routingDetails, routingDecisions);
+assert.equal(routingDecisions.event_route, 'create', 'an unclear observed event does not prove that a central event already exists');
+const beforeDraw = selectActionPlan({ decisions: routingDecisions, settings: routingRecord.preferences, allowUnpreparedCreates: true });
+assert.equal(beforeDraw.secondary?.id, 'event', 'active new-event candidate reaches the configured draw ahead of a routine relationship beat');
+const deferredByRelationship = selectActionPlan({ decisions: { ...routingDecisions, primary_focus: 'relationship' }, settings: routingRecord.preferences, allowUnpreparedCreates: true });
+assert.deepEqual(nextDeferredRoutes({}, deferredByRelationship), { event: 1 }, 'an eligible event excluded by the action budget remains a bounded future candidate');
+assert.deepEqual(nextDeferredRoutes({ event: 3 }, beforeDraw), {}, 'selection clears a deferred route without claiming it occurred in RP');
+const { prepareProfiles } = createDraws(() => ({ id: 'current', name: 'Current world' }));
+const savedRandom = Math.random;
+try { Math.random = () => 0; prepareProfiles(routingRecord, routingDecisions, routingDetails); }
+finally { Math.random = savedRandom; }
+assert.ok(routingRecord.eventProfile && routingRecord.lastEventRoll, 'a successful configured draw prepares one event');
+const afterDraw = coordinateActionBudget(routingRecord, routingDetails, routingDecisions, routingRecord);
+assert.equal(afterDraw.secondary?.id, 'event');
+assert.match(buildInjection({ settings: routingRecord.preferences, decisions: routingDecisions, eventProfile: routingRecord.eventProfile }), /<RP_EVENT_BEAT/);
+
+const observedEventRecord = { ...routingRecord, eventProfile: null, preferences: { ...routingRecord.preferences, advancedEnabled: true, advancedElements: ['social'] } };
+const observedEventDecisions = { primary_focus: 'direct', scene_state: 'normal', event_state: 'active', event_route: 'continue', progression_move: 'reveal', relationship_pacing: 'hold', relationship_beat: 'none', resolution_readiness: 'partial', advanced_entry: 'latent', advanced_route: 'none', advanced_cause: 'none', advanced_element: 'none', advanced_move: 'quiet', npc_route: 'none' };
+coordinateDecisions(observedEventRecord, {}, observedEventDecisions);
+assert.equal(observedEventDecisions.event_route, 'continue', 'an existing RP event can progress without an extension-stored event');
+const observedPlan = coordinateActionBudget(observedEventRecord, {}, observedEventDecisions, observedEventRecord);
+assert.equal(observedPlan.secondary?.id, 'event');
+assert.match(buildInjection({ settings: observedEventRecord.preferences, decisions: observedEventDecisions }), /<RP_PROGRESSION/);
+
+const smallBeatDecisions = { ...observedEventDecisions, event_state: 'none', event_route: 'none', progression_move: 'hold', advanced_entry: 'latent', advanced_cause: 'location', advanced_element: 'social', advanced_move: 'seed' };
+coordinateDecisions(observedEventRecord, {}, smallBeatDecisions);
+const smallBeatPlan = coordinateActionBudget(observedEventRecord, {}, smallBeatDecisions, observedEventRecord);
+assert.equal(smallBeatPlan.secondary?.id, 'advanced_scene', 'advanced mode can produce a bounded beat without creating an event');
+assert.match(buildInjection({ settings: observedEventRecord.preferences, decisions: smallBeatDecisions }), /<ADVANCED_PROGRESSION[^>]*element="social" move="seed"/);
+assert.match(buildInjection({ settings: observedEventRecord.preferences, decisions: smallBeatDecisions }), /Ground this small beat in the current place or route\. Use a concrete social obligation/);
+
+const npcCreate = applyPolicy('npc_route', { choice: 'create', confidence: 0.50 }, 'active', ['none', 'reuse', 'create']);
+assert.equal(npcCreate.effective, 'create');
+const npcDecision = { primary_focus: 'direct', event_state: 'none', event_route: 'none', relationship_pacing: 'hold', relationship_beat: 'none', npc_route: npcCreate.effective, npc_role: 'participant', npc_weight: 'background', npc_knowledge: 'none', npc_disclosure: 'none' };
+coordinateDecisions(routingRecord, {}, npcDecision);
+assert.equal(npcDecision.npc_route, 'create', 'independent NPC role and weight answers do not veto an eligible route');
+assert.equal(npcDecision.npc_weight, 'brief');
+assert.equal(selectActionPlan({ decisions: npcDecision, settings: routingRecord.preferences, allowUnpreparedCreates: true }).secondary?.id, 'npc');
+const sheetNpcPayload = buildInjection({ settings: routingRecord.preferences, decisions: { ...npcDecision, npc_route: 'reuse', npc_weight: 'brief', npc_role: 'opposition' }, sheetNpcTarget: 'Wade', sheetCastNames: ['Wade'] });
+assert.match(sheetNpcPayload, /<SHEET_NPC_SCENE>Let Wade perform/);
+assert.doesNotMatch(sheetNpcPayload, /<NPC_SCENE_EXECUTION/, 'registered sheet NPCs never receive generic generated-cast execution');
 
 const exactPayload = buildInjection({
     settings: { worldDirection: 'hostile', relationshipDirection: 'hostile', negativePriority: true, progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium', socialEnabled: true, worldHostility: true, npcToUser: true, userMisfortune: true },
@@ -723,6 +781,16 @@ assert.equal(checkedProfile.profile.model, 'example-small');
 assert.equal(checkedProfile.result.ok, true);
 const liveProfile = await requestWithConnectionProfile(stRequestService, stProfile.id, 'Analyze continuity.', { source_rp: continuitySource });
 assert.deepEqual(liveProfile.result, { new_items: [] });
+const npcJson = '{"npcs":[{"name":"Wade Rockwell","aliases":[],"hint":"Family head"}]}';
+for (const reply of [npcJson, `\uFEFF\n\`\`\`json\n${npcJson}\n\`\`\``, `Here are the names:\n\`\`\`json\n${npcJson}\n\`\`\``,
+    [{ text: `\`\`\`json\n${npcJson}\n\`\`\`` }], { parts: [{ text: npcJson }] }, { content: [{ text: npcJson }] }]) {
+    assert.equal(parseReasonerReply(reply).npcs[0].name, 'Wade Rockwell', 'valid NPC JSON must survive common profile response wrappers');
+}
+for (const reply of ['', '```json\n{"npcs":[\n```', '```json\n{}\n```\n```json\n{}\n```', '[]']) {
+    assert.throws(() => parseReasonerReply(reply), 'empty, truncated, ambiguous, or non-object replies must fail clearly');
+}
+const npcProfileService = { ...stRequestService, sendRequest: async () => ({ content: `\`\`\`json\n${npcJson}\n\`\`\`` }) };
+assert.equal((await requestWithConnectionProfile(npcProfileService, stProfile.id, 'Find NPC names.', {})).result.npcs[0].name, 'Wade Rockwell');
 assert.equal(stCalls[1][0], stProfile.id, 'Reasoner must call the selected SillyTavern profile');
 assert.equal(stCalls[1][1][0].role, 'system');
 assert.equal(stCalls[1][1][1].role, 'user');

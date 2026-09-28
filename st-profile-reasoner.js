@@ -10,9 +10,27 @@ export function listConnectionProfiles(service) {
 }
 
 export function parseReasonerReply(content) {
-    if (content && typeof content === 'object' && !Array.isArray(content)) return content;
-    const text = String(content || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const value = JSON.parse(text);
+    let value = content;
+    for (let depth = 0; depth < 5; depth++) {
+        if (Array.isArray(value)) {
+            value = value.map(part => typeof part === 'string' ? part : part?.text || '').join('');
+        } else if (value && typeof value === 'object') {
+            if (typeof value.text === 'string') value = value.text;
+            else if (Array.isArray(value.parts)) value = value.parts;
+            else if (typeof value.content === 'string' || Array.isArray(value.content)) value = value.content;
+            else if (typeof value.output === 'string') value = value.output;
+            else break;
+        } else break;
+    }
+    if (typeof value === 'string') {
+        const raw = value.replace(/^\uFEFF/, '').trim();
+        if (!raw) throw new Error('모델 응답이 비어 있습니다.');
+        const fences = [...raw.matchAll(/```(?:json)?[ \t]*(?:\r?\n)?([\s\S]*?)```/gi)];
+        if (fences.length > 1) throw new Error('JSON 코드 블록이 여러 개라 결과를 특정할 수 없습니다.');
+        const text = fences.length ? fences[0][1].trim() : raw;
+        try { value = JSON.parse(text); }
+        catch (error) { throw new Error(`JSON 문법이 불완전합니다: ${error.message}`); }
+    }
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('모델이 JSON 객체를 반환하지 않았습니다.');
     return value;
 }
@@ -35,7 +53,7 @@ export async function requestWithConnectionProfile(service, profileId, system, s
         throw new Error(error?.cause?.message || error?.message || 'SillyTavern 연결 요청에 실패했습니다.');
     }
     let result;
-    try { result = parseReasonerReply(response?.content); }
+    try { result = parseReasonerReply(response?.content ?? response); }
     catch (error) { throw new Error(`연결 모델이 완전한 JSON을 반환하지 않았습니다. 출력 길이와 연결 프로필을 확인하세요. (${error.message})`); }
     if (testing && result.ok !== true) throw new Error('선택한 모델의 연결 확인 응답이 올바르지 않습니다.');
     return { result, profile: { id: profile.id, name: profile.name || profile.id, model: profile.model || '모델 이름 없음' } };

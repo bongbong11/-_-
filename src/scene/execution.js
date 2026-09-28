@@ -277,6 +277,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         hasVillain: Boolean(rec.villainProfile),
         hasNpc: Boolean(rec.npcProfile && rec.npcProfile.status !== 'retired'),
         hasEvent: Boolean(rec.eventProfile),
+        eventSource: rec.eventProfile?.source || '',
         pacingState: { ...rec.pacingState, progression: rec.progressionState },
     });
     if (prefs.advancedEnabled) questions.advanced_world_rules = {type:'choice',instructions:'From explicit current world rules, recent RP and supplied memory only: are supernatural mechanisms established? A horror label alone does not establish ghosts, curses or exorcism. This is world evidence, never an invitation to invent.',criteria:{mundane:'No supported supernatural mechanics.',supernatural:'Supernatural mechanics are established and compatible with this setting.',unclear:'Insufficient world evidence.'}};
@@ -302,11 +303,26 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         .filter((item) => item?.final?.presence && item.final.presence !== 'absent')
         .map((item) => item.id);
     const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds, { allowUserImpersonation: prefs.allowUserImpersonation });
+    const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
         transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona,
     }) : [];
+    if (deps.characterStore.characters.length === 1) {
+        const primary = liveCharacters.find((person) => person.id === deps.characterStore.characters[0].id);
+        if (primary) primary.mainSillyTavernName = deps.getContext().name2 || '';
+    }
     if (deps.characterStore.enabled) Object.assign(questions, deps.buildCharacterTurnQuestions(liveCharacters));
+    questions.npc_target = {
+        type: 'choice',
+        instructions: 'Only if an existing NPC is routed to act, select the specific established person with a plausible current role and access. This selects identity, not knowledge or conduct. Judge independently from the other questions.',
+        criteria: {
+            none: 'No specific existing NPC is supported or no NPC route is needed.',
+            ...(rec.npcProfile ? { stored_generated: 'The extension-stored generated NPC fits this role.' } : {}),
+            ...Object.fromEntries(npcTargets.map((entry, index) => [`sheet_${index}`, `Registered person ${entry.name} (${entry.npcRole || 'mixed'}) fits this role without changing their established identity or knowledge.`])),
+            scene_existing: 'An already established person in the recent RP, not a new creation, fits this role.',
+        },
+    };
     // The common scene router chooses who may enter; the sheet system owns how a registered person behaves.
     if (deps.isFranchiseWorld(world)) questions.npc_identity_route = {
         type: 'choice', instructions: 'If a new NPC is needed, choose a naturally present canon person, a setting-compatible original, an existing person, or a group. Presence must follow location, time, role, access, and continuity. Do not create a duplicate of a registered sheet character.',
@@ -371,20 +387,33 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         deps.commitObservedState(rec, decisions, context.observationKey);
         if (['user_established', 'both'].includes(decisions.context_change_source)) registerSceneOpportunity(rec, `user:${context.contextKey}`);
         deps.coordinateDecisions(rec, details, decisions);
-        if (['create', 'replace'].includes(decisions.npc_route) && ['reuse_existing', 'canon_natural', 'group'].includes(decisions.npc_identity_route)) {
+        if (['create', 'replace'].includes(decisions.npc_route) && decisions.npc_identity_route === 'reuse_existing') {
             deps.overrideDecision(details, decisions, 'npc_route', 'reuse', `인물 판정 경로: ${decisions.npc_identity_route}`);
         }
         if (!['create', 'replace', 'reuse'].includes(decisions.npc_route)) deps.overrideDecision(details, decisions, 'npc_identity_route', 'none', '이번 응답 NPC 실행 없음');
+        if (['create', 'replace', 'reuse'].includes(decisions.npc_route) && /^sheet_\d+$/.test(decisions.npc_target || '')) {
+            const target = npcTargets[Number(decisions.npc_target.slice(6))];
+            if (!target || !activeCharacters.some((entry, index) => entry.id === target.id && decisions[`character_${index}_presence`] === 'active')) {
+                deps.overrideDecision(details, decisions, 'npc_target', 'none', '해당 등록 인물의 이번 장면 참여 근거 없음');
+                deps.overrideDecision(details, decisions, 'npc_route', 'none', '선택한 등록 인물이 이번 응답에 참여하지 않음');
+            } else if (['create', 'replace'].includes(decisions.npc_route)) {
+                deps.overrideDecision(details, decisions, 'npc_route', 'reuse', '이미 등록된 인물을 새로 생성하지 않고 재사용');
+            }
+        }
+        if (['create', 'replace'].includes(decisions.npc_route) && decisions.npc_target === 'scene_existing') {
+            if (['mentioned', 'present', 'entering', 'multiple'].includes(decisions.npc_presence)) deps.overrideDecision(details, decisions, 'npc_route', 'reuse', '실제 RP에 존재하는 인물을 재사용');
+            else deps.overrideDecision(details, decisions, 'npc_target', 'none', '기존 인물의 관찰 근거 없음');
+        }
         const currentEventRelevant = Boolean(rec.eventProfile && rec.eventProfile.phase !== 'aftermath')
             && (['active', 'turning', 'resolution_ready'].includes(decisions.event_state)
                 || ((rec.progressionState?.turnsSinceMeaningfulProgress || 0) > 0 && ['goal', 'information', 'danger', 'multiple'].includes(decisions.unresolved)));
         if (currentEventRelevant && (prefs.advancedEnabled || prefs.progressionMode !== 'off') && (prefs.judgmentStyle === 'active' || prefs.resolutionPace === 'fast')) {
-            if (prefs.advancedEnabled && decisions.advanced_route === 'none') {
+            if (rec.eventProfile?.source === 'advanced' && prefs.advancedEnabled && decisions.advanced_route === 'none') {
                 deps.overrideDecision(details, decisions, 'advanced_route', 'continue', '저장 사건과 실제 미해결 목표가 있어 실행 후보로 복귀');
                 if (decisions.advanced_move === 'quiet') deps.overrideDecision(details, decisions, 'advanced_move', decisions.event_blocker === 'information' ? 'reveal' : 'advance', '빠른 해결·적극 진행에서 저장 사건 한 단계 실행');
                 deps.overrideDecision(details, decisions, 'advanced_cause', 'existing', '저장 사건의 계속되는 원인');
                 deps.overrideDecision(details, decisions, 'advanced_element', rec.eventProfile.element || 'objective', '저장 사건의 고정 요소 유지');
-            } else if (!prefs.advancedEnabled && decisions.event_route === 'none') {
+            } else if (prefs.progressionMode !== 'off' && decisions.event_route === 'none') {
                 deps.overrideDecision(details, decisions, 'event_route', 'continue', '저장 사건과 실제 미해결 목표가 있어 실행 후보로 복귀');
                 if (decisions.progression_move === 'hold') deps.overrideDecision(details, decisions, 'progression_move', decisions.event_blocker === 'information' ? 'reveal' : 'advance', '빠른 해결·적극 진행에서 저장 사건 한 단계 실행');
             }
@@ -392,7 +421,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const beforeBudgetDecisions = { ...decisions };
         const provisionalPlan = deps.selectActionPlan({
             decisions,
-            settings: { ...prefs, turnsSinceMeaningfulProgress: rec.progressionState?.turnsSinceMeaningfulProgress || 0 },
+            settings: { ...prefs, turnsSinceMeaningfulProgress: rec.progressionState?.turnsSinceMeaningfulProgress || 0, deferredRoutes: rec.deferredRoutes || {} },
             hasEventProfile: Boolean(rec.eventProfile),
             hasNpcProfile: Boolean(rec.npcProfile),
             hasVillainProfile: Boolean(rec.villainProfile),
@@ -428,11 +457,13 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const excludedById = new Map([...provisionalPlan.excluded, ...failedPrepared, ...finalPlan.excluded].map((item) => [item.id, item]));
         for (const selectedCandidate of [finalPlan.primary, finalPlan.secondary]) if (selectedCandidate) excludedById.delete(selectedCandidate.id);
         finalPlan.excluded = [...excludedById.values()];
+        rec.deferredRoutes = deps.nextDeferredRoutes(rec.deferredRoutes, provisionalPlan);
         decisions.action_plan = deps.actionPlanSummary(finalPlan);
         const chosenExternal = verifiedExternalCandidates.find((item) => finalPlan.secondary?.id === `external:${item.id}`) || null;
         const chosenContinuity = chosenExternal;
         if (chosenContinuity) decisions.selected_continuity_id = chosenContinuity.id;
         deps.coordinateCharacterDecisions(activeCharacters, details, decisions);
+        if (decisions.npc_route !== 'reuse') deps.overrideDecision(details, decisions, 'npc_target', 'none', '이번 응답에 기존 NPC 재사용 없음');
         if (!['create', 'replace', 'reuse'].includes(decisions.npc_route)) {
             for (const key of ['npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) deps.overrideDecision(details, decisions, key, 'none', decisions.npc_route === 'waiting' ? '인물 등장 추첨 대기' : '이번 응답 NPC 실행 없음');
         }
@@ -455,12 +486,14 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             ? deps.buildContinuityInjection(deps.selectContinuityContext(deps.continuityView(rec), transcript, { opportunity: rec.sceneOpportunity }), chosenContinuity)
             : '';
         const sheetCastNames = [...deps.characterStore.characters, ...deps.characterStore.npcs].flatMap(entry => [entry.name, ...(entry.aliases || [])]);
-        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: staged.npcProfile, eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock, sheetCastNames });
+        const selectedSheetNpc = decisions.npc_route === 'reuse' && /^sheet_\d+$/.test(decisions.npc_target || '')
+            ? npcTargets[Number(decisions.npc_target.slice(6))] || null : null;
+        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: selectedSheetNpc ? null : staged.npcProfile, sheetNpcTarget: selectedSheetNpc?.name || '', eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock, sheetCastNames });
         const finalContinuityCacheKey = deps.settings.continuityEnabled
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
         const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities }]));
-        rec.lastJudgment = { details, decisions, rawChoices, memoryStatus: memory.status, memoryKey, characterTrace, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldPayload: String(world?.prompt || ''), inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
+        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldPayload: String(world?.prompt || ''), inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
             rec.pendingPlan = {

@@ -4,15 +4,8 @@ import { archiveCurrentEvent } from '../../state-engine.js';
 import { overrideDecision } from './coordinator.js';
 export function createDraws(resolveWorld) {
 function prepareProfiles(rec, decisions, details) {
-    if (rec.preferences.advancedEnabled) {
-        if (decisions.event_route !== 'none') overrideDecision(details, decisions, 'event_route', 'none', '고급 전개가 기본 사건 라우팅을 대체');
-        if (rec.eventProfile && rec.eventProfile.source !== 'advanced' && decisions.advanced_route === 'continue') {
-            const world = resolveWorld(rec);
-            rec.eventProfile.source = 'advanced';
-            rec.eventProfile.worldId = world.id;
-            rec.eventProfile.worldName = world.name;
-            rec.eventProfile.element = decisions.advanced_element !== 'none' ? decisions.advanced_element : 'objective';
-        }
+    if (rec.preferences.advancedEnabled && ['create', 'continue'].includes(decisions.advanced_route)) {
+        if (decisions.event_route === 'create') overrideDecision(details, decisions, 'event_route', 'none', '한 장면 기회에서는 고급 사건 추첨을 우선');
         if (decisions.advanced_route === 'create' && !rec.eventProfile) {
             if (rec.lastEventRoll?.opportunity === rec.sceneOpportunity) {
                 overrideDecision(details, decisions, 'advanced_route', 'none', '같은 기회의 고급 사건 추첨 완료');
@@ -34,21 +27,19 @@ function prepareProfiles(rec, decisions, details) {
                     }
                 } else {
                     overrideDecision(details, decisions, 'advanced_route', 'none', '고급 사건 확률 추첨 대기');
-                    overrideDecision(details, decisions, 'advanced_cause', 'none', '고급 사건 추첨 대기');
-                    overrideDecision(details, decisions, 'advanced_element', 'none', '고급 사건 추첨 대기');
-                    overrideDecision(details, decisions, 'advanced_move', 'quiet', '고급 사건 추첨 대기');
+                    overrideDecision(details, decisions, 'advanced_cause', 'none', '새 고급 사건 추첨 미통과');
+                    overrideDecision(details, decisions, 'advanced_element', 'none', '새 고급 사건 추첨 미통과');
+                    overrideDecision(details, decisions, 'advanced_move', 'quiet', '새 고급 사건 추첨 미통과');
                 }
             }
         } else if (rec.eventProfile?.source === 'advanced' && decisions.advanced_route === 'continue') {
             rec.eventProfile.status = 'active';
         }
     }
-    if (rec.preferences.advancedEnabled) return prepareStandardProfiles(rec, decisions, details, { includeEvent: false });
     return prepareStandardProfiles(rec, decisions, details);
 }
 
-function prepareStandardProfiles(rec, decisions, details, { includeEvent = true } = {}) {
-    if (includeEvent) {
+function prepareStandardProfiles(rec, decisions, details) {
     if (decisions.event_route === 'retire') {
         archiveCurrentEvent(rec, 'completed');
         rec.eventProfile = null;
@@ -71,7 +62,6 @@ function prepareStandardProfiles(rec, decisions, details, { includeEvent = true 
                 }
             }
         } else overrideDecision(details, decisions, 'event_route', 'continue', '저장된 중심 사건 계속');
-    }
     }
     if (decisions.villain_route === 'retire') {
         rec.villainProfile = null;

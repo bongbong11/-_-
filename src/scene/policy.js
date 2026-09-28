@@ -33,6 +33,7 @@ export const FALLBACKS = {
     villain_route: 'none',
     progression_move: 'hold',
     npc_route: 'none',
+    npc_target: 'none',
     hesitation_drag: 'no',
     refusal_stall: 'no',
     circularity: 'no',
@@ -80,6 +81,7 @@ const THRESHOLDS = {
     villain_route: 0.78,
     progression_move: 0.72,
     npc_route: 0.75,
+    npc_target: 0.55,
     hesitation_drag: 0.62,
     refusal_stall: 0.62,
     circularity: 0.62,
@@ -96,7 +98,14 @@ const THRESHOLDS = {
     advanced_move: 0.66,
 };
 
-const CHOICE_THRESHOLDS = { villain_route: { retire: 0.88, replace: 0.90 }, npc_route: { retire: 0.84, replace: 0.86 } };
+// Creation is eligibility for a user-controlled draw; retirement and replacement
+// change stored state and retain a higher evidence requirement.
+const CHOICE_THRESHOLDS = {
+    event_route: { create: 0.58, continue: 0.56, retire: 0.88, replace: 0.90 },
+    npc_route: { create: 0.60, reuse: 0.55, retire: 0.84, replace: 0.86 },
+    villain_route: { create: 0.66, continue: 0.58, retire: 0.88, replace: 0.90 },
+    advanced_route: { create: 0.60, continue: 0.56 },
+};
 
 export function applyPolicy(key, answer, judgmentStyle = 'balanced', allowedChoices = []) {
     const fallback = String(key).startsWith('verification_') ? 'not_applicable' : String(key).startsWith('continuity_candidate_') ? 'reject' : FALLBACKS[key];

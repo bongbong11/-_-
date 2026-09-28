@@ -36,10 +36,10 @@ export function parseNpcCandidates(value, { characterName = '', userName = '', e
     const blocked = new Set([characterName, userName, ...existing].map(v => String(v || '').trim().toLocaleLowerCase()).filter(Boolean));
     const seen = new Set();
     return value.npcs.slice(0, 30).flatMap(item => {
-        const name = String(item?.name || '').trim();
+        const name = typeof item?.name === 'string' ? item.name.trim() : '';
         const key = name.toLocaleLowerCase();
         if (!name || name.length > 100 || blocked.has(key) || seen.has(key)) return [];
         seen.add(key);
-        return [{ name, aliases: [...new Set((Array.isArray(item.aliases) ? item.aliases : []).map(v => String(v || '').trim()).filter(v => v && v !== name))].slice(0, 8), hint: String(item.hint || '').trim().slice(0, 160) }];
+        return [{ name, aliases: [...new Set((Array.isArray(item.aliases) ? item.aliases : []).filter(v => typeof v === 'string').map(v => v.trim()).filter(v => v && v !== name))].slice(0, 8), hint: typeof item.hint === 'string' ? item.hint.trim().slice(0, 160) : '' }];
     });
 }

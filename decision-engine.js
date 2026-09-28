@@ -34,7 +34,7 @@ export function applyDecisionPolicy({ key, answer, style = 'balanced', allowedCh
     const irreversibleOrPaceSensitive = ['retire', 'replace'].includes(selected)
         || selected.endsWith('_significant')
         || key === 'relationship_pacing'
-        || String(key).startsWith('advanced_');
+        || (key === 'advanced_entry' && selected === 'closed');
     const deltas = kind === 'routing' && !irreversibleOrPaceSensitive
         ? { conservative: 0.08, balanced: 0, active: -0.12 }
         : { conservative: 0, balanced: 0, active: 0 };

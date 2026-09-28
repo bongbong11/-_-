@@ -58,13 +58,13 @@ function setFormValues() {
     const macroStatus = deps.document.getElementById('sr-macro-status');
     if (macroStatus) macroStatus.textContent = deps.macroAvailable ? '필요한 위치에 각 매크로를 한 번씩 넣으세요.' : '이 SillyTavern 버전에서는 사용자 매크로를 등록할 수 없습니다.';
     const eventChance = deps.document.getElementById('sr-event-chance');
-    if (eventChance) eventChance.disabled = prefs.advancedEnabled;
+    if (eventChance) eventChance.disabled = prefs.progressionMode === 'off';
     const progression = deps.document.getElementById('sr-progression-mode');
-    if (progression) progression.disabled = prefs.advancedEnabled;
+    if (progression) progression.disabled = false;
     const eventChanceNote = deps.document.getElementById('sr-event-chance-note');
-    if (eventChanceNote) eventChanceNote.textContent = prefs.advancedEnabled ? '고급 전개 사용 중에는 전개 개방도의 18% / 35% / 58% / 75% 추첨이 대신하므로 이 확률은 잠깁니다.' : 'Jev가 새 중심 사건을 넣어도 된다고 판정한 적합한 계기마다 한 번만 굴립니다. 같은 장면에서 실패 추첨을 반복하지 않습니다.';
+    if (eventChanceNote) eventChanceNote.textContent = prefs.progressionMode === 'off' ? '일반 RP 진행을 켜면 일반 새 사건 추첨에 사용됩니다.' : '일반 새 사건 후보에만 적용됩니다. 고급 사건은 고급 전개 개방도를 사용하며, 같은 장면 기회에서 중복 추첨하지 않습니다.';
     const advancedNote = deps.document.getElementById('sr-basic-progression-note');
-    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled ? '고급 전개 사용 중에는 잠깁니다. 고급 전개 탭의 사용할 요소와 현재 세계관으로 진행합니다.' : '사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.';
+    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled ? '일반 진행도 계속 사용합니다. 고급 전개는 선택한 세계관의 요소를 필요할 때 더합니다.' : '사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.';
     const advancedResults = deps.document.getElementById('sr-advanced-results');
     if (advancedResults) advancedResults.hidden = !prefs.advancedEnabled;
     renderWorldControls();
@@ -295,10 +295,11 @@ async function npcSourceMaterial() {
     const world = deps.worldInfoModule;
     const bookNames = world?.loadWorldInfo ? deps.linkedCharacterBooks(context, world.world_info) : [];
     const bookResults = await Promise.allSettled(bookNames.map(name => world.loadWorldInfo(name)));
+    const unreadableLorebooks = bookResults.filter(result => result.status === 'rejected').length;
     const bookText = bookResults.flatMap((result, index) => result.status === 'fulfilled'
         ? Object.values(result.value?.entries || {}).filter(entry => entry && !entry.disable && typeof entry.content === 'string')
             .map(entry => `[${bookNames[index]}] ${entry.content}`) : []).join('\n\n');
-    return { card: cardText.slice(0, 12000), persona: personaText.slice(0, 6000), linkedLorebooks: bookText.slice(0, 18000) };
+    return { card: cardText.slice(0, 12000), persona: personaText.slice(0, 6000), linkedLorebooks: bookText.slice(0, 18000), unreadableLorebooks };
 }
 
 function renderNpcCandidates() {
@@ -311,6 +312,8 @@ function renderNpcCandidates() {
 
 async function readNpcNames() {
     if (!deps.settings.reasonerProfileId) throw new Error('설정에서 시트 분석용 연결 프로필을 먼저 선택하세요.');
+    npcCandidates = [];
+    renderNpcCandidates();
     const chatKey = deps.stateChatKey();
     const job = deps.jobs.begin('npc-name-candidates');
     const owner = `npc-names:${job.id || Date.now()}`;
@@ -319,14 +322,15 @@ async function readNpcNames() {
         const source = await npcSourceMaterial(); job.assert();
         if (!source.card && !source.persona && !source.linkedLorebooks) throw new Error('읽을 캐릭터 카드·페르소나·연결 로어북 자료가 없습니다.');
         const answer = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId,
-            deps.NPC_NAME_SYSTEM, source, { maxTokens: 900 });
+            deps.NPC_NAME_SYSTEM, source, { maxTokens: 1600 });
         job.assert();
         if (chatKey !== deps.stateChatKey()) throw new deps.StaleRunError();
         const context = deps.getContext();
         npcCandidates = deps.parseNpcCandidates(answer.result, { characterName: context.name2, userName: context.name1,
             existing: deps.characterStore.npcs.flatMap(entry => [entry.name, ...(entry.aliases || [])]) });
         renderNpcCandidates();
-        deps.updateActivity(npcCandidates.length ? `NPC 이름 후보 ${npcCandidates.length}명 · 등록할 사람을 선택하세요.` : '등록할 새 NPC 이름을 찾지 못했습니다.', { done: true, owner });
+        const partial = source.unreadableLorebooks ? ` · 연결 로어북 ${source.unreadableLorebooks}개를 읽지 못함` : '';
+        deps.updateActivity(npcCandidates.length ? `NPC 이름 후보 ${npcCandidates.length}명 · 등록할 사람을 선택하세요.${partial}` : `등록할 새 NPC 이름을 찾지 못했습니다.${partial}`, { done: true, owner });
     } catch (error) {
         deps.updateActivity(error.message, { error: !(error instanceof deps.StaleRunError), done: error instanceof deps.StaleRunError, owner });
         if (!(error instanceof deps.StaleRunError)) { error.activityReported = true; throw error; }

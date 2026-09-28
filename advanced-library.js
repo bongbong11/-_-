@@ -116,6 +116,21 @@ const MOVE_PROMPTS = {
     aftermath: 'Carry one concrete result into injuries, resources, access, reputation, relationships, location, or the next available action.',
 };
 
+const SMALL_BEAT_ELEMENTS = {
+    social: 'Use a concrete social obligation, encounter, or change in access.',
+    exploration: 'Let the current place or route yield one relevant discovery.',
+    objective: 'Change one practical step of the active goal.',
+    investigation: 'Expose one limited clue or testable lead.',
+    threat: 'Let a supported danger change immediate choices without forcing combat.',
+    horror: 'Use one setting-valid unsettling sign with a material scene effect.',
+    intrigue: 'Let an existing interest, leverage point, or faction make one bounded move.',
+    relationship: 'Let one established relationship pressure affect conduct without inventing feelings.',
+};
+const SMALL_BEAT_CAUSES = {
+    existing: 'an established thread', world: 'a known world condition', location: 'the current place or route',
+    faction: 'an actor with motive and access', consequence: 'an earlier action and its consequence', chance: 'an ordinary plausible chance',
+};
+
 const CAST_PROFILES = {
     major: [
         ['주요 인물', 'pursue a concrete personal objective', 'a specific stake can change their position', 'bounded competence and access'],
@@ -201,6 +216,16 @@ export function rollAdvancedEntity(event, { random = Math.random, existing = [] 
 
 export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHint = '', eventTitle = '', eventElement = '' }) {
     if (!preferences.advancedEnabled) return {};
+    const hasAdvancedEvent = hasEvent && Boolean(ADVANCED_ELEMENTS[eventElement]);
+    const routeCriteria = hasAdvancedEvent ? {
+        none: 'Keep the stored advanced event without an advanced move this response.',
+        continue: 'The stored advanced event has a supported next step.',
+    } : hasEvent ? {
+        none: 'The stored ordinary event stays under ordinary progression; do not replace it with an advanced event.',
+    } : {
+        none: 'No new advanced central event should enter the draw this response.',
+        create: 'A world-compatible advanced central event has a plausible opening and may enter the configured draw.',
+    };
     const enabled = Array.isArray(preferences.advancedElements) && preferences.advancedElements.length
         ? preferences.advancedElements.filter((key) => ADVANCED_ELEMENTS[key])
         : ADVANCED_DEFAULT_ELEMENTS;
@@ -221,16 +246,12 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         },
         advanced_route: {
             type: 'choice',
-            instructions: `If a stored advanced event exists, decide whether it should take one concrete step now or remain stored without an injection. If none exists, choose create only when the entry is eligible and the scene has room; creation still requires the configured probability roll. A failed roll does not forbid an independent direct response or progress within another established thread. Do not silently replace or finish a stored event. ${hasEvent ? `Stored event: ${eventTitle}.` : 'No stored event exists.'}`,
-            criteria: {
-                none: 'Use no advanced event instruction this response.',
-                continue: hasEvent ? 'The stored event should materially act, develop, or produce a consequence now.' : 'Do not select: no stored event exists.',
-                create: hasEvent ? 'Do not select: a stored event already exists.' : 'A new event is causally eligible and the scene has room for the configured probability roll.',
-            },
+            instructions: `Choose whether a stored advanced event acts or a new one is eligible for a draw. Eligibility never guarantees an event. A separate small world beat may be selected without creating a new central event. Preserve the active scene and world rules. ${hasEvent ? `Stored event: ${eventTitle}.` : 'No stored event exists.'}`,
+            criteria: routeCriteria,
         },
         advanced_cause: {
             type: 'choice',
-            instructions: 'Identify the narrowest causal route supporting the selected advanced route. Select none when no advanced route is used.',
+            instructions: 'Select the narrowest plausible cause for an advanced event or a small scene beat. Choose none when neither has a causal opening. This selects material, not a second eligibility gate.',
             criteria: {
                 none: 'No advanced route is used or no causal basis exists.',
                 existing: 'An active goal, event, threat, clue, relationship pressure, or unresolved thread already supplies the cause.',
@@ -243,12 +264,12 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
         },
         advanced_element: {
             type: 'choice',
-            instructions: `For a new event, choose at most one enabled content element from the current scene and selected world. When continuing the stored event, keep its fixed element${hasEvent && ADVANCED_ELEMENTS[eventElement] ? ` (${ADVANCED_ELEMENTS[eventElement]})` : ''}. The choice controls event material, not prose genre or preset atmosphere. Ignore the saved basic RP progression type while advanced progression is enabled.`,
+            instructions: `Choose at most one enabled content element for a new event or a modest scene beat. When continuing a stored advanced event, keep its fixed element${hasAdvancedEvent ? ` (${ADVANCED_ELEMENTS[eventElement]})` : ''}. This controls event material while the ordinary RP progression type remains active.`,
             criteria: elementCriteria,
         },
         advanced_move: {
             type: 'choice',
-            instructions: 'Choose one bounded step for the selected event. A seed is a concrete first sign, not a full attack. Contact and attack require actual means, access, and opportunity. An executed cause may require an aftermath even when no new threat enters. Keep the selected move proportionate to the current scene and leave unresolved USER participation open.',
+            instructions: 'Choose one bounded step for the event or a small causal scene beat. Without a selected event, only a seed, obstacle, reveal, or aftermath may be used; contact and attack require an event with actual means and access. Leave unresolved USER participation open.',
             criteria: {
                 quiet: 'Keep the event or world activity stored without an advanced injection this response.',
                 seed: 'Introduce only a first concrete sign, opportunity, or pressure.',
@@ -264,16 +285,21 @@ export function buildAdvancedQuestions({ preferences, hasEvent = false, worldHin
 }
 
 export function buildAdvancedInjection({ decisions, eventProfile }) {
-    if (!eventProfile || !['create', 'continue'].includes(decisions.advanced_route)) return '';
+    const hasAdvancedEvent = eventProfile?.source === 'advanced' && ['create', 'continue'].includes(decisions.advanced_route);
+    const smallBeat = !hasAdvancedEvent && decisions.advanced_route === 'none'
+        && decisions.advanced_cause !== 'none' && decisions.advanced_element !== 'none'
+        && ['seed', 'obstacle', 'reveal', 'aftermath'].includes(decisions.advanced_move);
+    if (!hasAdvancedEvent && !smallBeat) return '';
     const move = decisions.advanced_move || 'advance';
     if (move === 'quiet') return '';
     const lines = [
-        eventProfile.prompt,
+        ...(hasAdvancedEvent ? [eventProfile.prompt] : []),
+        ...(smallBeat ? [`Ground this small beat in ${SMALL_BEAT_CAUSES[decisions.advanced_cause] || 'the established scene'}. ${SMALL_BEAT_ELEMENTS[decisions.advanced_element] || ''}`] : []),
         MOVE_PROMPTS[move] || MOVE_PROMPTS.advance,
     ];
-    const entity = eventProfile.entity;
+    const entity = hasAdvancedEvent ? eventProfile.entity : null;
     if (entity && ['contact','attack','advance','obstacle'].includes(move)) lines.push(`Cast form: ${entity.form}. Purpose: ${entity.purpose}. Stake: ${entity.stake}. Constraint: ${entity.constraint}.`);
-    return `<ADVANCED_PROGRESSION element="${eventProfile.element}" move="${move}" cause="${decisions.advanced_cause || 'existing'}">
+    return `<ADVANCED_PROGRESSION element="${hasAdvancedEvent ? eventProfile.element : decisions.advanced_element}" move="${move}" cause="${decisions.advanced_cause || 'existing'}">
 ${lines.join('\n')}
 </ADVANCED_PROGRESSION>`;
 }

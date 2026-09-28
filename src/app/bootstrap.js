@@ -20,7 +20,7 @@ import { allWorlds, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCusto
 import { buildInputKey, buildRecentContext, filterNonRpHistory, generationCycleSalt, isVisibleRoleplayMessage, pendingComposerText, splitOocText } from '../../runtime-utils.js';
 import { buildVerificationQuestions, pendingPlanEffects, stableFingerprint, verificationSummary } from '../../decision-engine.js';
 import { archiveCurrentEvent, commitObservedState, commitVerifiedPlan, updateProgressionPressure } from '../../state-engine.js';
-import { actionPlanSummary, selectActionPlan } from '../../action-coordinator.js';
+import { actionPlanSummary, selectActionPlan, nextDeferredRoutes } from '../../action-coordinator.js';
 import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecondaryCandidates } from '../../continuity-hooks.js';
 import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from '../../continuity-engine.js';
 import { listConnectionProfiles, requestWithConnectionProfile } from '../../st-profile-reasoner.js';
@@ -330,6 +330,9 @@ function record(create = false) {
             turnsSinceMeaningfulProgress: Math.max(0, Math.min(8, Number(progression.turnsSinceMeaningfulProgress) || 0)),
             lastOutputFingerprint: String(progression.lastOutputFingerprint || ''),
         };
+        value.deferredRoutes = Object.fromEntries(Object.entries(value.deferredRoutes || {})
+            .filter(([key, count]) => ['event', 'advanced_event', 'advanced_scene', 'npc', 'villain'].includes(key) && Number.isFinite(Number(count)))
+            .map(([key, count]) => [key, Math.max(0, Math.min(3, Number(count) || 0))]));
         value.observedOpportunityKeys = Array.isArray(value.observedOpportunityKeys) ? value.observedOpportunityKeys.slice(-12) : [];
         const continuity = value.continuity && typeof value.continuity === 'object' ? value.continuity : {};
         value.continuity = normalizeContinuity(continuity);
@@ -453,6 +456,7 @@ function reversibleStateSnapshot(rec) {
         advancedEntities: rec.advancedEntities || [],
         sceneOpportunity: rec.sceneOpportunity || 1,
         progressionState: rec.progressionState || { turnsSinceMeaningfulProgress: 0, lastOutputFingerprint: '' },
+        deferredRoutes: rec.deferredRoutes || {},
         observedOpportunityKeys: rec.observedOpportunityKeys || [],
         continuity: rec.continuity || { items: [], knowledge: [], followups: [], revision: 0 },
         pendingContinuityCandidates: rec.pendingContinuityCandidates || [],
@@ -580,6 +584,7 @@ let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalC
     get reversibleStateSnapshot() { return reversibleStateSnapshot; }, set reversibleStateSnapshot(value) { reversibleStateSnapshot = value; },
     get saveStateHistory() { return saveStateHistory; }, set saveStateHistory(value) { saveStateHistory = value; },
     get selectActionPlan() { return selectActionPlan; },
+    get nextDeferredRoutes() { return nextDeferredRoutes; },
     get lastDebugFrame() { return lastDebugFrame; }, set lastDebugFrame(value) { lastDebugFrame = value; },
     get selectActiveEntries() { return selectActiveEntries; },
     get selectContinuityContext() { return selectContinuityContext; },

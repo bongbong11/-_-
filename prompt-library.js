@@ -383,9 +383,9 @@ export function rollVillainProfile(random = Math.random) {
     return Object.fromEntries(Object.entries(VILLAIN_OPTIONS).map(([key, values]) => [key, pick(values, random)]));
 }
 
-export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, pacingState = {} }) {
-    const progressionMode = preferences.advancedEnabled ? 'off' : preferences.progressionMode;
-    const newEventEnabled = preferences.advancedEnabled || progressionMode !== 'off';
+export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, eventSource = '', pacingState = {} }) {
+    const progressionMode = preferences.progressionMode;
+    const newEventEnabled = !hasEvent && (preferences.advancedEnabled || progressionMode !== 'off');
     const posture = 'Use the same evidence standard regardless of routing style. Select none only when the recent exchange affirmatively supports absence; select unclear when relevant evidence exists but is insufficient or contradictory. Do not turn desired next movement into an observed fact.';
     const relationshipDirectionRule = {
         hostile: 'The complete original CHARACTER_TO_USER_DEFAULT directive is fixed and active. Do not reinterpret, narrow, soften, summarize, or replace it. Judge only whether the current exchange supports an additional relationship change and how large that change may be.',
@@ -542,13 +542,15 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     if (preferences.villainEnabled) {
         questions.villain_route = {
             type: 'choice',
-            instructions: 'Judge antagonist use conservatively. Prefer the active scene and established people over a new antagonist.',
-            criteria: {
+            instructions: 'Choose an antagonist route using the selected conservative, balanced, or active routing style. Existing opponents may act through established motives, access, and consequences; a new opponent needs a plausible role and entry route, then remains subject to the configured appearance draw. Do not invent access, hidden knowledge, or an interruption that overrides a live user interaction. Retire or replace only when the old role is conclusively finished.',
+            criteria: hasVillain ? {
                 none: 'No antagonist intervention is needed or it would disrupt meaningful active material.',
-                create: hasVillain ? 'Do not select: an antagonist profile already exists.' : 'A new antagonist can enter through plausible access and cause a concrete problem now.',
-                continue: hasVillain ? 'The stored antagonist has a plausible current opening to continue or re-enter.' : 'Do not select: no stored antagonist exists.',
-                retire: hasVillain ? 'The stored antagonist\'s conflict and role are conclusively finished, or their continued return has become implausible. Mere absence from this exchange is insufficient.' : 'Do not select: no stored antagonist exists.',
-                replace: hasVillain ? 'The stored antagonist\'s role is conclusively finished and a distinct new antagonist has a concrete, plausible function now. Mere absence or novelty is insufficient.' : 'Do not select: no stored antagonist exists; use create instead.',
+                continue: 'The stored antagonist has a plausible current opening to continue or re-enter.',
+                retire: 'The stored antagonist\'s conflict and role are conclusively finished; absence alone is insufficient.',
+                replace: 'The stored antagonist\'s role is finished and a distinct opponent has plausible motive and access.',
+            } : {
+                none: 'No antagonist intervention suits this response.',
+                create: 'A distinct opponent with a concrete motive, function, and plausible access may enter the configured appearance draw.',
             },
         };
     }
@@ -609,22 +611,26 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             event: 'The established primary event should receive the main action, clue, obstacle, result, or resolution.',
             conflict: 'An actual active confrontation or immediate threat requires execution.',
             npc: 'An established or concretely entering NPC or antagonist should make the main move.',
-            new_event: newEventEnabled ? 'No stronger unfinished focus exists and one new event compatible with the selected world and progression controls can enter without disrupting the scene.' : 'Do not select: automatic RP progression is disabled.',
+            ...(newEventEnabled ? { new_event: 'No stronger unfinished focus exists and one new event compatible with the selected world and progression controls can enter without disrupting the scene.' } : {}),
             transition: 'The active beat has a natural handoff into another time, place, or phase.',
         },
     };
 
-    if (progressionMode !== 'off') {
+    if (progressionMode !== 'off' && !(preferences.advancedEnabled && hasEvent && eventSource === 'advanced')) {
+        const eventCriteria = hasEvent ? {
+            none: 'Keep the stored event in the background this response without erasing it.',
+            continue: 'The stored event should take one concrete step now.',
+            retire: 'The stored event is conclusively complete and only its consequences remain.',
+            replace: 'The stored event is conclusively complete and a distinct new event has a plausible opening.',
+        } : {
+            none: 'No event route needs an instruction in this response.',
+            continue: 'An already established RP event, goal, external pressure, or consequence can take one concrete step even though the extension has no stored event profile.',
+            create: 'A distinct new central event has a plausible causal opening and may enter the configured probability draw.',
+        };
         questions.event_route = {
             type: 'choice',
-            instructions: 'Decide what to do with the stored primary event. Continue an unfinished event when a concrete next step or consequence is available. Its clue, obstacle, contact, or consequence is progress within that event, not a new event. Choose create only when there is no incompatible active primary event, the setting provides a plausible route, and the scene has room for the configured probability roll. An event is not completed merely because it was absent from recent messages.',
-            criteria: {
-                none: hasEvent ? 'Keep the stored event in the background this response without erasing it.' : 'No new event is appropriate.',
-                continue: hasEvent ? 'The stored event remains the primary event and should be acted on now.' : 'Do not select: no stored event exists.',
-                create: hasEvent ? 'Do not select: a stored primary event already exists; use continue or none.' : 'No primary event exists, the scene has room, and a new genre-compatible event should be rolled.',
-                retire: hasEvent ? 'The stored event is conclusively complete and only its already-recorded consequences remain.' : 'Do not select: no stored event exists.',
-                replace: hasEvent ? 'The stored event is conclusively complete and the scene has a concrete opening for a distinct new primary event.' : 'Do not select: no stored event exists; use create instead.',
-            },
+            instructions: 'Choose one event route for the next response. An existing RP event can move without an extension-stored profile; its clue, contact, obstacle, or consequence is continuation, not a newly invented central event. Create only means eligibility for the configured draw, never guaranteed occurrence. Favor the selected conservative, balanced, or active routing style while preserving world rules, access, causality, and the current interaction. An event is not completed merely because it was absent from recent messages.',
+            criteria: eventCriteria,
         };
         questions.progression_move = {
             type: 'choice',
@@ -641,29 +647,29 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
             },
         };
     }
+    const npcRouteCriteria = {
+        none: 'No NPC entry or independent NPC action suits this response.',
+        reuse: 'An established person has a plausible current function and access; reuse does not require a newly generated profile.',
+        background: 'An established NPC should remain present or available without an independent move.',
+        ...(progressionMode !== 'off' || preferences.advancedEnabled ? { create: 'A new non-villain person with a concrete function and plausible access may enter the configured appearance draw; necessity is not required.' } : {}),
+        ...(hasNpc ? { retire: 'The stored NPC role is conclusively complete; absence alone is insufficient.', replace: 'The stored NPC role is complete and a distinct person has a plausible function now.' } : {}),
+    };
     questions.npc_route = {
         type: 'choice',
-        instructions: 'Judge the need for a general Generated Cast NPC separately from the presence of registered Sheet Cast. A registered person being active does not prohibit another suitable NPC from entering. Prefer an established person who can fill the function; create someone new only when a concrete function lacks a suitable existing person and access is plausible. Mention or absence alone does not retire a stored NPC.',
-        criteria: {
-            none: 'No NPC action or entry is needed.',
-            reuse: hasNpc ? 'The stored NPC can act or re-enter usefully now.' : 'A suitable NPC already established in the roleplay should act; no new profile is needed.',
-            create: progressionMode === 'off' ? 'Do not select: automatic RP progression is disabled.' : 'No suitable established person can fill a necessary concrete function, and one new non-villain NPC can plausibly enter now.',
-            background: hasNpc ? 'The stored NPC has no current function and should remain offstage without being erased.' : 'A mentioned or present NPC should remain in the background without a material move.',
-            retire: hasNpc ? 'The stored NPC\'s role is conclusively complete and continuity no longer calls for retaining them. Mere absence is insufficient.' : 'Do not select: no stored NPC exists.',
-            replace: hasNpc && progressionMode !== 'off' ? 'The stored NPC\'s role is conclusively complete and a different concrete NPC function is needed now.' : 'Do not select unless a stored NPC exists and automatic progression is enabled.',
-        },
+        instructions: 'Choose the NPC route once, separately from registered Sheet Cast presence. A registered person being active does not prohibit another suitable NPC from entering. Reuse a fitting established person when possible; a new person needs a concrete scene function, plausible access, and world compatibility, then remains subject to the configured draw. The routing style controls openness; it does not grant knowledge or change a person\'s identity. A meaningful active exchange may take priority this response without making a candidate impossible.',
+        criteria: npcRouteCriteria,
     };
     questions.npc_role = {
         type: 'choice',
-        instructions: 'If an NPC will act or enter, choose the single function that best fits their established identity, access, motive, and the active scene. Otherwise select none.',
+        instructions: 'Independently choose the most plausible function IF the proposed NPC route is used. The extension ignores this answer if no NPC route survives. Do not assume another Jev question was already answered.',
         criteria: {
-            none: 'No NPC function is needed.', participant: 'The NPC is directly affected and has something concrete to gain, lose, decide, or protect.', witness: 'The NPC can contribute an observation from direct presence.', information: 'The NPC controls or carries relevant information.', support: 'The NPC can provide bounded help, access, labor, or resources.', gatekeeper: 'The NPC controls access, permission, procedure, or entry.', opposition: 'The NPC has a concrete opposed interest.', mediator: 'The NPC has reason to intervene between opposed participants.', authority: 'The NPC can exercise established institutional, social, or practical authority.', exploiter: 'The NPC can use the active conflict or uncertainty for a specific advantage.', consequence: 'The NPC carries a social, practical, institutional, or personal result of an earlier action.', protector: 'The NPC has a supported reason and ability to protect or rescue.', self_directed: 'The NPC should pursue an immediate objective independent of helping or opposing the main participants.',
+            participant: 'The NPC is directly affected and has something concrete to gain, lose, decide, or protect.', witness: 'The NPC can contribute an observation from direct presence.', information: 'The NPC controls or carries relevant information.', support: 'The NPC can provide bounded help, access, labor, or resources.', gatekeeper: 'The NPC controls access, permission, procedure, or entry.', opposition: 'The NPC has a concrete opposed interest.', mediator: 'The NPC has reason to intervene between opposed participants.', authority: 'The NPC can exercise established institutional, social, or practical authority.', exploiter: 'The NPC can use the active conflict or uncertainty for a specific advantage.', consequence: 'The NPC carries a social, practical, institutional, or personal result of an earlier action.', protector: 'The NPC has a supported reason and ability to protect or rescue.', self_directed: 'The NPC should pursue an immediate objective independent of helping or opposing the main participants.',
         },
     };
     questions.npc_weight = {
         type: 'choice',
-        instructions: 'Choose how much space the relevant NPC should occupy in the next response. Preserve the primary character and active interaction.',
-        criteria: { none: 'No NPC execution is needed.', background: 'Presence or continuity should remain without a new intervention.', brief: 'One proportionate reaction is enough.', supporting: 'One material supporting action or decision is needed.', primary: 'The NPC has the strongest causal reason to make the main move now.', exit: 'The NPC should leave, withdraw, lose access, or return to their own concern.' },
+        instructions: 'Independently choose the maximum space the NPC route could use IF selected. The extension ignores this answer when no NPC route survives. Preserve the primary character and active interaction.',
+        criteria: { background: 'Presence or continuity should remain without a new intervention.', brief: 'One proportionate reaction is enough.', supporting: 'One material supporting action or decision is needed.', primary: 'The NPC has the strongest causal reason to make the main move now.', exit: 'The NPC should leave, withdraw, lose access, or return to their own concern.' },
     };
     questions.npc_knowledge = {
         type: 'choice',
@@ -731,7 +737,7 @@ ${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or
 </RP_EVENT_BEAT>`;
 }
 
-export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [] }) {
+export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '' }) {
     const blocks = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
     if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
     const cadencePrompts = {
@@ -787,7 +793,8 @@ Continue the active exchange through one concrete, character-consistent response
         let advanced = buildAdvancedInjection({ decisions, eventProfile });
         if (advanced && decisions.secondary_focus === 'event') advanced = advanced.replace('<ADVANCED_PROGRESSION ', '<ADVANCED_PROGRESSION role="secondary" ');
         if (advanced) blocks.push(advanced);
-    } else if (settings.progressionMode !== 'off') {
+    }
+    if (settings.progressionMode !== 'off' && !(settings.advancedEnabled && eventProfile?.source === 'advanced')) {
         const activeEvent = eventPrompt(eventProfile, decisions.event_route, decisions.secondary_focus === 'event' ? 'secondary' : 'primary');
         if (activeEvent) blocks.push(activeEvent);
         if (eventProfile?.phase === 'aftermath') blocks.push('<EVENT_AFTERMATH>Carry one concrete aftermath into the scene—a changed relationship, cost, injury, obligation, reputation, access condition, loss, or limitation—before replacing the resolved event with unrelated material.</EVENT_AFTERMATH>');
@@ -798,7 +805,8 @@ Continue the active exchange through one concrete, character-consistent response
     }
     const npc = npcIsSheetCast ? '' : genreNpcPrompt(npcProfile, decisions.npc_route);
     if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
-    const npcExecution = npcIsSheetCast ? '' : npcExecutionPrompt(decisions);
+    if (sheetNpcTarget && decisions.npc_route === 'reuse') blocks.push(`<SHEET_NPC_SCENE>Let ${sheetNpcTarget} perform one scene-relevant ${decisions.npc_role || 'participant'} function at ${decisions.npc_weight || 'brief'} weight. Follow this person's specific sheet boundaries for motive, knowledge, and response.</SHEET_NPC_SCENE>`);
+    const npcExecution = npcIsSheetCast || sheetNpcTarget ? '' : npcExecutionPrompt(decisions);
     if (npcExecution) blocks.push(npcExecution);
 
     // Keep the supplied Quick Reply blocks at the end as the most specific constraints.

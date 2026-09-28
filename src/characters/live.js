@@ -59,7 +59,7 @@ export function buildCharacterTurnQuestions(plan = []) {
     const questions = {};
     for (const person of plan) {
         const prefix = `character_${person.index}`;
-        questions[`${prefix}_presence`] = { type: 'choice', instructions: `Judge ${person.name}'s role in the next response from actual RP. A previously active person may remain present without being named again.`, criteria: PRESENCE_CHOICES };
+        questions[`${prefix}_presence`] = { type: 'choice', instructions: `Judge ${person.name}'s role in the next response from actual RP. A previously active person may remain present without being named again.${person.mainSillyTavernName ? ` This is the registered main character for SillyTavern character ${person.mainSillyTavernName}; differing sheet language or spelling is not evidence of absence.` : ''}`, criteria: PRESENCE_CHOICES };
         const profileChoices = { none: 'No profile item needs emphasis.', ...Object.fromEntries(person.profileCandidates.map(item => [item.id, `${item.kind} / ${item.topic} / ${item.target || person.name}: ${item.rule}`])) };
         for (const slot of [1,2].slice(0,person.profileCandidates.length)) questions[`${prefix}_profile_slot_${slot}`] = { type: 'choice', instructions: PROFILE_SELECT, criteria: profileChoices };
         const contextChoices = { none: 'No context item needs emphasis.', ...Object.fromEntries(person.contextCandidates.map(item => [item.id, `${item.source} / ${item.speaker || item.characterId || ''} / message ${item.messageIndex ?? 'stored'} / ${item.occurredAt || 'time unknown'}`])) };

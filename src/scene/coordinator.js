@@ -50,10 +50,17 @@ export function coordinateDecisions(rec, details, decisions) {
         } else if (decisions.advanced_route === 'create' && !rec.preferences.advancedElements.includes(decisions.advanced_element)) {
             overrideDecision(details, decisions, 'advanced_element', 'none', '꺼진 고급 요소 제외');
         }
-        if (decisions.advanced_route === 'none') {
+        const smallBeat = decisions.advanced_route === 'none'
+            && ['latent', 'open'].includes(decisions.advanced_entry)
+            && rec.preferences.advancedElements.includes(decisions.advanced_element)
+            && decisions.advanced_cause !== 'none'
+            && ['seed', 'obstacle', 'reveal', 'aftermath'].includes(decisions.advanced_move);
+        if (decisions.advanced_route === 'none' && !smallBeat) {
             for (const key of ['advanced_cause', 'advanced_element']) overrideDecision(details, decisions, key, 'none', '이번 응답 고급 전개 없음');
             overrideDecision(details, decisions, 'advanced_move', 'quiet', '이번 응답 고급 전개 없음');
         }
+        if (decisions.advanced_route === 'create' && decisions.advanced_move === 'quiet') overrideDecision(details, decisions, 'advanced_move', 'seed', '새 사건 후보는 첫 징후부터 시작');
+        if (decisions.advanced_route === 'continue' && decisions.advanced_move === 'quiet') overrideDecision(details, decisions, 'advanced_move', 'advance', '선택한 기존 사건을 한 단계 실행');
     }
     const relation = decisions.relationship_pacing || 'hold';
     const beat = decisions.relationship_beat || 'none';
@@ -87,19 +94,17 @@ export function coordinateDecisions(rec, details, decisions) {
         else if (readiness === 'partial' || (rec.preferences.resolutionPace === 'slow' && readiness !== 'decisive')) overrideDecision(details, decisions, 'resolution_pacing', 'partial', '선택한 해결 속도와 준비 상태 적용');
     }
 
-    if (decisions.event_route === 'create' && decisions.event_state !== 'none') overrideDecision(details, decisions, 'event_route', 'none', '이미 장면에 활성 사건이 있어 새 중심 사건 생성 제외');
-    if (decisions.event_route === 'continue' && !rec.eventProfile) overrideDecision(details, decisions, 'event_route', 'none', '저장된 중심 사건 없음');
+    if (decisions.event_route === 'create' && (rec.eventProfile || ['introduced', 'active', 'turning', 'resolution_ready'].includes(decisions.event_state))) overrideDecision(details, decisions, 'event_route', 'none', '기존 중심 사건이 진행 중이므로 새 중심 사건 제외');
+    if (decisions.event_route === 'continue' && !rec.eventProfile && !['introduced', 'active', 'turning', 'resolution_ready', 'aftermath'].includes(decisions.event_state)) overrideDecision(details, decisions, 'event_route', 'none', '이어갈 사건의 관찰 근거 없음');
+    if (decisions.event_route === 'continue' && decisions.progression_move === 'hold') overrideDecision(details, decisions, 'progression_move', 'advance', '선택한 기존 사건을 한 단계 실행');
     if (decisions.fight_sustain === 'yes' && decisions.conflict_state !== 'active') overrideDecision(details, decisions, 'fight_sustain', 'no', '실제 진행 중인 대치·싸움이 아님');
     if (rec.preferences.negativePriority && decisions.progression_move === 'positive' && (rec.preferences.worldHostility || rec.preferences.userMisfortune)) overrideDecision(details, decisions, 'progression_move', decisions.event_state === 'none' ? 'complication' : 'consequence', '부정 편향 최우선 적용');
 
-    let npcActive = ['create', 'replace', 'reuse'].includes(decisions.npc_route);
-    if (npcActive && (decisions.npc_role === 'none' || decisions.npc_weight === 'none')) {
-        overrideDecision(details, decisions, 'npc_route', 'none', 'NPC 역할·비중 근거 부족');
-        npcActive = false;
-    }
+    const npcActive = ['create', 'replace', 'reuse'].includes(decisions.npc_route);
     if (!npcActive) {
         for (const key of ['npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) overrideDecision(details, decisions, key, 'none', '이번 응답 NPC 실행 없음');
     } else {
+        if (['create', 'replace'].includes(decisions.npc_route) && ['background', 'exit'].includes(decisions.npc_weight)) overrideDecision(details, decisions, 'npc_weight', 'brief', '새 인물의 첫 등장은 짧은 실제 참여로 제한');
         if (decisions.npc_weight === 'primary' && !['npc', 'event', 'conflict'].includes(focus)) overrideDecision(details, decisions, 'npc_weight', 'supporting', '주요 장면 초점 보존');
         if (focus === 'relationship' && ['primary', 'supporting'].includes(decisions.npc_weight)) overrideDecision(details, decisions, 'npc_weight', 'brief', '관계 장면 비중 보존');
         if (decisions.npc_knowledge === 'none' && decisions.npc_disclosure !== 'none') overrideDecision(details, decisions, 'npc_disclosure', 'none', '사용 가능한 NPC 정보 없음');
@@ -117,6 +122,7 @@ export function coordinateActionBudget(rec, details, decisions, stagedRec = rec,
         settings: {
             ...rec.preferences,
             turnsSinceMeaningfulProgress: rec.progressionState?.turnsSinceMeaningfulProgress || 0,
+            deferredRoutes: rec.deferredRoutes || {},
         },
         hasEventProfile: Boolean(stagedRec.eventProfile),
         hasNpcProfile: Boolean(stagedRec.npcProfile),
@@ -127,6 +133,7 @@ export function coordinateActionBudget(rec, details, decisions, stagedRec = rec,
     const keeps = (kind) => [plan.primary, plan.secondary].some((candidate) => candidate?.kind === kind);
     const keepsEvent = keeps('event');
     const keepsTransition = keeps('transition');
+    const advancedEventSelected = [plan.primary, plan.secondary].some((candidate) => ['advanced_event', 'advanced_scene'].includes(candidate?.id));
 
     overrideDecision(details, decisions, 'primary_focus', plan.primary?.focus || 'direct', plan.primary?.id === 'direct' && decisions.primary_focus !== 'direct' ? '선택 경로가 실행 불가해 현재 상호작용으로 복귀' : 'Primary action budget 선택');
     overrideDecision(details, decisions, 'secondary_focus', plan.secondary?.kind || 'none', plan.secondary ? `Primary에 직접 종속된 보조 진행 · ${plan.secondary.label}` : '호환되는 보조 진행 없음');
@@ -144,7 +151,16 @@ export function coordinateActionBudget(rec, details, decisions, stagedRec = rec,
         clear('advanced_move', 'quiet', '고급 사건 모듈 미선택');
         if (!keepsTransition) clear('progression_move', 'hold', 'Primary/Secondary action budget에서 사건 진행 제외');
         clear('resolution_pacing', 'continue', '실행할 사건 모듈 없음');
-    } else if (plan.secondary?.kind === 'event') {
+    } else if (!advancedEventSelected) {
+        clear('advanced_route', 'none', '이번 응답은 일반 사건 진행 선택');
+        clear('advanced_cause', 'none', '고급 전개 미선택');
+        clear('advanced_element', 'none', '고급 전개 미선택');
+        clear('advanced_move', 'quiet', '고급 전개 미선택');
+    } else {
+        clear('event_route', 'none', '이번 응답은 고급 전개 선택');
+        clear('progression_move', 'hold', '고급 전개가 이번 사건 이동을 담당');
+    }
+    if (keepsEvent && plan.secondary?.kind === 'event') {
         if (decisions.resolution_pacing === 'resolve') clear('resolution_pacing', 'partial', '보조 사건 진행은 한 단계의 부분 해결로 제한');
         if (decisions.progression_move === 'turning_point') clear('progression_move', 'advance', '보조 사건 진행을 한 단계로 제한');
         if (decisions.advanced_move === 'attack' && plan.secondary.isNew) clear('advanced_move', 'seed', '새 고급 사건의 보조 진입은 첫 징후로 제한');
@@ -169,7 +185,7 @@ export function coordinateActionBudget(rec, details, decisions, stagedRec = rec,
 export function coordinateCharacterDecisions(entries, details, decisions) {
     const active = entries.map((entry, index) => ({ entry, index, detail: details[`character_${index}_presence`] }))
         .filter((item) => decisions[`character_${item.index}_presence`] === 'active')
-        .sort((a, b) => Number(b.detail?.certainty || 0) - Number(a.detail?.certainty || 0));
+        .sort((a, b) => Number(b.entry.kind === 'character') - Number(a.entry.kind === 'character') || Number(b.detail?.certainty || 0) - Number(a.detail?.certainty || 0));
     for (const item of active.slice(2)) {
         overrideDecision(details, decisions, `character_${item.index}_presence`, 'background', '한 응답의 주요 인물 실행을 최대 두 명으로 제한');
         overrideDecision(details, decisions, `character_${item.index}_response_direction`, 'none', '이번 응답의 초점 인물 아님');
