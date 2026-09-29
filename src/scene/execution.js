@@ -1,6 +1,8 @@
 import { makeAppearanceOffer, addAppearanceQuestions, applyAppearanceOffer } from './appearance.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
+import { sceneGateRequest, resolveSceneGate } from './intimacy-gate.js';
+import { recordBankIsCurrent } from '../characters/records.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
@@ -274,6 +276,51 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     if (memoryNode) {
         memoryNode.textContent = MEMORY_REFERENCE_ENABLED ? deps.memoryStatusText(prefs, memory.status) : '준비 중 · 현재 RP 판독에서는 사용하지 않습니다.';
     }
+    const previousSceneRoute = rec.sceneIntimacy?.route === 'paused' ? 'paused' : 'normal';
+    const carriedGateIds = (rec.lastJudgment?.characterTrace || []).filter(item=>item?.presence==='active').map(item=>item.id);
+    const gatePeople = deps.characterStore.enabled ? deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedGateIds, {allowUserImpersonation:prefs.allowUserImpersonation}).slice(0,6) : [];
+    const gateRequest = sceneGateRequest({model:deps.JEV_MODEL,transcript,previous:previousSceneRoute,people:gatePeople});
+    let sceneGate;
+    deps.judgeInFlight = true;
+    deps.judgeCompletionPromise = new Promise(resolve=>{deps.resolveJudgeCompletion=resolve;});
+    deps.setBusy(true);
+    try {
+        deps.updateStatus('현재 장면 확인 중…');
+        const gateData=await deps.callJev(gateRequest,15000,run.controller.signal);
+        run.assert();
+        if(deps.currentInputKey(pendingUserText,cycleSalt)!==inputKey || deps.recentContext(pendingUserText).contextKey!==context.contextKey || sourceRevisionKey(deps.record(),deps.selectedWorld())!==sourceKey)throw new deps.StaleRunError();
+        sceneGate=resolveSceneGate(gateData.answers,gateRequest,previousSceneRoute);
+    } catch(error) {
+        if(error instanceof deps.StaleRunError || !run.valid())throw error;
+        sceneGate={route:previousSceneRoute,transition:'',level:null,phase:'unclear',evidence:null,participantIds:rec.sceneIntimacy?.participantIds||[]};
+        deps.updateActivity(`장면 상태 확인 실패 · 기존 상태 유지: ${error.message}`,{error:true});
+    } finally {
+        deps.judgeInFlight=false;
+        deps.resolveJudgeCompletion?.();deps.resolveJudgeCompletion=null;
+        deps.setBusy(false);
+    }
+    if(sceneGate.route==='paused' && sceneGate.participantIds.length===0 && previousSceneRoute==='paused')sceneGate.participantIds=rec.sceneIntimacy?.participantIds||[];
+    rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey};
+    if(sceneGate.route==='paused') {
+        const referenceLines=[];
+        for(const entry of gatePeople) {
+            if(!sceneGate.participantIds.includes(entry.id) || (entry.kind==='persona'&&!prefs.allowUserImpersonation) || !recordBankIsCurrent(entry))continue;
+            const reference=String(entry.recordBank?.intimacy_reference?.text||'').trim();
+            if(reference)referenceLines.push(`<CHARACTER_REFERENCE name="${String(entry.name).replace(/["<>]/g,'')}">Use this person's stored information in the current interaction without inventing traits or forcing an action: ${reference}</CHARACTER_REFERENCE>`);
+        }
+        const payload=deps.buildPausedInjection({settings:prefs,privatePrompt:prefs.privatePromptEnabled?deps.ownerPrompt():'',referenceLines});
+        rec.lastJudgment={details:{},decisions:{},payload,worldPayload:String(world?.prompt||''),inputKey,contextKey:context.contextKey,sourceKey,continuityCacheKey,memoryKey,characterTrace:[],sceneIntimacy:rec.sceneIntimacy,judgedAt:new Date().toISOString(),model:deps.JEV_MODEL};
+        run.assert();
+        if(deps.storageVersion>=2)await deps.queueWrite('session:'+run.identity,()=>{run.assert();return deps.storagePost('transaction',{chatKey:run.identity,chat:structuredClone(rec),history:run.history.slice(-deps.STATE_HISTORY_LIMIT)});});
+        else await deps.persistChat(run.identity,rec);
+        run.assert();deps.chatRecords.set(run.identity,rec);
+        await deps.applyStoredInjection();deps.renderAll();
+        if(sceneGate.transition==='entered')deps.window.toastr?.info?.('현재 장면이 진행되는 동안 동적 주입을 쉽니다.','씬판독기');
+        deps.updateStatus('현재 장면 · 고정 지침 적용');
+        deps.updateActivity('현재 장면 · 고정 지침과 저장된 인물 참고문만 적용',{done:true});
+        return rec.lastJudgment;
+    }
+    if(sceneGate.transition==='exited')deps.window.toastr?.info?.('장면 전환을 확인해 일반 판독·주입을 재개합니다.','씬판독기');
     if (prefs.settingsContract >= 3) {
         const offerKey = deps.stableFingerprint({identity:run.identity,users:context.selected.filter(message=>message.is_user).map(message=>({text:message.mes,index:deps.getContext().chat?.indexOf(message)}))});
         const cached = appearanceOffers.get(offerKey);

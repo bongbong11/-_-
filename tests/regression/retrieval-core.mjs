@@ -16,6 +16,8 @@ assert.deepEqual(currentProfileItems(saved),[],'records must not enter legacy Je
 assert.equal(buildLiveCharacterPlan([saved])[0].profileCandidates.length,1);
 assert.equal(normalizeCharacterStore({npcs:[saved]}).npcs[0].recordBank.records[0].knowledge_state,'suspects');
 for(const changed of [ {...saved,source:entry.source+' Changed.'}, {...saved,name:'Luke'}, {...saved,selectedLore:[]}, {...saved,recordBank:{...bank,recordVersion:999}}, {...saved,recordBank:{...bank,coreFingerprint:'outdated-engine'}} ]) assert.equal(recordBankIsCurrent(changed),false);
+assert.equal(recordBankIsCurrent({...saved,recordBank:{...bank,intimacy_reference:{text:'Unsourced instruction.',source_ids:[]}}}),false);
+assert.equal(recordBankIsCurrent({...saved,recordBank:{...bank,intimacy_reference:{text:'Unsourced instruction.',source_ids:['S999']}}}),false);
 assert.throws(()=>createRecordBank({...output,records:[{...record,source_ids:['S999']}]},entry,'bad'),/존재하지/);
 assert.throws(()=>createRecordBank({...output,entity_name:'Anna'},entry,'bad'),/인물 종류/);
 assert.throws(()=>createRecordBank({...output,records:[{...record,knowledge_state:'none'}]},entry,'bad'),/knowledge/);

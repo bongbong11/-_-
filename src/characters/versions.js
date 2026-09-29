@@ -14,7 +14,7 @@ function putEntry(store, entry) {
     }
 }
 export function bankOutput(bank) {
-    return {entity_type:bank.entity_type,entity_name:bank.entity_name,...(bank.source_set_id?{source_set_id:bank.source_set_id}:{}),records:structuredClone(bank.records)};
+    return {entity_type:bank.entity_type,entity_name:bank.entity_name,...(bank.source_set_id?{source_set_id:bank.source_set_id}:{}),intimacy_reference:structuredClone(bank.intimacy_reference || {text:'',source_ids:[]}),records:structuredClone(bank.records)};
 }
 export function archiveRecordVersion(store, entry, saveName) {
     const name=String(saveName || '').trim();
@@ -30,6 +30,7 @@ export function archiveRecordVersion(store, entry, saveName) {
 }
 export function importRecordVersion(store, input, saveName) {
     const {output}=validateImport(input);
+    saveName=String(saveName||'').trim()||output.entity_name;
     const next=normalizeCharacterStore(structuredClone(store));
     const matches=allEntries(next).filter(entry=>entry.kind===output.entity_type && [entry.name,...entry.aliases].some(name=>normalized(name)===normalized(output.entity_name)));
     if (matches.length>1) throw new Error('같은 이름이나 별칭을 가진 인물이 여러 명입니다. 등록 이름을 먼저 정리하세요.');

@@ -11,7 +11,7 @@ out = parser.parse_args().output_dir
 out.mkdir(parents=True, exist_ok=True)
 runtime = sorted(root.glob('*.js')) + sorted((root/'src').rglob('*.js'))
 runtime += sorted((root/'src/vendor').rglob('sync.json'))
-runtime += [root/p for p in ['manifest.json','package.json','style.css','README.md','INSTALL.md','CHANGELOG.md']]
+runtime += [root/p for p in ['manifest.json','package.json','style.css','README.md']]
 plugin = [root/'server-plugin'/p for p in ['index.cjs','storage.cjs','package.json']]
 for name, prefix, paths in [(f'scene-reader-sillytavern-v{version}.zip','scene-reader',runtime+plugin), (f'scene-reader-jev-plugin-v{plugin_version}.zip','scene-reader-jev',plugin)]:
     target=out/name

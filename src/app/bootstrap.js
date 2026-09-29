@@ -12,10 +12,10 @@ import { createResults } from '../ui/results.js';
 import { dialogTemplate } from '../ui/dialog-template.js';
 
 import { CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
-import { NPC_NAME_SYSTEM, NPC_CORE_SYSTEM, parseNpcCandidates, parseNpcCore, deriveEnglishCore, suggestNpcAliases } from '../characters/npc-sheet.js';
+import { NPC_CORE_SYSTEM, parseNpcCore, deriveEnglishCore, suggestNpcAliases } from '../characters/npc-sheet.js';
 import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
-import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, normalizeDevelopmentPreferences, PACE_OPTIONS, buildQuestions, buildInjection } from '../../prompt-library.js';
+import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, normalizeDevelopmentPreferences, PACE_OPTIONS, buildQuestions, buildInjection, buildPausedInjection } from '../../prompt-library.js';
 import { ADVANCED_STYLES, ADVANCED_ELEMENTS, ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS } from '../../advanced-library.js';
 import { allWorlds, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from '../../world-library.js';
 import { buildInputKey, buildRecentContext, filterNonRpHistory, generationCycleSalt, isVisibleRoleplayMessage, pendingComposerText, splitOocText } from '../../runtime-utils.js';
@@ -539,6 +539,7 @@ let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalC
     get resolveLiveCharacterPlan() { return resolveLiveCharacterPlan; },
     get buildContinuityInjection() { return buildContinuityInjection; },
     get buildInjection() { return buildInjection; },
+    get buildPausedInjection() { return buildPausedInjection; },
     get buildPendingCandidateQuestions() { return buildPendingCandidateQuestions; },
     get buildQuestions() { return buildQuestions; },
     get buildVerificationQuestions() { return buildVerificationQuestions; },
@@ -667,9 +668,7 @@ async function testConnection() {
 }
 
 let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, saveCharacterEntry, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm} = createUiController({
-    get NPC_NAME_SYSTEM() { return NPC_NAME_SYSTEM; },
     get NPC_CORE_SYSTEM() { return NPC_CORE_SYSTEM; },
-    get parseNpcCandidates() { return parseNpcCandidates; },
     get suggestNpcAliases() { return suggestNpcAliases; },
     get parseNpcCore() { return parseNpcCore; },
     get deriveEnglishCore() { return deriveEnglishCore; },

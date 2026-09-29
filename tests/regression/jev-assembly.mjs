@@ -97,8 +97,9 @@ assert.match(buildInjection({settings:record({}).preferences,decisions:FALLBACKS
     };
     f.run('callJev=mockJev;');
     await f.run('runJudge({force:true})');
-    assert.ok(seen[0].state.appearance_offer.passed);
-    assert.ok(!seen[0].questions.npc_route.criteria.create);
+    const fullRequest=seen.find(request=>request.state.appearance_offer);
+    assert.ok(fullRequest?.state.appearance_offer.passed);
+    assert.ok(!fullRequest.questions.npc_route.criteria.create);
     assert.match(f.run('record().lastJudgment.payload'),/knowledge=suspects/);
     assert.equal(f.run('record().npcProfile') ?? null,null,'new actor remains a plan');
     const offered=f.run('record().appearanceOffer.candidate.id');

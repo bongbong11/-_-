@@ -192,7 +192,7 @@ function renderCharacterStore() {
     const setList = (id, entries, kind) => {
         const root = document.getElementById(id);
         if (!root) return;
-        root.innerHTML = entries.map((entry) => `<div class="sr-character-list-row"><button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}${kind === 'npc' ? ` · ${escapeHtml(({villain:'악역',ally:'선역',mixed:'양면'})[entry.npcRole] || '양면')}` : ''}</strong><small>${escapeHtml(profileStatus(entry))}</small></span><i class="fa-solid fa-pen"></i></button></div>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
+        root.innerHTML = entries.map((entry) => `<div class="sr-character-list-row"><button type="button" class="sr-character-item" data-character-kind="${kind}" data-character-id="${escapeHtml(entry.id)}"><span><strong>${escapeHtml(entry.name)}${kind === 'npc' ? ` · ${escapeHtml(({villain:'악역',ally:'선역',mixed:'양면'})[entry.npcRole] || '양면')}` : ''}</strong><small>${escapeHtml(profileStatus(entry))}</small></span><i class="fa-solid fa-pen"></i></button><button type="button" class="menu_button" data-character-delete-kind="${kind}" data-character-delete-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(entry.name)} 인물 삭제">삭제</button></div>`).join('') || '<div class="sr-empty-small">저장된 시트 없음</div>';
     };
     const enabled = document.getElementById('sr-character-enabled');
     if (enabled) enabled.checked = characterStore.enabled;
@@ -230,16 +230,17 @@ function renderCharacterAnalysisBrowser() {
                     return '<div class="sr-record-source"><strong>'+esc(id)+' · '+esc(source?.label || '')+'</strong><p>'+esc(source?.text || '원문 없음')+'</p></div>';
                 }).join('')+'</details></article>').join('')+'</details>';
         }).join('');
-        result.innerHTML='<div class="sr-character-analysis-head"><strong>'+esc(selected.name)+'</strong><button type="button" class="menu_button" data-character-edit-kind="'+selected.kind+'" data-character-edit-id="'+esc(selected.id)+'">시트 수정</button></div><p class="sr-help">'+esc(profileStatus(selected))+'</p><p class="sr-help">현재 장면에 맞는 기록 후보를 추린 뒤 Jev가 필요한 기록을 최대 두 개 선택합니다. 선택할 기록이 없으면 별도 주입하지 않습니다.</p>'+ (groups || '<p class="sr-help">'+(recordBankIsCurrent(selected)?'저장된 기록 0개':'원문 변경으로 이전 기록은 적용되지 않습니다. 다시 추출하세요.')+'</p>')+'<details class="sr-trace"><summary>저장·검증 정보</summary><pre>'+esc(JSON.stringify({savedAt:bank.analyzedAt,apiVersion:bank.apiVersion,recordVersion:bank.recordVersion,compilerVersion:bank.compilerVersion,importLog:bank.import_log},null,2))+'</pre></details>';
+        const reference=String(bank.intimacy_reference?.text||'').trim();
+        result.innerHTML='<div class="sr-character-analysis-head"><strong>'+esc(selected.name)+'</strong><button type="button" class="menu_button" data-character-edit-kind="'+selected.kind+'" data-character-edit-id="'+esc(selected.id)+'">시트 수정</button><button type="button" class="menu_button" data-character-delete-kind="'+selected.kind+'" data-character-delete-id="'+esc(selected.id)+'">인물 삭제</button></div><p class="sr-help">'+esc(profileStatus(selected))+'</p><p class="sr-help">이번 장면에 필요한 기록을 최대 네 개 선택합니다. 필요 없으면 선택하지 않습니다.</p>'+(reference?'<details class="sr-record-group"><summary>추가 인물 참고 정보</summary><p>'+esc(reference)+'</p></details>':'')+ (groups || '<p class="sr-help">'+(recordBankIsCurrent(selected)?'저장된 기록 0개':'원문 변경으로 이전 기록은 적용되지 않습니다. 다시 추출하세요.')+'</p>')+'<details class="sr-trace"><summary>저장·검증 정보</summary><pre>'+esc(JSON.stringify({savedAt:bank.analyzedAt,apiVersion:bank.apiVersion,recordVersion:bank.recordVersion,compilerVersion:bank.compilerVersion,importLog:bank.import_log},null,2))+'</pre></details>';
         return;
     }
     const items = currentProfileItems(selected);
     const rejected = selected.profile?.sourceHash === selected.sourceHash ? selected.profile?.rejected || [] : [];
     const rows = items.map((item) => '<div class="sr-decision-row"><span>' + escapeHtml(ITEM_LABELS[item.kind] || item.kind) + (item.target ? ' · ' + escapeHtml(item.target) : '') + '</span><strong>' + escapeHtml(item.rule) + '</strong></div>').join('');
     const rejectedRows = rejected.map((item) => '<div class="sr-decision-row"><span>제외 · ' + escapeHtml(item.id) + '</span><strong>' + escapeHtml(item.reason) + '</strong></div>').join('');
-    result.innerHTML = '<div class="sr-character-analysis-head"><strong>' + escapeHtml(selected.name) + '</strong><button type="button" class="menu_button" data-character-edit-kind="' + selected.kind + '" data-character-edit-id="' + escapeHtml(selected.id) + '">시트 수정</button></div>'
+    result.innerHTML = '<div class="sr-character-analysis-head"><strong>' + escapeHtml(selected.name) + '</strong><button type="button" class="menu_button" data-character-edit-kind="' + selected.kind + '" data-character-edit-id="' + escapeHtml(selected.id) + '">시트 수정</button><button type="button" class="menu_button" data-character-delete-kind="' + selected.kind + '" data-character-delete-id="' + escapeHtml(selected.id) + '">인물 삭제</button></div>'
         + '<p class="sr-help">' + escapeHtml(profileStatus(selected)) + ' · 원본 시트는 메인 모델에 ' + (selected.sourceVisibleToMain ? '이미 보입니다.' : '자동으로 보이지 않습니다.') + (selected.kind === 'npc' ? ' · 역할: ' + escapeHtml(({villain:'악역',ally:'선역',mixed:'양면'})[selected.npcRole] || '양면') : '') + '</p>'
-        + '<p class="sr-help">아래 규칙은 상시 주입되지 않습니다. Jev가 다음 응답에 실제로 필요한 항목만 최대 두 개 고릅니다.</p>'
+        + '<p class="sr-help">아래 규칙은 상시 주입되지 않습니다. Jev가 다음 응답에 필요한 항목을 최대 네 개 고릅니다.</p>'
         + (rows || '<p class="sr-help">이번 시트에서 저장할 만한 개별 규칙이 없습니다.</p>')
         + (rejectedRows ? '<details class="sr-trace"><summary>제외된 후보와 이유</summary>' + rejectedRows + '</details>' : '');
 

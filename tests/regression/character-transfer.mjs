@@ -25,7 +25,7 @@ for(const kind of ['character','persona','npc']) {
     assert.equal(entry.recordBank,undefined);assert.ok(entry.id,'deleting a version keeps Sheet Cast ownership');
     const snapshot=JSON.stringify(second.store);
     assert.throws(()=>importRecordVersion(second.store,{...output(kind,'Lucas'),records:[{...output(kind,'Lucas').records[0],knowledge_state:'none'}]},'My sheet'),/knowledge/);
-    assert.throws(()=>importRecordVersion(second.store,output(kind,'Lucas'),''),/저장 이름/);
+    assert.equal(importRecordVersion(second.store,output(kind,'Lucas'),'').store.recordGroups.some(group=>group.name==='Lucas'),true);
     assert.equal(JSON.stringify(second.store),snapshot);
     second.entry.source='Changed source';
     assert.equal(recordBankIsCurrent(second.entry),false);

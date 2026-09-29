@@ -2,7 +2,7 @@ export const CHARACTER_LIVE_SYSTEM = `Select stored rules for this registered pe
 
 Judge necessity from the current RP, this person's actual participation, established relationships and continuity, and the specific issue being handled. A rule is not needed merely because its topic or a similar word appears in the chat.
 
-Choose zero rules when ordinary characterization is sufficient. Choose at most two distinct rule IDs. Do not select a rule to fill a quota, repeat an existing scene instruction, or restate a general rule already supplied by the preset.
+Choose zero rules when ordinary characterization is sufficient. Choose up to four distinct rule IDs when separate currently applicable constraints matter. Prefer a relevant boundary, target-specific relationship, knowledge limit, or conditional reaction over a repeated generic trait. Do not select a rule to fill a quota, repeat an existing scene instruction, or restate a general rule already supplied by the preset.
 
 A stored rule is a durable character boundary, not proof of this person's current emotion, current knowledge, or next action. Later established RP continuity may change how the rule applies.
 

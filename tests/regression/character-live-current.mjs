@@ -20,7 +20,7 @@ function setup({style='balanced',advanced=false,impersonate=false}={}) {
         characterStore={enabled:true,characters:[people[0]],npcs:[people[1]],persona:people[2]};`);
     f.sandbox.replyMode='select';
     f.sandbox.mockJev=async body=>{
-        seen.push(body);
+        if(Object.hasOwn(body.state,'character_profiles'))seen.push(body);
         const answers={};
         for(const [key,q] of Object.entries(body.questions)) {
             let choice=Object.hasOwn(q.criteria,FALLBACKS[key])?FALLBACKS[key]:Object.keys(q.criteria)[0];

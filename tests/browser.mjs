@@ -10,15 +10,16 @@ const require=createRequire(import.meta.url);
 const { chromium }=require('playwright');
 const root=path.resolve(import.meta.dirname,'..');
 const prefix='/scripts/extensions/third-party/scene-reader/';
-const wadeSource='Name: Wade\nRole: Businessman.\nHe controls his son.';
+const wadeSource='Name: Wade\nRole: Businessman.\nHe controls his son.\nHe keeps intimate wishes private unless he chooses to disclose them.';
 const wadeHash=createHash('sha256').update(wadeSource).digest('hex');
 const wadeItem=prepareProfileItems({items:[{id:'c1',kind:'relationship',topic:'family_decisions',target:'son',rule:'Wade tends to control his son on family matters.'}]}).items;
 const wadeProfile=createProfile(wadeItem,{characterId:'wade',sourceHash:wadeHash,source:wadeSource,analysisId:'browser'});
 const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:{preferences:{charmMemory:true,lorebookMemory:true}},history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true}],npcs:[{id:'wade',name:'Wade',source:wadeSource,sourceHash:wadeHash,sourceVisibleToMain:false,profile:wadeProfile}]}};
 const wadeEntry={...store.characters.npcs[0],kind:'npc',npcRole:'mixed'};
-store.characters.npcs[0]={...wadeEntry,recordBank:createRecordBank({entity_type:'npc',entity_name:'Wade',records:[{type:'relationship',target:'son',when:['family matters'],rule:'Wade tends to control his son on family matters.',modality:'tendency',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]},wadeEntry,'browser-records')};
+store.characters.npcs[0]={...wadeEntry,recordBank:createRecordBank({entity_type:'npc',entity_name:'Wade',intimacy_reference:{text:'Wade keeps intimate wishes private unless he chooses to disclose them.',source_ids:['S001']},records:[{type:'relationship',target:'son',when:['family matters'],rule:'Wade tends to control his son on family matters.',modality:'tendency',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]},wadeEntry,'browser-records')};
 const requests=[];
 let failCharacterWrite=false;
+let gateScenario=null;
 const host=`<!doctype html><html><meta charset="utf-8"><style>:root{--SmartThemeBodyColor:#eee;--SmartThemeBlurTintColor:#25252b;--SmartThemeBorderColor:#666;--SmartThemeQuoteColor:#9cbfff}body{margin:0;background:#202025;color:var(--SmartThemeBodyColor);font:16px Arial}button,input,select,textarea{box-sizing:border-box;font:inherit}button{cursor:pointer}select,input,textarea{color:inherit;background:var(--SmartThemeBlurTintColor)}.menu_button{border:1px solid var(--SmartThemeBorderColor);border-radius:5px;padding:7px}.text_pole{width:100%;border:1px solid #666;padding:6px}.checkbox_label{display:flex;align-items:center;gap:6px}.checkbox_label input{width:auto}</style><link rel="stylesheet" href="${prefix}style.css"><div id="extensions_settings"></div><div id="extensionsMenu"></div><div id="leftSendForm"><button id="extensionsMenuButton">wand</button></div><textarea id="send_textarea"></textarea><script>
 const listeners=new Map(), prompts={},macros={};
 window.mock={chat:[],prompts,macros,errors:[],worldBooks:{'Hunter Lore':{entries:{1:{uid:1,key:['door'],content:'The council meets tomorrow.'},2:{uid:2,key:['unrelated'],content:'Not relevant.'}}},'Hunter Extra':{entries:{3:{uid:3,constant:true,content:'Hunter owns the house.'}}}},async emit(name,...args){for(const fn of listeners.get(name)||[])await fn(...args)}};
@@ -33,7 +34,7 @@ const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}}`);return;}
     if(req.url==='/scripts/extensions.js'){res.setHeader('Content-Type','application/javascript');res.end('export const extension_settings={};');return;}
     if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){return window.mock.worldBooks[name]||null}");return;}
-    if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('You are a source-grounded character retrieval compiler.')) { const name=prompt.split('ENTITY_NAME: ')[1].split('\\n')[0]; return {content:JSON.stringify({entity_type:'npc',entity_name:name,records:[{type:'knowledge',target:'',when:['office procedure'],rule:name+' knows office procedures.',modality:'fact',basis:'explicit',source_ids:['S001'],knowledge_domain:'professional',knowledge_state:'knows'},{type:'fact',target:'',when:['council meeting'],rule:'The council meets tomorrow.',modality:'fact',basis:'explicit',source_ids:['S002'],knowledge_domain:'none',knowledge_state:'none'}]})}; } if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
+    if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('You are a source-grounded character retrieval compiler.')) { const name=prompt.split('ENTITY_NAME: ')[1].split('\\n')[0]; return {content:JSON.stringify({entity_type:'npc',entity_name:name,records:[{type:'knowledge',target:'',when:['office procedure'],rule:name+' knows office procedures.',modality:'fact',basis:'explicit',source_ids:['S001'],knowledge_domain:'professional',knowledge_state:'knows'},{type:'relationship',target:'Hunter',when:['interests change'],rule:name+' may help or oppose Hunter when her own interests change.',modality:'conditional',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]})}; } if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
     if(req.url.startsWith('/api/plugins/scene-reader-jev/')){
         let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):{};requests.push({url:req.url,body});
         res.setHeader('Content-Type','application/json');let result={ok:true};
@@ -43,7 +44,7 @@ const server=http.createServer(async(req,res)=>{try{
         else if(req.url.endsWith('/characters')) { if(failCharacterWrite){failCharacterWrite=false;res.statusCode=500;res.end(JSON.stringify({error:'Simulated failed save'}));return;} store.characters=body.value; }
         else if(req.url.endsWith('/chat'))store.chat=body.value;
         else if(req.url.endsWith('/history'))store.history=body.value;
-        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,{choice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
+        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
         res.end(JSON.stringify(result));return;
     }
     if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'application/javascript');res.end(await readFile(file));return;}
@@ -97,6 +98,11 @@ try{
         }
     }
     await page.setViewportSize({width:390,height:850});await page.locator('[data-sr-tab="characters"]').click();
+    await page.locator('#sr-character-new').evaluate(e=>e.closest('details').open=true);
+    await page.locator('#sr-character-new').click();
+    await page.waitForFunction(()=>document.getElementById('sr-character-lore-status').textContent.includes('원문 항목'));
+    assert.match(await page.locator('#sr-character-lore-status').textContent(),/연결 로어북/,'linked character lore loads automatically');
+    await page.locator('#sr-character-editor-cancel').click();
     await page.locator('[data-character-view-id="wade"]').click();await page.locator('#sr-character-analysis-result').getByText('Wade tends to control his son on family matters.').waitFor();
     await page.locator('#sr-tab-characters details').filter({hasText:'NPC 시트'}).first().locator('summary').click();
     await page.locator('#sr-npc-sheet-new').click();
@@ -125,17 +131,10 @@ try{
     const rosa=store.characters.npcs.find(entry=>entry.name==='Rosa Valentine');
     await page.locator('[data-character-view-id="'+rosa.id+'"]').click();
     await page.locator('#sr-character-analysis-result [data-character-edit-id]').click();
-    await page.locator('.sr-lore-editor summary').click();
-    await page.locator('#sr-character-lore-book').selectOption('Hunter Lore');
-    await page.locator('[data-lore-pick="0"]').check();
+    assert.equal(await page.locator('#sr-character-lore-book').count(),0,'manual lore picker was removed');
     await page.locator('#sr-character-save').click();
     await page.waitForFunction(()=>document.getElementById('sr-character-task-status').textContent.includes('판독 필요'));
-    assert.equal(store.characters.npcs.find(entry=>entry.id===rosa.id).selectedLore.length,1);
-    // Saving the editor must not leave the existing lore picker with a stale handler.
-    await page.locator('[data-lore-pick="1"]').check();
-    assert.equal(await page.locator('.sr-lore-selected').count(),2);
-    await page.locator('[data-lore-pick="1"]').uncheck();
-    assert.equal(await page.locator('.sr-lore-selected').count(),1);
+    assert.equal(store.characters.npcs.find(entry=>entry.id===rosa.id).selectedLore.length,0,'NPC sheets do not take a manual lore selection');
     await page.locator('#sr-character-analyze').click();
     await page.locator('#sr-character-analysis-result').getByText('Rosa Valentine knows office procedures.',{exact:true}).waitFor();
     assert.equal(requests.filter(r=>r.url.endsWith('/systemone')).length,beforeCompilation,'static compile never calls Jev');
@@ -153,10 +152,7 @@ try{
     await page.setViewportSize({width:390,height:850});
     await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();
     await page.screenshot({path:path.join(root,'artifacts','retrieval-mobile.png')});
-    await page.locator('#sr-npc-read-names').click();
-    await page.locator('[data-npc-candidate="0"]').check();
-    await page.locator('#sr-npc-add-selected').click();
-    assert.ok(store.characters.npcs.some(entry=>entry.name==='Sawyer Valentine' && entry.source===''),'NPC name reading registers only the chosen name');
+    assert.equal(await page.locator('#sr-npc-read-names').count(),0,'NPC name-reading button was removed');
     await page.locator('[data-sr-tab="flow"]').click();
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door.'});await mock.emit('MESSAGE_SENT',0);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.length),'reserved memory must not reach Jev even with old enabled settings');
@@ -198,6 +194,20 @@ try{
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Wade enters the room.'});await mock.emit('MESSAGE_SENT',5);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.ok(requests.some(r=>r.body.state?.character_profiles?.people?.some(person=>person.name==='Wade' && person.profileCandidates.length)),'stored Wade rules reach live Jev selection');
     assert.match(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Wade[^\n]*Wade tends to control his son on family matters\./,'the selected rule reaches the final injection');
+    gateScenario={level:'3',phase:'active'};
+    const beforePause=requests.length;
+    await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Wade and Hunter begin an explicit sexual interaction.'});await mock.emit('MESSAGE_SENT',6);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    const pausedRequests=requests.slice(beforePause).filter(r=>r.url.endsWith('/systemone'));
+    assert.equal(pausedRequests.length,1,'confirmed sexual scene uses only the small scene-state check');
+    const pausedPrompt=await page.evaluate(()=>mock.macros['scene-reader']?.()||'');
+    assert.match(pausedPrompt,/Wade keeps intimate wishes private/,'participating character reference remains available');
+    assert.ok(!pausedPrompt.includes('CHARACTER_EXECUTION'),'dynamic character direction pauses');
+    assert.match(pausedPrompt,/genre, setting, tone, prose style/,'fixed prompt coexistence remains');
+    gateScenario={level:'0',phase:'ended'};
+    const beforeResume=requests.length;
+    await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'They finish and turn to a different conversation.'});await mock.emit('MESSAGE_SENT',7);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.ok(requests.slice(beforeResume).filter(r=>r.url.endsWith('/systemone')).length>1,'normal Jev judgment resumes after a confirmed end');
+    gateScenario=null;
     await mkdir(path.join(root,'artifacts'),{recursive:true});await page.locator('[data-sr-tab="characters"]').click();await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(root,'artifacts','mobile-characters.png')});
     await page.evaluate(()=>{document.documentElement.style.setProperty('--SmartThemeBodyColor','#202020');document.documentElement.style.setProperty('--SmartThemeBlurTintColor','#f5f5f7');});await page.screenshot({path:path.join(root,'artifacts','mobile-light.png')});
     await page.locator('#sr-npc-sheet-new').evaluate(e=>e.closest('details').open=true);
@@ -208,7 +218,7 @@ try{
     await page.locator('#sr-character-editor-cancel').click();
     assert.ok(store.characters.npcs.some(p=>p.name==='Mara'),'saved NPC reaches server transport');
     await page.locator('[data-character-view-id]').filter({hasText:'Mara'}).click();
-    await page.locator('#sr-character-analysis-result [data-character-edit-id]').click();await page.locator('#sr-character-delete').click();
+    await page.locator('#sr-character-analysis-result [data-character-edit-id]').click();page.once('dialog',dialog=>dialog.accept());await page.locator('#sr-character-delete').click();
     await page.locator('#sr-character-editor').waitFor({state:'hidden'});
     assert.equal(store.characters.npcs.some(p=>p.name==='Mara'),false);
     await page.locator('[data-sr-tab="flow"]').click();
@@ -323,9 +333,13 @@ try{
     await page.locator('#sr-character-import-json').fill(JSON.stringify(external));
     failCharacterWrite=true;
     await page.locator('#sr-character-import').click();
-    await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('저장되지 않았습니다'));
+    await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('저장되지 않음'));
     assert.equal(JSON.stringify(store.characters),beforeFailedSave,'failed persistence keeps both applied bank and date versions');
     assert.equal((await page.evaluate(()=>mock.errors)).length,1);
+    await page.locator('#sr-character-error-copy').click();
+    const errorLog=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));
+    assert.equal(errorLog.stage,'save');
+    assert.ok(!JSON.stringify(errorLog).includes('Hunter suspects the invitation is a trap.'),'character error report omits source content');
     await page.reload();
     await page.locator('#sr-extension-open').evaluate(e=>e.closest('details').open=true);
     await page.locator('#sr-extension-open').click();await page.locator('[data-sr-tab="characters"]').click();
@@ -340,5 +354,5 @@ try{
     assert.equal(await page.locator('.sr-tabs [data-sr-tab]').count(),4);
     await page.locator('#sr-close').click();
     assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>mock.errors),[]);
-    console.log('Browser passed: 4 viewport sizes × 4 tabs, retrieval compile/save/source display with selected lore and no Jev call, controls, canonical live selection, OOC, save-delete, clipboard.');
+    console.log('Browser passed: 4 viewport sizes × 4 tabs, retrieval compile/save, canonical live selection, sexual-scene pause/resume injection, OOC, delete, clipboard.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

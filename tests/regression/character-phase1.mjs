@@ -9,10 +9,10 @@ import {
 } from '../../character-library.js';
 import { applyCharacterPolicy } from '../../src/scene/policy.js';
 import { buildInjection } from '../../prompt-library.js';
-import { parseNpcCandidates, suggestNpcAliases } from '../../src/characters/npc-sheet.js';
+import { suggestNpcAliases } from '../../src/characters/npc-sheet.js';
 import { debugReportText } from '../../src/ui/debug-report.js';
 
-assert.match(CHARACTER_LIVE_SYSTEM, /Choose at most two distinct rule IDs/);
+assert.match(CHARACTER_LIVE_SYSTEM, /Choose up to four distinct rule IDs/);
 assert.ok(ACCESS_CHOICES.inferred);
 
 const source = 'Name: Wade\nRole: Family patriarch.\nHe controls his son on family decisions.';
@@ -88,7 +88,6 @@ const castOffPayload = buildInjection({
     decisions: { response_cadence: 'natural', npc_route: 'none', npc_autonomy: 'no' }, sheetCastNames: ['Wade'],
 });
 assert.match(castOffPayload, /Registered Sheet Cast retain their established identity/, 'ownership survives disabled individual analysis');
-assert.equal(parseNpcCandidates({npcs:[{name:'Wade',aliases:['Mr. Wade']},{name:'Rosa',aliases:[]}]},{existing:['Wade']}).length,1);
 assert.deepEqual(suggestNpcAliases('Wade Rockwell', 'Alias: Mr. Rockwell\nRole: family head'), ['Wade', 'Mr. Rockwell']);
 assert.deepEqual(suggestNpcAliases('Wade Rockwell', 'Alias: Mr. Rockwell', ['Wade', 'Mr. Rockwell']), []);
 assert.deepEqual(suggestNpcAliases('민수', '역할: 동료'), []);

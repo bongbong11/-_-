@@ -16,9 +16,10 @@ if (check) {
     if (!actual.equals(bytes) || lock.sha256 !== sha256 || await readFile(path.join(target, 'version.js'), 'utf8') !== versionModule) throw new Error('Character Reasoner core drift: sync from the canonical checkout.');
     console.log('Canonical core and vendored core match exactly.');
 } else {
-    const sourceCommit = execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
+    const gitArgs = ['-c', `safe.directory=${source}`, '-C', source];
+    const sourceCommit = execFileSync('git', [...gitArgs, 'rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
     let sourceDirty = true;
-    try { sourceDirty = !execFileSync('git', ['-C', source, 'show', `${sourceCommit}:core/index.js`], {stdio:['ignore','pipe','pipe']}).equals(bytes); } catch { /* Uncommitted extraction has no canonical blob yet. */ }
+    try { sourceDirty = !execFileSync('git', [...gitArgs, 'show', `${sourceCommit}:core/index.js`], {stdio:['ignore','pipe','pipe']}).equals(bytes); } catch { /* Uncommitted extraction has no canonical blob yet. */ }
     await mkdir(target, {recursive:true});
     await writeFile(path.join(target, 'index.js'), bytes);
     await writeFile(path.join(target, 'version.js'), versionModule);

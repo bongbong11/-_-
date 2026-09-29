@@ -129,9 +129,11 @@ export const DECISION_LABELS = {
 
 const COMMON_META = `(Meta: Silent OOC hard-execution directive for this IC response. Do not acknowledge, quote, explain, summarize, or discuss it; apply only the active enclosed directives and output only the resulting IC continuation.
 
-Preserve the preset's genre, setting, tone, prose style, characterization, world logic, and pacing. Treat the user's input as established context: begin with the non-user characters' response, action, consequence, or next development; never quote, translate, paraphrase, enumerate, reenact, recalculate, or indirectly restate it merely to show recognition. Integrate directives through one primary beat and at most one naturally dependent secondary beat, without treating them as a checklist, forcing several major developments, rushing time, cutting an active interaction short, or changing scenes merely to comply.
+Treat the user's input as established context: begin with the non-user characters' response, action, consequence, or next development; never quote, translate, paraphrase, enumerate, reenact, recalculate, or indirectly restate it merely to show recognition. Limit independent plot developments to one primary beat and at most one naturally dependent secondary beat; dialogue, emotion, atmosphere, and incidental touch within that beat do not consume another event slot. Do not treat directives as a checklist, rush time, cut an active interaction short, or change scenes merely to comply.
 
 Do not append a question, menu of alternatives, permission request, invented deadline, or demand that {{user}} decide the next beat merely to hand back the turn. Let non-user characters first execute their own available intent. A natural in-character question may end the response only when {{user}} is genuinely the next unresolved participant and the question itself materially advances the live interaction.`;
+const META_OPEN = '(Meta: Silent OOC directive for this IC response. Do not acknowledge, quote, explain, summarize, or discuss it; output only the resulting IC continuation.';
+const META_CLOSE = `Apply these scene directions alongside the genre, setting, tone, prose style, characterization, world logic, pacing, NSFW, and character-specific kink instructions already present in the main prompt. These directions do not exclude or replace those instructions. Intimate touch and sexual approach may coexist with the current dialogue, action, or event; they do not require a separate event or scene transition. Follow the existing prompt and character information for whether and how they appear.`;
 
 const WORLD_PROMPTS = {
     natural: `<WORLD_DIRECTION mode="natural">
@@ -796,7 +798,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         natural: 'Give ordinary space to one primary beat. Include at most one secondary reaction and only when it follows directly; let incidental input pass implicitly.',
         linger: 'Stay close to one decisive action, revelation, sensation, or emotional turn. Include at most one directly dependent secondary reaction; do not broaden the response into coverage of every input point.',
     };
-    if (settings.developmentStyle) blocks.push(`<BASIC_DEVELOPMENT tendency="${settings.developmentStyle}">\n${DEVELOPMENT_GUIDANCE[settings.developmentStyle]}\n${BASIC_MOVES[decisions.basic_move] || BASIC_MOVES.continue}\n${decisions.progress_need === 'stalled' ? 'Recent output repeated or deferred without movement. Be more forthcoming in ONE fitting way: change the conversational approach, express a relevant feeling/thought, attempt an available action, or propose movement. Select one; do not complete every issue, invent success, or skip another participant’s choice.' : 'Let the present exchange yield a specific fresh response, feeling, attempt, or small consequence. Do not force a new plot merely to demonstrate progress.'} Apply this within the selected main beat, not as an additional independent action.\nFollow the narrative speed, rhythm, detail, length, genre, and style specified in the main prompt. This tendency guides in-world movement, not prose pacing. Keep the current interaction moving within any advanced event; do not introduce a separate event to fill a quota.\n</BASIC_DEVELOPMENT>`);
+    if (settings.developmentStyle) blocks.push(`<BASIC_DEVELOPMENT tendency="${settings.developmentStyle}">\n${DEVELOPMENT_GUIDANCE[settings.developmentStyle]}\n${BASIC_MOVES[decisions.basic_move] || BASIC_MOVES.continue}\n${decisions.progress_need === 'stalled' ? 'Recent output repeated or deferred without movement. Be more forthcoming in ONE fitting way: change the conversational approach, express a relevant feeling/thought, attempt an available action, or propose movement. Select one; do not complete every issue, invent success, or skip another participant’s choice.' : 'Let the present exchange yield a specific fresh response, feeling, attempt, or small consequence. Do not force a new plot merely to demonstrate progress.'} Apply this within the selected main beat, not as an additional independent action. This tendency guides in-world movement, not prose pacing. Keep the current interaction moving within any advanced event; do not introduce a separate event to fill a quota.\n</BASIC_DEVELOPMENT>`);
     else blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
     const corrections = [];
     if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
@@ -828,7 +830,7 @@ Continue the active exchange through one concrete, character-consistent response
         distant_incremental: 'Permit one small move toward distance supported by concrete conduct. Express it through guardedness, distrust, refusal, friction, withdrawal, or changed priorities without turning it into an unsupported rupture.',
         distant_significant: 'Permit a clear move toward rupture, hostility, or distance only through the decisive cause present now. Carry the resulting change into conduct and consequences without erasing prior facts.',
     };
-    const relationshipRelevant = decisions.relationship_pacing !== 'hold' || ['relationship', 'direct'].includes(decisions.primary_focus);
+    const relationshipRelevant = decisions.relationship_pacing !== 'hold';
     if (relationshipRelevant && relationshipMoves[decisions.relationship_pacing]) blocks.push(`<RELATIONSHIP_PACING mode="${settings.relationshipPace}">\n${relationshipMoves[decisions.relationship_pacing]}\n</RELATIONSHIP_PACING>`);
     if (RELATIONSHIP_BEAT_PROMPTS[decisions.relationship_beat]) blocks.push(`<RELATIONSHIP_BEAT type="${decisions.relationship_beat}">\n${RELATIONSHIP_BEAT_PROMPTS[decisions.relationship_beat]}\n</RELATIONSHIP_BEAT>`);
 
@@ -891,5 +893,18 @@ Continue the active exchange through one concrete, character-consistent response
     if (sheetCastNames.length) blocks.push(`<SHEET_CAST_OWNERSHIP>Registered identities: ${[...new Set(sheetCastNames)].join(', ')}. Never regenerate these people as independent default NPCs. Registration remains authoritative even with disabled analysis, stale records, absence, or zero selected records. Follow their original visible characterization when no additional record applies.</SHEET_CAST_OWNERSHIP>`);
     if (String(characterBlock || '').trim()) blocks.push('<SHEET_CAST_SCOPE>Apply the following specific boundaries to their named people within the selected scene, event, conflict, and world constraints. Those broader constraints do not rewrite their established knowledge, relationships, or characterization; these individual boundaries do not cancel valid scene progression.</SHEET_CAST_SCOPE>', String(characterBlock).trim());
 
-    return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n)`;
+    return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n${META_CLOSE}\n)`;
+}
+export function buildPausedInjection({settings,privatePrompt='',referenceLines=[]}={}) {
+    const blocks=[WORLD_PROMPTS[settings.worldDirection]||WORLD_PROMPTS.natural];
+    if(settings.relationshipDirection!=='hostile')blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection]||RELATIONSHIP_PROMPTS.dynamic);
+    const fixed=[];
+    if(settings.worldHostility)fixed.push(L.WORLD_HOSTILITY);
+    if(settings.relationshipDirection==='hostile')fixed.push(L.CHARACTER_TO_USER_DEFAULT);
+    if(String(privatePrompt).trim())fixed.push(String(privatePrompt).trim());
+    if(settings.npcToUser)fixed.push(L.NPC_TO_USER_DEFAULT);
+    if(settings.userMisfortune)fixed.push(L.USER_MISFORTUNE);
+    if(fixed.length)blocks.push(`<FIXED_SCENE_SETTINGS>\n${fixed.join('\n\n')}\n</FIXED_SCENE_SETTINGS>`);
+    for(const line of referenceLines)if(String(line).trim())blocks.push(String(line).trim());
+    return `${META_OPEN}\n\n${blocks.join('\n\n')}\n\n${META_CLOSE}\n)`;
 }

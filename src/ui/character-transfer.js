@@ -12,39 +12,43 @@ export function renderRecordVersions(document, store, esc) {
     }).join('')}</details>`).join('') || '<p class="sr-help">아직 날짜별로 저장한 판독시트가 없습니다.</p>';
 }
 
-export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJudgment, downloadJson}) {
+export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJudgment, downloadJson, ensureLoreLoaded, captureCharacterError}) {
     const el=id=>deps.document.getElementById(id);
     const status=text=>{if(el('sr-character-import-status'))el('sr-character-import-status').textContent=text;};
     let busy=false;
-    const task=fn=>deps.runUiTask((async()=>{
+    const task=(fn,stage='parse')=>deps.runUiTask((async()=>{
         if(busy) return;
         busy=true;
-        try {await fn();} catch(error){status(`저장되지 않았습니다 · ${error.message}`);throw error;} finally{busy=false;}
+        try {await fn();} catch(error){captureCharacterError(error,error.characterStage||stage,{inputLength:el('sr-character-import-json')?.value?.length||0,saved:Boolean(error.characterSaved),applied:Boolean(error.characterApplied)});status(`${error.characterSaved?'저장은 완료됐지만 화면 반영 실패':'저장되지 않음'} · ${error.message}`);throw error;} finally{busy=false;}
     })(),'인물 기록 작업을 완료하지 못했습니다.');
     async function persist(next, entry) {
         const job=deps.jobs.begin('character-transfer'), chat=deps.stateChatKey();
+        let saved=false,applied=false;
         try {
             await deps.saveCharacterStore(chat,next);job.assert();
+            saved=true;
             deps.characterStore=deps.normalizeCharacterStore(next);
+            applied=true;
             invalidatePreparedJudgment();
             await deps.clearInjection();await deps.persistChat();
             if(entry)deps.characterAnalysisSelection={kind:entry.kind,id:entry.id};
             deps.renderCharacterStore();
-        } finally {job.finish();}
+        } catch(error){error.characterSaved=saved;error.characterApplied=applied;error.characterStage=saved?'apply':'save';throw error;} finally {job.finish();}
     }
     el('sr-character-copy-prompt')?.addEventListener('click',()=>task(async()=>{
+        await ensureLoreLoaded();
         const form=characterForm();
         if(!form.name)throw new Error('인물 이름을 입력하세요.');
         await deps.copyText(compilerRequest(form).prompt);
         status('분석 명령문을 복사했습니다. 외부 AI에 붙여 넣고, 받은 JSON을 아래에서 가져오세요.');
         el('sr-character-import-panel').open=true;
         if(!el('sr-character-import-name').value.trim())el('sr-character-import-name').value=form.name;
-    }));
+    }),'prompt');
     el('sr-character-import')?.addEventListener('click',()=>task(async()=>{
         const result=importRecordVersion(deps.characterStore,el('sr-character-import-json').value,el('sr-character-import-name').value);
         await persist(result.store,result.entry);
         status(`${result.entry.name} · ${result.entry.recordBank.records.length}개 기록을 날짜별로 저장하고 적용했습니다. 원문 대조 없이 결과 JSON 자체를 검증했습니다.`);
-    }));
+    },'validate'));
     async function readFile(file) {
         if(!file)return;
         if(!/\.json$/i.test(file.name))throw new Error('.json 파일을 선택하세요.');
