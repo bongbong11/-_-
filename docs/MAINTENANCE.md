@@ -18,6 +18,14 @@ node tests/browser.mjs
 
 The browser suite needs Playwright and Chromium (or CHROME_PATH). Do not edit the vendored files directly. sync.json records the exact source commit and SHA-256; version.js carries that hash into saved banks. A core change marks old banks stale even if an upstream version number was not bumped. Re-extract affected characters after updating. User-installed extensions receive repository updates through SillyTavern; editing a developer checkout does not modify user installations by itself.
 
+## Character Reasoner workflow parity
+
+Scene Reader's existing character tab provides source-sheet loading, selected lorebook entries, canonical prompt copying, standalone JSON paste/file/drop import, normalized validation, named date versions, view/copy/download/delete, and apply-version controls. No additional tabs or runtime Character Reasoner installation are required. Source adapters and UI are Scene Reader-owned; the canonical compiler and validator remain vendored from Character Reasoner.
+
+`src/characters/versions.js` owns import/version transitions. `src/ui/character-transfer.js` binds them to the UI and persists a complete snapshot before replacing active state. Standalone JSON imports preserve upstream structural-only source validation; they never claim to have verified unavailable source text. Applying a version invalidates prior Jev results. Deleting an applied version removes its bank without deleting the registered identity. The existing optional API compiler uses the same core and archives successful outputs as versions.
+
+`tests/regression/character-transfer.mjs`, `character-live-current.mjs`, and the browser suite cover both routes. The live request always uses canonical mode, omits legacy source/core excerpts and response-direction questions, and includes the current core hash in its cache identity.
+
 ## Ownership and scope
 
 Character Reasoner owns extraction. Scene Reader owns candidate filtering, live record selection, access checks, progression, appearance offers, continuity and injection. Production uses canonicalOnly; old profiles remain recovery data and require re-extraction. Selected rules retain condition, target, modality and knowledge state. Per-person live acquisitions remain separate. Registered identities never revert to generated-NPC ownership.
@@ -27,7 +35,7 @@ The appearance offer is a routing proposal, not an established person. New prese
 ## Release checks
 
 1. Source and structural regression: canonical-core equality, record validation, 162 setting combinations, persistence/rollback and failed operations.
-2. UI integration: 320/390/768/1280 widths, four tabs, settings save/reset, source lorebook compile, Jev selection/injection and world edits; inspect screenshots.
+2. UI integration: 320/390/768/1280 widths, four tabs, settings save/reset, source lorebook compile, external JSON/version workflow through Jev injection, failed-save rollback, collapsed SillyTavern extension controls, icon persistence and world edits; inspect screenshots.
 3. Distribution: build ZIPs, validate contained import paths and byte equality, rerun checks from the final release tree, check docs/links, review Git diff for credentials and stale files.
 
 Mocked model responses prove plumbing and invariants, not live Jev output quality. Never claim a live-model test unless one was performed. Keep tests and source; omit plans, test artifacts and internal docs from installation ZIPs.

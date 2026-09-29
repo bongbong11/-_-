@@ -45,13 +45,15 @@ function contextItems(entry, selected, knowledge, memory, transcript) {
 }
 export function buildLiveCharacterPlan(entries = [], { selected = [], transcript = '', knowledge = [], memory = null, persona = null, canonicalOnly = false } = {}) {
     return entries.map((entry, index) => {
-        // All stored rules (at most ten) remain visible to Jev. Cross-language keyword
-        // ranking must not silently hide a rule before semantic selection.
+        // The production caller always uses bounded canonical record candidates.
+        // Legacy profile readers are retained only for recovery and compatibility tests.
         const recordMode = canonicalOnly || Boolean(entry.recordBank);
         const profileCandidates = recordMode ? selectRecordCandidates(entry, transcript) : currentProfileItems(entry).map(item => ({
             id: item.id, kind: item.kind, topic: item.topic, target: item.target, rule: item.rule,
         }));
-        return { index, id: entry.id, name: entry.name, kind: entry.kind, npcRole: entry.kind === 'npc' ? entry.npcRole || (entry.antagonist ? 'villain' : 'mixed') : '', antagonist: Boolean(entry.antagonist), sourceVisibleToMain: entry.sourceVisibleToMain, core: buildCore(entry), coreEnglish: entry.coreEnglish || '',
+        return { index, id: entry.id, name: entry.name, kind: entry.kind, npcRole: entry.kind === 'npc' ? entry.npcRole || (entry.antagonist ? 'villain' : 'mixed') : '', antagonist: Boolean(entry.antagonist), sourceVisibleToMain: entry.sourceVisibleToMain,
+            core: recordMode ? { name:entry.name, aliases:entry.aliases || [], excerpts:[] } : buildCore(entry), coreEnglish: recordMode ? '' : entry.coreEnglish || '',
+            recordStatus: recordMode ? (recordBankIsCurrent(entry) ? 'current' : entry.recordBank ? 'stale' : entry.profile || entry.legacyProfile ? 'legacy' : 'missing') : 'legacy',
             recordMode, recordBankCurrent:recordMode && recordBankIsCurrent(entry), profileCandidates, contextCandidates: contextItems(entry, selected, knowledge, memory, transcript),
             sourceExcerpt: !recordMode && profileIsCurrent(entry) ? selectRelevantChunks(entry.source, transcript, 1)[0] || '' : '',
             // Persona stays a reference and is never an autonomous response target.
@@ -124,7 +126,9 @@ export function buildCharacterInjection(plan = [], { conflictActive = false } = 
     const selections = [], traces = [];
     for (const person of plan) {
         traces.push({ index: person.index, id: person.id, name: person.name, kind: person.kind, presence: person.presence,
-            profileIds: person.profileIds, contextIds: person.contextIds, deniedIds: person.denied.map(item => item.id), direction: person.direction, recordMode:person.recordMode, recordSelections:person.profileItems.map(item=>({id:item.id,type:item.type,rule:item.rule,source_ids:item.source_ids,knowledge_state:item.knowledge_state})), excludedReason: person.excludedReason });
+            profileIds: person.profileIds, contextIds: person.contextIds, deniedIds: person.denied.map(item => item.id), direction: person.direction, recordMode:person.recordMode,
+            recordStatus:person.recordStatus, candidateCount:person.profileCandidates?.length || 0,
+            recordSelections:person.profileItems.map(item=>({id:item.id,type:item.type,rule:item.rule,source_ids:item.source_ids,knowledge_state:item.knowledge_state})), excludedReason: person.excludedReason });
         if (person.presence !== 'active') continue;
         const chosen = [];
         if (!person.sourceVisibleToMain && person.kind === 'npc') {

@@ -6,6 +6,7 @@ import { currentRecords, RECORD_LABELS, recordBankIsCurrent } from '../character
 import { ITEM_LABELS, currentProfileItems, profileStatus } from '../../character-library.js';
 import { normalizeContinuity } from '../../continuity-engine.js';
 import { displayValue, verificationText } from './presentation.js';
+import { renderRecordVersions } from './character-transfer.js';
 export function createResults({readState, document, getContext, record, ownerPrompt, escapeHtml, selectCharacter}) {
 function decisionTitle(key) {
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
@@ -53,6 +54,7 @@ function renderCharacterTurnResults() {
         const profileNames = (person.injectedRuleIds || []).map((id) => (person.recordMode ? person.recordSelections || [] : currentProfileItems(entry)).find((item) => item.id === id)?.rule).filter(Boolean);
         const rows = [
             ['이번 역할', characterTurnLabel('presence',person.presence)],
+            ...(person.recordMode ? [['판독 기록 상태', ({ current:'새 인물 기록 사용', stale:'기록이 오래됨 · 다시 추출 필요', legacy:'이전 방식만 저장됨 · 새 기록 추출 필요', missing:'저장된 인물 기록 없음' })[person.recordStatus] || '기록 상태 확인 필요'], ['Jev에 전달한 기록', `${person.candidateCount || 0}개 후보 · 선택 ${person.profileIds.length}개`]] : []),
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
             ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
@@ -186,6 +188,7 @@ function renderStoredState() {
 
 function renderCharacterStore() {
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
+    renderRecordVersions(document,characterStore,escapeHtml);
     const setList = (id, entries, kind) => {
         const root = document.getElementById(id);
         if (!root) return;

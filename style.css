@@ -1,3 +1,12 @@
+#scene-reader-extension-settings { margin: 6px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; }
+#scene-reader-extension-settings > summary { padding: 10px; cursor: pointer; font-weight: 600; }
+#scene-reader-extension-settings .sr-extension-controls { display: grid; gap: 8px; padding: 0 10px 10px; }
+#scene-reader-extension-settings .menu_button { width: fit-content; margin: 0; }
+#scene-reader-quick-button[hidden] { display: none !important; }
+#scene-reader-dialog .sr-record-version { padding: 10px 0; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+#scene-reader-dialog .sr-record-version small { display: block; opacity: .8; margin: 4px 0; }
+#scene-reader-dialog .sr-record-version .sr-action-row .menu_button { min-height: 34px; min-width: 0; width: auto; padding: 5px 9px; flex: 0 1 auto; }
+#scene-reader-dialog .sr-record-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: .85rem; }
 #scene-reader-dialog {
     width: min(760px, calc(100vw - 24px));
     height: min(820px, calc(100dvh - 24px));

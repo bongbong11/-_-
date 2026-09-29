@@ -1,5 +1,6 @@
 import { makeAppearanceOffer, addAppearanceQuestions, applyAppearanceOffer } from './appearance.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
+import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
@@ -8,6 +9,9 @@ function sourceRevisionKey(rec, world) {
         world: { id: world?.id || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise) },
         reasoner: deps.settings.reasonerProfileId || '',
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
+        characterSelectorContract: 2,
+        characterCore: CORE_SHA256,
+        characterEnabled: Boolean(deps.characterStore.enabled),
         preferences: rec?.preferences, recentTurns: deps.settings.recentTurns,
         lorebooks: MEMORY_REFERENCE_ENABLED && rec?.preferences?.lorebookMemory ? {
             books: deps.linkedCharacterBooks(deps.getContext(), deps.worldInfoModule?.world_info).map(name => [name, deps.lorebookRevisions.get(name) || '']),
@@ -15,7 +19,7 @@ function sourceRevisionKey(rec, world) {
             wholeWords: deps.worldInfoModule?.world_info_match_whole_words,
         } : null,
         characters: [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases,
-            ...(deps.characterStore.enabled ? { sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, npcRole: entry.npcRole, antagonist: entry.antagonist, coreEnglish: entry.coreEnglish, profile: entry.profile, recordBank: entry.recordBank, selectedLore: entry.selectedLore } : {}) })),
+            ...(deps.characterStore.enabled ? { source: entry.source, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, npcRole: entry.npcRole, antagonist: entry.antagonist, recordBank: entry.recordBank, selectedLore: entry.selectedLore } : {}) })),
     });
 }
 
@@ -318,7 +322,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
-        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: prefs.settingsContract >= 3,
+        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true,
     }) : [];
     if (deps.characterStore.characters.length === 1) {
         const primary = liveCharacters.find((person) => person.id === deps.characterStore.characters[0].id);
@@ -478,7 +482,6 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const chosenContinuity = chosenExternal;
         if (chosenContinuity) decisions.selected_continuity_id = chosenContinuity.id;
         // Canonical records are constraints, not extra independent action beats.
-        if (prefs.settingsContract < 3) deps.coordinateCharacterDecisions(activeCharacters, details, decisions);
         if (decisions.npc_route !== 'reuse') deps.overrideDecision(details, decisions, 'npc_target', 'none', '이번 응답에 기존 NPC 재사용 없음');
         if (!['create', 'replace', 'reuse'].includes(decisions.npc_route)) {
             for (const key of ['npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure']) deps.overrideDecision(details, decisions, key, 'none', decisions.npc_route === 'waiting' ? '인물 등장 추첨 대기' : '이번 응답 NPC 실행 없음');

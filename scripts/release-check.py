@@ -24,6 +24,8 @@ with ZipFile(archive_path) as archive:
         assert archive.read(name)==(root/relative).read_bytes(), name
     assert 'scene-reader/src/vendor/character-reasoner/version.js' in archive.namelist()
     assert 'scene-reader/src/scene/appearance.js' in archive.namelist()
+    assert 'scene-reader/src/characters/versions.js' in archive.namelist()
+    assert 'scene-reader/src/ui/character-transfer.js' in archive.namelist()
 assert not list(root.glob('AUDIT-*.md')), 'remove stale release audit notes'
 assert not (root/'docs/character-phase1-contract.md').exists()
 print(f"Release distribution passed: {manifest['version']}, committed canonical core, current files, valid docs, install-only archive.")

@@ -2,6 +2,8 @@ import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 // User actions and form state; dependencies are explicit and supplied by the application.
 import { debugReportText } from './debug-report.js';
 import { compilerRequest, createRecordBank } from '../characters/records.js';
+import { archiveRecordVersion } from '../characters/versions.js';
+import { bindCharacterTransfer } from './character-transfer.js';
 export function createUiController(deps) {
 let characterEditorRevision = 0;
 let npcCandidates = [];
@@ -42,6 +44,10 @@ function setFormValues() {
     setChecked('sr-npc-user', prefs.npcToUser);
     setChecked('sr-user-misfortune', prefs.userMisfortune);
     setChecked('sr-enabled', deps.settings.enabled);
+    setChecked('sr-extension-enabled', deps.settings.enabled);
+    setChecked('sr-extension-icon', deps.settings.showChatIcon);
+    const chatIcon = deps.document.getElementById('scene-reader-quick-button');
+    if (chatIcon) chatIcon.hidden = !deps.settings.showChatIcon;
     setChecked('sr-auto', deps.settings.autoJudge);
     setChecked('sr-user-impersonation', prefs.allowUserImpersonation);
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) { setChecked(id, MEMORY_REFERENCE_ENABLED && prefs[key]); const input = deps.document.getElementById(id); if (input) input.disabled = !MEMORY_REFERENCE_ENABLED; }
@@ -120,6 +126,8 @@ function showCharacterEditor(kind, entry = null) {
     editor.hidden = false;
     deps.document.getElementById('sr-character-editor-title').textContent = `${kind === 'persona' ? '페르소나' : kind === 'npc' ? 'NPC' : '캐릭터'} ${entry ? '수정' : '추가'}`;
     deps.document.getElementById('sr-character-name').value = entry?.name || (kind === 'persona' ? deps.getContext().name1 || '페르소나' : '');
+    const importSheetButton=deps.document.getElementById('sr-character-read-sheet');
+    if(importSheetButton)importSheetButton.hidden=kind==='npc';
     deps.document.getElementById('sr-character-aliases').value = (entry?.aliases || []).join(', ');
     const sourceInput = deps.document.getElementById('sr-character-source');
     sourceInput.value = entry?.source || '';
@@ -134,7 +142,7 @@ function showCharacterEditor(kind, entry = null) {
     if (roleSelect) roleSelect.value = entry?.npcRole || (entry?.antagonist ? 'villain' : 'mixed');
     deps.document.getElementById('sr-character-delete').hidden = !entry;
     const status = deps.document.getElementById('sr-character-task-status');
-    if (status) status.textContent = entry ? deps.profileStatus(entry) : '시트를 저장한 뒤 인물 판정을 실행할 수 있습니다.';
+    if (status) status.textContent = entry ? deps.profileStatus(entry) : '원문을 넣고 분석 명령문을 복사하세요. 완성된 JSON은 아래에서 바로 가져올 수 있습니다.';
     editor.scrollIntoView?.({ block: 'nearest' });
 }
 
@@ -150,7 +158,8 @@ function closeCharacterEditor() {
 function renderEditorLore() {
     const select = deps.document.getElementById('sr-character-lore-book');
     const world = deps.worldInfoModule;
-    const names = [...new Set([...(world?.world_names || []), ...deps.linkedCharacterBooks(deps.getContext(), world?.world_info), ...editorLore.map(item=>item.book)])];
+    const context=deps.getContext(), personaBooks=[context.powerUserSettings?.persona_description_lorebook,...Object.values(context.powerUserSettings?.persona_descriptions || {}).map(entry=>entry?.lorebook)].filter(Boolean);
+    const names = [...new Set([...(world?.world_names || []), ...deps.linkedCharacterBooks(context, world?.world_info), ...personaBooks, ...editorLore.map(item=>item.book)])];
     if (select) select.innerHTML = '<option value="">로어북 선택</option>' + names.map(name=>`<option value="${deps.escapeHtml(name)}">${deps.escapeHtml(name)}</option>`).join('');
     renderSelectedLore();
     const candidates = deps.document.getElementById('sr-character-lore-options');
@@ -196,9 +205,9 @@ function taskStatus(message, error = false) {
 }
 async function saveCharacterEntry() {
     const form = characterForm();
-    if (!form.kind || !form.name || (form.kind !== 'npc' && !form.source)) throw new Error('이름과 시트 원문을 입력하세요.');
     const targetId = deps.characterEditorId;
     const current = characterEntries(form.kind).find(item => item.id === targetId);
+    if (!form.kind || !form.name || (form.kind !== 'npc' && !form.source && !current)) throw new Error('이름과 시트 원문을 입력하세요.');
     if (form.kind === 'npc' && !form.aliases.length) {
         const blocked = deps.characterStore.npcs.filter(item => item.id !== targetId).flatMap(item => [item.name, ...(item.aliases || [])]);
         form.aliases = deps.suggestNpcAliases(form.name, form.source, blocked);
@@ -258,13 +267,6 @@ async function analyzeAndSaveCharacter() {
     assertEditor();
     const analysisId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
     const recordBank = createRecordBank(extraction.result, original, analysisId);
-    let coreEnglish = kind === 'npc' && !original.sourceVisibleToMain ? deps.deriveEnglishCore(source, name) : '';
-    if (kind === 'npc' && !original.sourceVisibleToMain && !coreEnglish) {
-        const coreResult = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.NPC_CORE_SYSTEM,
-            { canonicalName: name, sheet: source }, { maxTokens: 260 });
-        assertEditor();
-        coreEnglish = deps.parseNpcCore(coreResult.result, name);
-    }
     taskStatus(`시트 해석 완료 · 인물 기록 ${recordBank.records.length}개`);
     deps.updateActivity(`${name} · 규칙 저장 중…`, { owner: activityOwner });
     const sourceHash = await deps.sha256Hex(source);
@@ -272,7 +274,7 @@ async function analyzeAndSaveCharacter() {
     const currentEntry = characterEntries(kind).find((item) => item.id === targetId);
     if (targetId && (!currentEntry || deps.stableFingerprint(currentEntry) !== originalHash)) throw new deps.StaleRunError();
     if (deps.characterEditorKind === kind && deps.characterEditorId === targetId && String(deps.document.getElementById('sr-character-source')?.value || '').trim() !== source) throw new deps.StaleRunError();
-    const entry = { ...original, recordBank, coreEnglish, sourceHash, updatedAt: new Date().toISOString() };
+    const entry = { ...original, recordBank, coreEnglish:'', sourceHash, updatedAt: new Date().toISOString() };
     // Preserve the old profile for recovery only; it is never converted into records.
     if (entry.profile) { entry.legacyProfile = entry.profile; delete entry.profile; }
     const next = deps.normalizeCharacterStore(deps.characterStore);
@@ -282,6 +284,7 @@ async function analyzeAndSaveCharacter() {
         const index = next[key].findIndex((item) => item.id === entry.id);
         if (index >= 0) next[key][index] = entry; else next[key].push(entry);
     }
+    archiveRecordVersion(next,entry,entry.name);
     // Replace the old analysis only after the new profile and server persistence succeed.
     await deps.saveCharacterStore(chatKey, next);
     job.assert();
@@ -465,6 +468,28 @@ async function endActiveEvent() {
 }
 
 function bindForm() {
+    bindCharacterTransfer(deps,{characterForm,invalidatePreparedJudgment,downloadJson});
+    deps.document.getElementById('sr-character-read-sheet')?.addEventListener('click',()=>deps.runUiTask((async()=>{
+        const kind=deps.characterEditorKind, context=deps.getContext();
+        let name='', source='';
+        if(kind==='character') {
+            const character=context.characters?.[context.characterId], card=character?.data || character;
+            name=card?.name || character?.name || context.name2 || '';
+            source=[['DESCRIPTION',card?.description],['PERSONALITY',card?.personality]].filter(([,value])=>String(value || '').trim()).map(([label,value])=>`${label}:\n${value}`).join('\n\n');
+        } else if(kind==='persona') {
+            const revision=characterEditorRevision;
+            const personas=await import('/scripts/personas.js').catch(()=>null);
+            if(revision!==characterEditorRevision)throw new deps.StaleRunError();
+            const entry=context.powerUserSettings?.persona_descriptions?.[personas?.user_avatar];
+            name=context.name1 || entry?.name || '';
+            source=context.personaDescription || context.persona?.description || (typeof entry==='string'?entry:entry?.description) || context.powerUserSettings?.persona_description || '';
+        }
+        if(!String(source).trim())throw new Error('현재 인물의 시트 원문을 찾지 못했습니다. 직접 붙여 넣어 주세요.');
+        const input=deps.document.getElementById('sr-character-source');
+        if(input.value.trim() && !deps.window.confirm('입력 중인 원문을 현재 시트로 바꿀까요?'))return;
+        input.value=source;deps.document.getElementById('sr-character-name').value=name;
+        characterEditorRevision++;taskStatus('현재 시트를 가져왔습니다. 필요한 로어북을 선택하고 분석 명령문을 복사하세요.');
+    })(),'현재 시트를 가져오지 못했습니다.'));
     deps.document.getElementById('sr-debug-open')?.addEventListener('click', () => {
         const judgment = deps.record()?.lastJudgment;
         if (!judgment) { deps.window.toastr?.warning?.('검토할 판정이 없습니다.', '씬판독기'); return; }
@@ -583,15 +608,20 @@ function bindForm() {
         if (!event.target.checked) { const rec = deps.record(true); rec.villainProfile = null; rec.lastVillainRoll = null; await deps.persistChat(); deps.renderProfiles(); }
     })()));
     deps.document.getElementById('sr-appearance-chance')?.addEventListener('change', (event) => deps.runUiTask(savePreference('appearanceChance', Number(event.target.value) || 10)));
-    deps.document.getElementById('sr-enabled')?.addEventListener('change', (event) => deps.runUiTask((async () => {
-        await saveGlobal('enabled', event.target.checked);
-        if (!event.target.checked) {
+    for (const id of ['sr-enabled', 'sr-extension-enabled']) deps.document.getElementById(id)?.addEventListener('change', (event) => deps.runUiTask((async () => {
+        const enabled = event.target.checked;
+        await saveGlobal('enabled', enabled);
+        if (!enabled) {
+            deps.invalidateReasonerJobs();
             await deps.clearInjection();
             deps.updateStatus('씬판독기 꺼짐 · 판독과 주입 중단');
         } else deps.updateStatus('씬판독기 켜짐 · 다음 생성부터 판독');
-        const runButton = deps.document.getElementById('sr-run');
-        if (runButton) runButton.disabled = !event.target.checked;
+        setFormValues();
     })()));
+    deps.document.getElementById('sr-extension-icon')?.addEventListener('change', (event) => deps.runUiTask((async () => {
+        await saveGlobal('showChatIcon', event.target.checked);
+        setFormValues();
+    })(), '아이콘 표시 설정을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-auto')?.addEventListener('change', (event) => deps.runUiTask(saveGlobal('autoJudge', event.target.checked)));
     deps.document.getElementById('sr-arm-ooc-debug')?.addEventListener('click', () => {
         const rec = deps.record();
@@ -803,6 +833,11 @@ function bindForm() {
     deps.document.getElementById('sr-character-save')?.addEventListener('click', () => deps.runUiTask(saveCharacterEntry(), '시트를 저장하지 못했습니다.'));
     deps.document.getElementById('sr-character-analyze')?.addEventListener('click', () => deps.runUiTask(analyzeAndSaveCharacter(), '인물 판정을 완료하지 못했습니다.'));
     deps.document.getElementById('sr-character-lore-book')?.addEventListener('change', () => deps.runUiTask(loadEditorLore()));
+    deps.document.getElementById('sr-character-lore-all')?.addEventListener('click',()=>{
+        const boxes=[...deps.document.querySelectorAll('#sr-character-lore-options [data-lore-pick]')];
+        const select=boxes.some(box=>!box.checked);
+        for(const box of boxes)if(box.checked!==select)box.click();
+    });
     deps.document.getElementById('sr-character-lore-selected')?.addEventListener('click', event => {
         const button=event.target.closest('[data-lore-remove]');
         if (!button) return;

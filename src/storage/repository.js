@@ -102,7 +102,7 @@ async function hydrateServerState({ migrate = true } = {}) {
     if (saved.global && typeof saved.global === 'object') {
         deps.settings = { ...deps.DEFAULTS, ...saved.global };
         delete deps.settings.pauseOnOoc;
-        for (const key of ['enabled', 'autoJudge', 'showConfidence', 'ownerUnlocked', 'continuityEnabled']) if (typeof deps.settings[key] !== 'boolean') deps.settings[key] = deps.DEFAULTS[key];
+        for (const key of ['enabled', 'showChatIcon', 'autoJudge', 'showConfidence', 'ownerUnlocked', 'continuityEnabled']) if (typeof deps.settings[key] !== 'boolean') deps.settings[key] = deps.DEFAULTS[key];
         deps.settings.recentTurns = Math.max(1, Math.min(5, Number(deps.settings.recentTurns) || deps.DEFAULTS.recentTurns));
         deps.extension_settings[deps.MODULE] = deps.settings;
     } else if (migrate) await saveServerSettings();

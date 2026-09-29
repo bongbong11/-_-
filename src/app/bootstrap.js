@@ -60,6 +60,7 @@ const OWNER_PASSWORD_HASH = 'cb5ec39967a4c59c8b08b4396291761f404f51bcf23d42b4cff
 
 const DEFAULTS = {
     enabled: true,
+    showChatIcon: true,
     autoJudge: true,
     recentTurns: 3,
     showConfidence: true,
@@ -791,6 +792,17 @@ function createWandEntry() {
     wrapper.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') openSceneReader(); });
 }
 
+function createExtensionSettings() {
+    if (document.getElementById('scene-reader-extension-settings')) return;
+    const host = document.getElementById('extensions_settings') || document.getElementById('extensions_settings2');
+    if (!host) return;
+    const section = document.createElement('details');
+    section.id = 'scene-reader-extension-settings';
+    section.innerHTML = '<summary>씬판독기</summary><div class="sr-extension-controls"><label class="checkbox_label"><input id="sr-extension-enabled" type="checkbox"><span>씬판독기 사용</span></label><label class="checkbox_label"><input id="sr-extension-icon" type="checkbox"><span>채팅창 아이콘 표시</span></label><button id="sr-extension-open" type="button" class="menu_button">씬판독기 열기</button></div>';
+    host.append(section);
+    section.querySelector('#sr-extension-open').addEventListener('click', openSceneReader);
+}
+
 function openSceneReader() {
     setFormValues();
     renderAll();
@@ -812,6 +824,7 @@ function createQuickEntry() {
     button.setAttribute('role', 'button');
     button.setAttribute('aria-label', '씬판독기 열기');
     button.title = '씬판독기';
+    button.hidden = !settings.showChatIcon;
     button.addEventListener('click', openSceneReader);
     button.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') openSceneReader(); });
     extensionButton?.nextSibling ? holder.insertBefore(button, extensionButton.nextSibling) : holder.append(button);
@@ -942,7 +955,7 @@ async function onChatChanged() {
 async function init() {
     settings = { ...DEFAULTS, ...(extension_settings[MODULE] || {}) };
     delete settings.pauseOnOoc;
-    for (const key of ['enabled', 'autoJudge', 'showConfidence', 'ownerUnlocked', 'continuityEnabled']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
+    for (const key of ['enabled', 'showChatIcon', 'autoJudge', 'showConfidence', 'ownerUnlocked', 'continuityEnabled']) if (typeof settings[key] !== 'boolean') settings[key] = DEFAULTS[key];
     settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
     extension_settings[MODULE] = settings;
     saveSettingsDebounced();
@@ -971,6 +984,7 @@ async function init() {
     }
     try { worldInfoModule = await import('/scripts/world-info.js'); } catch { worldInfoModule = null; }
     if (event_types.WORLDINFO_UPDATED) eventSource.on(event_types.WORLDINFO_UPDATED, (...args) => runEventTask(() => onLorebookUpdated(...args), '수정된 로어북의 판정 대기를 갱신하지 못했습니다.'));
+    createExtensionSettings();
     createDialog();
     createWandEntry();
     ensureQuickEntry();

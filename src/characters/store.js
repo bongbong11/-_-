@@ -1,5 +1,5 @@
 import { buildCore } from './profile.js';
-export function defaultCharacterStore() { return { schemaVersion: 6, enabled: false, characters: [], persona: null, npcs: [], updatedAt: null }; }
+export function defaultCharacterStore() { return { schemaVersion: 7, enabled: false, characters: [], persona: null, npcs: [], recordGroups:[], updatedAt: null }; }
 export function normalizeCharacterStore(value) {
     const base = defaultCharacterStore();
     if (!value || typeof value !== 'object') return base;
@@ -16,6 +16,7 @@ export function normalizeCharacterStore(value) {
         return result;
     };
     return { ...value, ...base, enabled: Boolean(value.enabled), updatedAt: value.updatedAt || null,
+        recordGroups:(Array.isArray(value.recordGroups) ? value.recordGroups : []).filter(group=>group && ['character','persona','npc'].includes(group.kind) && Array.isArray(group.versions)),
         characters: (Array.isArray(value.characters) ? value.characters : []).map(e => normalize(e, 'character')).filter(Boolean),
         persona: normalize(value.persona, 'persona'), npcs: (Array.isArray(value.npcs) ? value.npcs : []).map(e => normalize(e, 'npc')).filter(Boolean) };
 }

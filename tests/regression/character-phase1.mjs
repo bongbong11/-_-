@@ -117,8 +117,7 @@ assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|
     assert.equal(f.run('characterStore.npcs[0].recordBank.records.length'), 1);
 }
 
-// Korean-only hidden NPC material needs a separate, bounded English identity,
-// while the approved profile-extraction prompt remains unchanged.
+// Canonical records supply hidden-NPC identity; no second legacy interpretation call.
 {
     const f = fixture();
     const fields = new Map();
@@ -138,8 +137,8 @@ assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|
     f.run('requestWithConnectionProfile=mockExtract; settings.reasonerProfileId="p"; connectionRequestService={}');
     await f.run('saveCharacterEntry()');
     await f.run('analyzeAndSaveCharacter()');
-    assert.equal(calls, 2);
-    assert.match(f.run('characterStore.npcs[0].coreEnglish'), /father and a businessman/);
+    assert.equal(calls, 1);
+    assert.equal(f.run('characterStore.npcs[0].coreEnglish'), '');
 }
 
 const longPeople = Array.from({length:4},(_,index)=>({index,id:`p${index}`,name:`Person${index}`,kind:'npc',presence:'active',sourceVisibleToMain:true,
