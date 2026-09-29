@@ -20,7 +20,7 @@ export function deriveDependentDecisions(rec, details, decisions) {
     let resolution = 'continue';
     if (readiness === 'partial') resolution = pace === 'fast' ? 'partial' : 'continue';
     if (readiness === 'core') resolution = pace === 'slow' ? 'partial' : pace === 'fast' ? 'resolve' : 'partial';
-    if (readiness === 'decisive') resolution = pace === 'slow' && Number(rec.pacingState?.event?.qualifiedSteps || 0) < 1 ? 'partial' : 'resolve';
+    if (readiness === 'decisive') resolution = rec.preferences.developmentStyle ? 'resolve' : pace === 'slow' && Number(rec.pacingState?.event?.qualifiedSteps || 0) < 1 ? 'partial' : 'resolve';
     overrideDecision(details, decisions, 'resolution_pacing', resolution, `해결 준비(${readiness || '불명확'})와 설정 속도(${pace})에서 계산`);
     const sustain = rec.preferences.fightSustain && decisions.conflict_state === 'active' ? 'yes' : 'no';
     overrideDecision(details, decisions, 'fight_sustain', sustain, sustain === 'yes' ? '실제 진행 중인 대치에만 싸움 유지 적용' : '실제 진행 중인 대치가 아니므로 미적용');
@@ -36,13 +36,24 @@ export function deriveDependentDecisions(rec, details, decisions) {
 }
 
 export function coordinateDecisions(rec, details, decisions) {
+    if (rec.preferences.developmentStyle) {
+        if (['create','replace'].includes(decisions.event_route)) overrideDecision(details, decisions, 'event_route', 'none', '새 이벤트 생성은 고급 전개에서만 허용');
+        if (!rec.preferences.advancedEnabled) {
+            for (const [key,value] of Object.entries({advanced_entry:'closed',advanced_route:'none',advanced_cause:'none',advanced_element:'none',advanced_move:'quiet'})) overrideDecision(details, decisions, key, value, '고급 전개 꺼짐');
+            if (decisions.primary_focus === 'new_event') overrideDecision(details, decisions, 'primary_focus', 'direct', '기본 흐름은 새 이벤트를 생성하지 않음');
+        }
+    }
+    if (rec.preferences.settingsContract >= 3 && decisions.basic_move === 'continue' && decisions.progress_need === 'stalled') {
+        const fallback = rec.preferences.developmentStyle === 'dynamic' ? 'action' : 'dialogue';
+        overrideDecision(details, decisions, 'basic_move', fallback, '반복이 확인되어 현재 상호작용의 작은 시도·대화 전환으로 연결');
+    }
     let focus = decisions.primary_focus || 'direct';
     if (!rec.preferences.advancedEnabled && rec.preferences.progressionMode === 'off' && focus === 'new_event') {
         overrideDecision(details, decisions, 'primary_focus', 'direct', '자동 RP 진행 꺼짐');
         focus = 'direct';
     }
     if (rec.preferences.advancedEnabled) {
-        if (!['latent', 'open'].includes(decisions.advanced_entry)) overrideDecision(details, decisions, 'advanced_route', 'none', '고급 전개 진입 근거 없음');
+        if (!['latent', 'open'].includes(decisions.advanced_entry) && (rec.preferences.settingsContract < 3 || !rec.preferences.settingsContract || (decisions.advanced_route !== 'continue' && details.advanced_entry?.selected === 'closed' && !details.advanced_entry?.fallbackApplied))) overrideDecision(details, decisions, 'advanced_route', 'none', '고급 전개 진입 근거 없음');
         if (rec.eventProfile?.source === 'advanced' && decisions.advanced_route === 'create') overrideDecision(details, decisions, 'advanced_route', 'continue', '저장된 고급 사건 유지');
         if (!rec.eventProfile && decisions.advanced_route === 'continue') overrideDecision(details, decisions, 'advanced_route', 'none', '저장된 고급 사건 없음');
         if (decisions.advanced_route === 'continue' && rec.eventProfile?.source === 'advanced' && ADVANCED_ELEMENTS[rec.eventProfile.element]) {
@@ -83,7 +94,7 @@ export function coordinateDecisions(rec, details, decisions) {
             if (blocked) overrideDecision(details, decisions, 'relationship_beat', 'none', '반대 근거와 충돌하는 관계 비트 제외');
         }
         if (decisions.counterevidence !== 'clear') {
-            if (rec.preferences.relationshipPace === 'slow' && prior < 2 && !decisiveCurrent) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '느린 관계 속도·누적 원인 적용');
+            if (rec.preferences.relationshipPace === 'slow' && prior < 2 && (rec.preferences.developmentStyle || !decisiveCurrent)) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '느린 관계 속도·누적 원인 적용');
             if (rec.preferences.relationshipPace === 'medium' && prior < 1 && !decisiveCurrent) overrideDecision(details, decisions, 'relationship_pacing', `${direction}_incremental`, '중간 관계 속도·누적 원인 적용');
         }
     }

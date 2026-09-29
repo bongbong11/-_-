@@ -16,7 +16,7 @@ for(const file of await files(root)){
     const result=spawnSync(process.execPath,['--check',file],{cwd:root,stdio:'inherit'});
     if(result.status!==0)process.exit(result.status||1);
 }
-for(const test of ['test.mjs','tests/regression/unified.mjs','tests/regression/character-phase1.mjs']){
+for(const test of ['test.mjs','tests/regression/unified.mjs','tests/regression/character-phase1.mjs','tests/regression/retrieval-core.mjs','tests/regression/progress-intensity.mjs','tests/regression/jev-assembly.mjs']){
     const result=spawnSync(process.execPath,[test],{cwd:root,stdio:'inherit'});
     if(result.status!==0)process.exit(result.status||1);
 }

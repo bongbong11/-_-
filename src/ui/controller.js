@@ -1,8 +1,12 @@
+import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 // User actions and form state; dependencies are explicit and supplied by the application.
 import { debugReportText } from './debug-report.js';
+import { compilerRequest, createRecordBank } from '../characters/records.js';
 export function createUiController(deps) {
 let characterEditorRevision = 0;
 let npcCandidates = [];
+let editorLore = [];
+let loreRequest = 0;
 function invalidatePreparedJudgment() {
     deps.invalidateReasonerJobs();
     const rec = deps.record(true);
@@ -10,7 +14,7 @@ function invalidatePreparedJudgment() {
     if (!rec.pendingPlan?.outputText) rec.pendingPlan = null;
 }
 function characterFormSignature() {
-    return JSON.stringify(['sr-character-name', 'sr-character-aliases', 'sr-character-source', 'sr-character-npc-role'].map(id => deps.document.getElementById(id)?.value || '').concat(Boolean(deps.document.getElementById('sr-character-source-visible')?.checked)));
+    return JSON.stringify([editorLore, ...['sr-character-name', 'sr-character-aliases', 'sr-character-source', 'sr-character-npc-role'].map(id => deps.document.getElementById(id)?.value || ''), Boolean(deps.document.getElementById('sr-character-source-visible')?.checked)]);
 }
 function setFormValues() {
     const prefs = deps.preferences();
@@ -19,21 +23,19 @@ function setFormValues() {
     setValue('sr-world-direction', prefs.worldDirection);
     setValue('sr-relationship-direction', prefs.relationshipDirection);
     setChecked('sr-negative-priority', prefs.negativePriority);
-    setValue('sr-progression-mode', prefs.progressionMode);
+    setValue('sr-development-style', prefs.developmentStyle);
+    setValue('sr-progress-intensity', Number(prefs.progressIntensity ?? 1).toFixed(1));
     setValue('sr-world-profile', prefs.selectedWorldId);
     setChecked('sr-advanced-enabled', prefs.advancedEnabled);
     setValue('sr-advanced-style', prefs.advancedStyle);
     for (const key of Object.keys(deps.ADVANCED_ELEMENTS)) setChecked(`sr-advanced-${key}`, prefs.advancedElements.includes(key));
-    setValue('sr-judgment-style', prefs.judgmentStyle);
     setValue('sr-injection-mode', deps.macroAvailable ? prefs.injectionMode : 'depth');
     setValue('sr-world-injection-mode', deps.macroAvailable ? prefs.worldInjectionMode : 'depth');
     setValue('sr-relationship-pace', prefs.relationshipPace);
     setValue('sr-resolution-pace', prefs.resolutionPace);
-    setValue('sr-roleplay-pace', prefs.roleplayPace);
     setChecked('sr-fight-sustain', prefs.fightSustain);
     setChecked('sr-villain-enabled', prefs.villainEnabled);
     setValue('sr-appearance-chance', prefs.appearanceChance);
-    setValue('sr-event-chance', prefs.eventChance);
     setChecked('sr-social-enabled', prefs.socialEnabled);
     setChecked('sr-world-hostility', prefs.worldHostility);
     setChecked('sr-private-prompt-enabled', prefs.privatePromptEnabled && deps.ownerUnlocked());
@@ -42,7 +44,7 @@ function setFormValues() {
     setChecked('sr-enabled', deps.settings.enabled);
     setChecked('sr-auto', deps.settings.autoJudge);
     setChecked('sr-user-impersonation', prefs.allowUserImpersonation);
-    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) setChecked(id, prefs[key]);
+    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) { setChecked(id, MEMORY_REFERENCE_ENABLED && prefs[key]); const input = deps.document.getElementById(id); if (input) input.disabled = !MEMORY_REFERENCE_ENABLED; }
     setChecked('sr-continuity-enabled', deps.settings.continuityEnabled);
     deps.renderReasonerProfiles();
     setValue('sr-recent-turns', deps.settings.recentTurns);
@@ -57,14 +59,10 @@ function setFormValues() {
     deps.updateStatus();
     const macroStatus = deps.document.getElementById('sr-macro-status');
     if (macroStatus) macroStatus.textContent = deps.macroAvailable ? '필요한 위치에 각 매크로를 한 번씩 넣으세요.' : '이 SillyTavern 버전에서는 사용자 매크로를 등록할 수 없습니다.';
-    const eventChance = deps.document.getElementById('sr-event-chance');
-    if (eventChance) eventChance.disabled = prefs.progressionMode === 'off';
-    const progression = deps.document.getElementById('sr-progression-mode');
-    if (progression) progression.disabled = false;
-    const eventChanceNote = deps.document.getElementById('sr-event-chance-note');
-    if (eventChanceNote) eventChanceNote.textContent = prefs.progressionMode === 'off' ? '일반 RP 진행을 켜면 일반 새 사건 추첨에 사용됩니다.' : '일반 새 사건 후보에만 적용됩니다. 고급 사건은 고급 전개 개방도를 사용하며, 같은 장면 기회에서 중복 추첨하지 않습니다.';
     const advancedNote = deps.document.getElementById('sr-basic-progression-note');
-    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled ? '일반 진행도 계속 사용합니다. 고급 전개는 선택한 세계관의 요소를 필요할 때 더합니다.' : '사건이 움직이는 방식만 정합니다. 프리셋의 장르·세계관·문체·분위기는 그대로 유지됩니다.';
+    if (advancedNote) advancedNote.textContent = prefs.advancedEnabled
+        ? '고급 이벤트와 기본 전개 성향이 함께 작동합니다. 서술의 속도와 호흡은 메인 프롬프트에 명시된 지침을 따릅니다.'
+        : '새 이벤트는 고급 전개에서 설정합니다. 글의 속도·호흡은 프리셋을 따릅니다.';
     const advancedResults = deps.document.getElementById('sr-advanced-results');
     if (advancedResults) advancedResults.hidden = !prefs.advancedEnabled;
     renderWorldControls();
@@ -86,11 +84,9 @@ function renderWorldControls() {
 function showWorldEditor(world = null) {
     const listView = deps.document.getElementById('sr-world-list-view');
     const editor = deps.document.getElementById('sr-world-editor');
-    const importPanel = deps.document.getElementById('sr-world-import-panel');
     if (!listView || !editor) return;
     listView.hidden = true;
     editor.hidden = false;
-    if (importPanel) importPanel.hidden = true;
     deps.document.getElementById('sr-world-edit-id').value = world?.id || '';
     deps.document.getElementById('sr-world-edit-name').value = world?.name || '';
     deps.document.getElementById('sr-world-edit-hint').value = world?.hint || '';
@@ -102,10 +98,8 @@ function showWorldEditor(world = null) {
 function showWorldList() {
     const listView = deps.document.getElementById('sr-world-list-view');
     const editor = deps.document.getElementById('sr-world-editor');
-    const importPanel = deps.document.getElementById('sr-world-import-panel');
     if (listView) listView.hidden = false;
     if (editor) editor.hidden = true;
-    if (importPanel) importPanel.hidden = true;
     renderWorldControls();
 }
 
@@ -116,6 +110,9 @@ function characterEntries(kind) {
 
 function showCharacterEditor(kind, entry = null) {
     characterEditorRevision++;
+    loreRequest++;
+    editorLore = structuredClone(entry?.selectedLore || []);
+    renderEditorLore();
     deps.characterEditorKind = kind;
     deps.characterEditorId = entry?.id || '';
     const editor = deps.document.getElementById('sr-character-editor');
@@ -143,14 +140,49 @@ function showCharacterEditor(kind, entry = null) {
 
 function closeCharacterEditor() {
     characterEditorRevision++;
+    loreRequest++;
     deps.characterEditorKind = '';
     deps.characterEditorId = '';
     const editor = deps.document.getElementById('sr-character-editor');
     if (editor) editor.hidden = true;
 }
 
+function renderEditorLore() {
+    const select = deps.document.getElementById('sr-character-lore-book');
+    const world = deps.worldInfoModule;
+    const names = [...new Set([...(world?.world_names || []), ...deps.linkedCharacterBooks(deps.getContext(), world?.world_info), ...editorLore.map(item=>item.book)])];
+    if (select) select.innerHTML = '<option value="">로어북 선택</option>' + names.map(name=>`<option value="${deps.escapeHtml(name)}">${deps.escapeHtml(name)}</option>`).join('');
+    renderSelectedLore();
+    const candidates = deps.document.getElementById('sr-character-lore-options');
+    if (candidates) candidates.innerHTML = '';
+}
+function renderSelectedLore() {
+    const chosen = deps.document.getElementById('sr-character-lore-selected');
+    if (chosen) chosen.innerHTML = editorLore.map((item,index)=>`<div class="sr-lore-selected"><span>${deps.escapeHtml(item.book)} · ${deps.escapeHtml(item.title)}</span><button type="button" class="menu_button" data-lore-remove="${index}">제외</button></div>`).join('') || '<p class="sr-help">선택한 로어북 항목 없음</p>';
+}
+async function loadEditorLore() {
+    const request = ++loreRequest;
+    const root=deps.document.getElementById('sr-character-lore-options');
+    if (root) root.innerHTML='';
+    const book = deps.document.getElementById('sr-character-lore-book')?.value;
+    if (!book || !deps.worldInfoModule?.loadWorldInfo) return;
+    const revision=characterEditorRevision;
+    const data=await deps.worldInfoModule.loadWorldInfo(book);
+    if (request!==loreRequest || revision!==characterEditorRevision || deps.document.getElementById('sr-character-lore-book')?.value!==book) return;
+    const rows=Object.entries(data?.entries || {}).filter(([,entry])=>typeof entry?.content==='string' && entry.content.trim());
+    root.innerHTML=rows.map(([id,entry],index)=>`<label class="checkbox_label"><input type="checkbox" data-lore-pick="${index}" ${editorLore.some(item=>item.book===book && item.uid===id)?'checked':''}><span>${deps.escapeHtml(entry.comment || (entry.key || []).join(', ') || id)}${entry.disable?' · 비활성':''}</span></label>`).join('') || '<p class="sr-help">원문 항목 없음</p>';
+    root.onchange=event=>{
+        const index=event.target.dataset.lorePick;
+        if(index===undefined || request!==loreRequest) return;
+        const [id,entry]=rows[Number(index)];
+        editorLore=editorLore.filter(item=>!(item.book===book && item.uid===id));
+        if(event.target.checked) editorLore.push({book,uid:id,title:entry.comment || (entry.key || []).join(', ') || id,content:entry.content});
+        renderSelectedLore();
+    };
+}
 function characterForm() {
     return { kind: deps.characterEditorKind,
+        selectedLore: structuredClone(editorLore),
         name: String(deps.document.getElementById('sr-character-name')?.value || '').trim(),
         source: String(deps.document.getElementById('sr-character-source')?.value || '').trim(),
         aliases: String(deps.document.getElementById('sr-character-aliases')?.value || '').split(',').map(v => v.trim()).filter(Boolean),
@@ -202,7 +234,7 @@ async function analyzeAndSaveCharacter() {
     if (!targetId) { taskStatus('시트를 먼저 저장하세요.', true); throw new Error('시트를 먼저 저장하세요.'); }
     const chatKey = deps.stateChatKey();
     const original = characterEntries(kind).find((item) => item.id === targetId);
-    if (!original?.source?.trim()) { taskStatus('판독할 시트 원문이 없습니다.', true); throw new Error('판독할 시트 원문이 없습니다.'); }
+    if (!original?.source?.trim() && !original?.selectedLore?.length) { taskStatus('판독할 원문이 없습니다.', true); throw new Error('판독할 원문이 없습니다.'); }
     if (!deps.settings.reasonerProfileId) { taskStatus('설정에서 시트 분석용 연결 프로필을 선택하세요.', true); throw new Error('설정에서 시트 분석에 사용할 연결 프로필을 선택하세요.'); }
     const originalHash = original ? deps.stableFingerprint(original) : '';
     const job = deps.jobs.begin(`sheet:${kind}:${targetId || 'new'}`);
@@ -215,14 +247,17 @@ async function analyzeAndSaveCharacter() {
     };
     try {
     const { name, source } = characterForm();
+    if (JSON.stringify(editorLore) !== JSON.stringify(original.selectedLore || [])) throw new Error('수정한 로어북 선택을 먼저 저장하세요.');
     if (source !== original.source || name !== original.name || characterForm().sourceVisibleToMain !== original.sourceVisibleToMain || characterForm().aliases.join('|') !== (original.aliases || []).join('|') || (kind === 'npc' && characterForm().npcRole !== (original.npcRole || (original.antagonist ? 'villain' : 'mixed')))) throw new Error('수정한 시트를 먼저 저장하세요.');
     taskStatus('연결 모델이 인물 시트를 해석하고 있습니다…');
     deps.updateActivity(`${name} 인물 시트 해석 중…`, { owner: activityOwner });
     await deps.loadReasonerProfiles(); job.assert();
-    const extraction = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.PROFILE_SYSTEM,
-        { kind, name, sheet: source }, { maxTokens: 2200 });
+    const compilation = compilerRequest(original);
+    const extraction = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, compilation.prompt,
+        { task: 'Compile the supplied sources using the system contract.' }, { maxTokens: 12000 });
     assertEditor();
-    const prepared = deps.prepareProfileItems(extraction.result);
+    const analysisId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+    const recordBank = createRecordBank(extraction.result, original, analysisId);
     let coreEnglish = kind === 'npc' && !original.sourceVisibleToMain ? deps.deriveEnglishCore(source, name) : '';
     if (kind === 'npc' && !original.sourceVisibleToMain && !coreEnglish) {
         const coreResult = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, deps.NPC_CORE_SYSTEM,
@@ -230,16 +265,16 @@ async function analyzeAndSaveCharacter() {
         assertEditor();
         coreEnglish = deps.parseNpcCore(coreResult.result, name);
     }
-    taskStatus(`시트 해석 완료 · 영어 규칙 ${prepared.items.length}개`);
+    taskStatus(`시트 해석 완료 · 인물 기록 ${recordBank.records.length}개`);
     deps.updateActivity(`${name} · 규칙 저장 중…`, { owner: activityOwner });
     const sourceHash = await deps.sha256Hex(source);
-    const analysisId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
     assertEditor();
     const currentEntry = characterEntries(kind).find((item) => item.id === targetId);
     if (targetId && (!currentEntry || deps.stableFingerprint(currentEntry) !== originalHash)) throw new deps.StaleRunError();
     if (deps.characterEditorKind === kind && deps.characterEditorId === targetId && String(deps.document.getElementById('sr-character-source')?.value || '').trim() !== source) throw new deps.StaleRunError();
-    const profile = deps.createProfile(prepared.items, { characterId: targetId, sourceHash, source, analysisId, rejected: prepared.rejected });
-    const entry = { ...original, profile, coreEnglish, sourceHash, updatedAt: new Date().toISOString() };
+    const entry = { ...original, recordBank, coreEnglish, sourceHash, updatedAt: new Date().toISOString() };
+    // Preserve the old profile for recovery only; it is never converted into records.
+    if (entry.profile) { entry.legacyProfile = entry.profile; delete entry.profile; }
     const next = deps.normalizeCharacterStore(deps.characterStore);
     if (kind === 'persona') next.persona = entry;
     else {
@@ -451,7 +486,7 @@ function bindForm() {
         await deps.copyText(preview.value);
         deps.window.toastr?.success?.('검토한 판정 기록을 복사했습니다.', '씬판독기');
     })(), '판정 기록을 복사하지 못했습니다.'));
-    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) deps.document.getElementById(id)?.addEventListener('change', event => deps.runUiTask(savePreference(key,event.target.checked)));
+    for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) deps.document.getElementById(id)?.addEventListener('change', event => { if (MEMORY_REFERENCE_ENABLED && deps.ownerUnlocked()) deps.runUiTask(savePreference(key,event.target.checked)); });
 
     deps.document.getElementById('sr-close')?.addEventListener('click', () => deps.dialog.close());
     deps.document.getElementById('sr-copy-debug')?.addEventListener('click', () => deps.runUiTask((async () => {
@@ -485,9 +520,9 @@ function bindForm() {
         const pendingUserText = String(deps.document.getElementById('send_textarea')?.value || '').trim();
         void deps.runJudge({ force: true, pendingUserText }).catch(() => {});
     });
+    deps.document.getElementById('sr-development-style')?.addEventListener('change', (event) => deps.runUiTask(savePreference('developmentStyle', event.target.value)));
     deps.document.getElementById('sr-world-direction')?.addEventListener('change', (event) => deps.runUiTask(savePreference('worldDirection', event.target.value)));
     deps.document.getElementById('sr-relationship-direction')?.addEventListener('change', (event) => deps.runUiTask(savePreference('relationshipDirection', event.target.value)));
-    deps.document.getElementById('sr-progression-mode')?.addEventListener('change', (event) => deps.runUiTask(savePreference('progressionMode', event.target.value)));
     deps.document.getElementById('sr-world-profile')?.addEventListener('change', (event) => deps.runUiTask(savePreference('selectedWorldId', event.target.value)));
     deps.document.getElementById('sr-advanced-enabled')?.addEventListener('change', (event) => deps.runUiTask(savePreference('advancedEnabled', event.target.checked).then(setFormValues)));
     deps.document.getElementById('sr-advanced-style')?.addEventListener('change', (event) => deps.runUiTask(savePreference('advancedStyle', event.target.value)));
@@ -496,12 +531,10 @@ function bindForm() {
         if (!selected.length) { deps.document.getElementById(`sr-advanced-${key}`).checked = true; return; }
         deps.runUiTask(savePreference('advancedElements', selected));
     });
-    deps.document.getElementById('sr-judgment-style')?.addEventListener('change', (event) => deps.runUiTask(savePreference('judgmentStyle', event.target.value)));
     deps.document.getElementById('sr-injection-mode')?.addEventListener('change', (event) => deps.runUiTask(saveInjectionMode(event.target.value)));
     deps.document.getElementById('sr-world-injection-mode')?.addEventListener('change', (event) => deps.runUiTask(saveWorldInjectionMode(event.target.value)));
     deps.document.getElementById('sr-relationship-pace')?.addEventListener('change', (event) => deps.runUiTask(savePreference('relationshipPace', event.target.value)));
     deps.document.getElementById('sr-resolution-pace')?.addEventListener('change', (event) => deps.runUiTask(savePreference('resolutionPace', event.target.value)));
-    deps.document.getElementById('sr-roleplay-pace')?.addEventListener('change', (event) => deps.runUiTask(savePreference('roleplayPace', event.target.value)));
     for (const [id, key] of [['sr-negative-priority', 'negativePriority'], ['sr-fight-sustain', 'fightSustain'], ['sr-social-enabled', 'socialEnabled'], ['sr-world-hostility', 'worldHostility'], ['sr-npc-user', 'npcToUser'], ['sr-user-misfortune', 'userMisfortune']]) {
         deps.document.getElementById(id)?.addEventListener('change', (event) => deps.runUiTask(savePreference(key, event.target.checked)));
     }
@@ -550,7 +583,6 @@ function bindForm() {
         if (!event.target.checked) { const rec = deps.record(true); rec.villainProfile = null; rec.lastVillainRoll = null; await deps.persistChat(); deps.renderProfiles(); }
     })()));
     deps.document.getElementById('sr-appearance-chance')?.addEventListener('change', (event) => deps.runUiTask(savePreference('appearanceChance', Number(event.target.value) || 10)));
-    deps.document.getElementById('sr-event-chance')?.addEventListener('change', (event) => deps.runUiTask(savePreference('eventChance', Number(event.target.value) || 35)));
     deps.document.getElementById('sr-enabled')?.addEventListener('change', (event) => deps.runUiTask((async () => {
         await saveGlobal('enabled', event.target.checked);
         if (!event.target.checked) {
@@ -572,6 +604,13 @@ function bindForm() {
         deps.window.toastr?.info?.(deps.debugInjectionArmed ? '다음 OOC-only 응답에 직전 주입문을 한 번 유지합니다.' : '검사용 OOC 대기를 취소했습니다.', '씬판독기', { timeOut: 1800 });
     });
     deps.document.getElementById('sr-recent-turns')?.addEventListener('change', (event) => deps.runUiTask(saveGlobal('recentTurns', Math.max(1, Math.min(5, Number(event.target.value) || 3)))));
+    deps.document.getElementById('sr-progress-intensity')?.addEventListener('change', event => {
+        const parsed = Number(event.target.value);
+        const value = Number.isFinite(parsed) && parsed > 0 ? Math.round(Math.max(0.5, Math.min(1.5, parsed)) * 10) / 10 : 1;
+        event.target.value = value.toFixed(1);
+        deps.runUiTask(savePreference('progressIntensity', value).then(setFormValues));
+    });
+    deps.document.getElementById('sr-progress-intensity-reset')?.addEventListener('click', () => deps.runUiTask(savePreference('progressIntensity', 1).then(setFormValues)));
     deps.document.getElementById('sr-confidence')?.addEventListener('change', (event) => { deps.runUiTask(saveGlobal('showConfidence', event.target.checked).then(deps.renderJudgment)); });
     deps.document.getElementById('sr-jev-save')?.addEventListener('click', async () => {
         const input = deps.document.getElementById('sr-jev-key');
@@ -650,13 +689,6 @@ function bindForm() {
     });
     deps.document.getElementById('sr-world-new')?.addEventListener('click', () => showWorldEditor());
     deps.document.getElementById('sr-world-cancel')?.addEventListener('click', showWorldList);
-    deps.document.getElementById('sr-world-import-open')?.addEventListener('click', () => {
-        deps.document.getElementById('sr-world-list-view').hidden = true;
-        deps.document.getElementById('sr-world-editor').hidden = true;
-        deps.document.getElementById('sr-world-import-panel').hidden = false;
-        deps.document.getElementById('sr-world-import-json').value = '';
-    });
-    deps.document.getElementById('sr-world-import-cancel')?.addEventListener('click', showWorldList);
     deps.document.getElementById('sr-world-save')?.addEventListener('click', () => deps.runUiTask((async () => {
         const name = String(deps.document.getElementById('sr-world-edit-name')?.value || '').trim();
         const hint = String(deps.document.getElementById('sr-world-edit-hint')?.value || '').trim();
@@ -685,30 +717,6 @@ function bindForm() {
         showWorldList();
         deps.window.toastr?.success?.('커스텀 세계관을 삭제했습니다.', '씬판독기');
     })(), '커스텀 세계관을 삭제하지 못했습니다.'));
-    deps.document.getElementById('sr-world-export')?.addEventListener('click', async () => {
-        try { await deps.copyText(JSON.stringify(deps.loadCustomWorlds(), null, 2)); deps.window.toastr?.success?.('저장 세계관 JSON을 복사했습니다.', '씬판독기'); } catch { deps.window.toastr?.error?.('복사하지 못했습니다.', '씬판독기'); }
-    });
-    deps.document.getElementById('sr-world-import')?.addEventListener('click', () => deps.runUiTask((async () => {
-        try {
-            const parsed = JSON.parse(String(deps.document.getElementById('sr-world-import-json')?.value || ''));
-            if (!Array.isArray(parsed) || parsed.some((item) => !item?.name || !item?.prompt)) throw new Error();
-            const imported = parsed.map((item, index) => ({
-                id: String(item.id || `custom-${Date.now()}-${index}`),
-                name: String(item.name),
-                hint: String(item.hint || deps.makeWorldHint(item.name, item.prompt)),
-                prompt: String(item.prompt),
-                ...(Object.hasOwn(item, 'franchise') ? { franchise: Boolean(item.franchise) } : {}),
-            }));
-            if (!deps.saveCustomWorlds(imported)) throw new Error('storage');
-            await deps.saveServerSettings();
-            invalidatePreparedJudgment(); await deps.persistChat();
-            await deps.applyStoredInjection();
-            showWorldList(); deps.window.toastr?.success?.('세계관 목록을 가져왔습니다.', '씬판독기');
-        } catch (error) {
-            if (error instanceof deps.SyntaxError || error?.message === 'storage') { deps.window.toastr?.error?.('가져오기 JSON 형식을 확인하세요.', '씬판독기'); return; }
-            throw error;
-        }
-    })(), '세계관 목록을 가져오지 못했습니다.'));
     deps.document.getElementById('sr-reset-npc')?.addEventListener('click', () => deps.runUiTask((async () => {
         deps.invalidateReasonerJobs();
         const rec = structuredClone(deps.record(true));
@@ -794,6 +802,12 @@ function bindForm() {
     deps.document.getElementById('sr-character-editor-cancel')?.addEventListener('click', closeCharacterEditor);
     deps.document.getElementById('sr-character-save')?.addEventListener('click', () => deps.runUiTask(saveCharacterEntry(), '시트를 저장하지 못했습니다.'));
     deps.document.getElementById('sr-character-analyze')?.addEventListener('click', () => deps.runUiTask(analyzeAndSaveCharacter(), '인물 판정을 완료하지 못했습니다.'));
+    deps.document.getElementById('sr-character-lore-book')?.addEventListener('change', () => deps.runUiTask(loadEditorLore()));
+    deps.document.getElementById('sr-character-lore-selected')?.addEventListener('click', event => {
+        const button=event.target.closest('[data-lore-remove]');
+        if (!button) return;
+        editorLore.splice(Number(button.dataset.loreRemove),1); renderEditorLore();
+    });
     deps.document.getElementById('sr-character-delete')?.addEventListener('click', () => deps.runUiTask(deleteCharacterEntry(), '인물 시트를 삭제하지 못했습니다.'));
     deps.dialog.addEventListener('click', (event) => {
         const view = event.target.closest('[data-character-view-id]');

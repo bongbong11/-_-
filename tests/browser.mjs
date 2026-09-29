@@ -1,10 +1,11 @@
+import { createRecordBank } from '../src/characters/records.js';
+import { prepareProfileItems, createProfile } from './fixtures/legacy-profiles.mjs';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { prepareProfileItems, createProfile } from '../character-library.js';
 const require=createRequire(import.meta.url);
 const { chromium }=require('playwright');
 const root=path.resolve(import.meta.dirname,'..');
@@ -13,7 +14,9 @@ const wadeSource='Name: Wade\nRole: Businessman.\nHe controls his son.';
 const wadeHash=createHash('sha256').update(wadeSource).digest('hex');
 const wadeItem=prepareProfileItems({items:[{id:'c1',kind:'relationship',topic:'family_decisions',target:'son',rule:'Wade tends to control his son on family matters.'}]}).items;
 const wadeProfile=createProfile(wadeItem,{characterId:'wade',sourceHash:wadeHash,source:wadeSource,analysisId:'browser'});
-const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:null,history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true}],npcs:[{id:'wade',name:'Wade',source:wadeSource,sourceHash:wadeHash,sourceVisibleToMain:false,profile:wadeProfile}]}};
+const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:{preferences:{charmMemory:true,lorebookMemory:true}},history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true}],npcs:[{id:'wade',name:'Wade',source:wadeSource,sourceHash:wadeHash,sourceVisibleToMain:false,profile:wadeProfile}]}};
+const wadeEntry={...store.characters.npcs[0],kind:'npc',npcRole:'mixed'};
+store.characters.npcs[0]={...wadeEntry,recordBank:createRecordBank({entity_type:'npc',entity_name:'Wade',records:[{type:'relationship',target:'son',when:['family matters'],rule:'Wade tends to control his son on family matters.',modality:'tendency',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]},wadeEntry,'browser-records')};
 const requests=[];
 const host=`<!doctype html><html><meta charset="utf-8"><style>:root{--SmartThemeBodyColor:#eee;--SmartThemeBlurTintColor:#25252b;--SmartThemeBorderColor:#666;--SmartThemeQuoteColor:#9cbfff}body{margin:0;background:#202025;color:var(--SmartThemeBodyColor);font:16px Arial}button,input,select,textarea{box-sizing:border-box;font:inherit}button{cursor:pointer}select,input,textarea{color:inherit;background:var(--SmartThemeBlurTintColor)}.menu_button{border:1px solid var(--SmartThemeBorderColor);border-radius:5px;padding:7px}.text_pole{width:100%;border:1px solid #666;padding:6px}.checkbox_label{display:flex;align-items:center;gap:6px}.checkbox_label input{width:auto}</style><link rel="stylesheet" href="${prefix}style.css"><div id="extensionsMenu"></div><div id="leftSendForm"><button id="extensionsMenuButton">wand</button></div><textarea id="send_textarea"></textarea><script>
 const listeners=new Map(), prompts={},macros={};
@@ -29,7 +32,7 @@ const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}}`);return;}
     if(req.url==='/scripts/extensions.js'){res.setHeader('Content-Type','application/javascript');res.end('export const extension_settings={};');return;}
     if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){return window.mock.worldBooks[name]||null}");return;}
-    if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
+    if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('You are a source-grounded character retrieval compiler.')) { const name=prompt.split('ENTITY_NAME: ')[1].split('\\n')[0]; return {content:JSON.stringify({entity_type:'npc',entity_name:name,records:[{type:'knowledge',target:'',when:['office procedure'],rule:name+' knows office procedures.',modality:'fact',basis:'explicit',source_ids:['S001'],knowledge_domain:'professional',knowledge_state:'knows'},{type:'fact',target:'',when:['council meeting'],rule:'The council meets tomorrow.',modality:'fact',basis:'explicit',source_ids:['S002'],knowledge_domain:'none',knowledge_state:'none'}]})}; } if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
     if(req.url.startsWith('/api/plugins/scene-reader-jev/')){
         let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):{};requests.push({url:req.url,body});
         res.setHeader('Content-Type','application/json');let result={ok:true};
@@ -60,6 +63,10 @@ try{
         for(const tab of ['flow','advanced','conflict','characters']){
             await page.locator(`[data-sr-tab="${tab}"]`).click();
             assert.equal(await page.locator('#scene-reader-dialog').evaluate(e=>e.scrollWidth>e.clientWidth+2),false,`${width}/${tab}: overflow`);
+            if ([390,1280].includes(width) && ['flow','advanced'].includes(tab)) {
+                await mkdir(path.join(root,'artifacts'),{recursive:true});
+                await page.screenshot({path:path.join(root,'artifacts',`release-${width}-${tab}.png`)});
+            }
             const bad=await page.locator(`#sr-tab-${tab} button:visible`).evaluateAll(buttons=>buttons.filter(e=>e.clientWidth<28).map(e=>e.textContent));assert.equal(bad.length,0,`${width}/${tab}: narrow buttons`);
         }
     }
@@ -79,7 +86,7 @@ try{
     await page.locator('#sr-character-save').click();
     assert.ok(store.characters.npcs.some(entry=>entry.name==='Rosa Valentine' && entry.npcRole==='villain' && entry.antagonist),'changing the role updates the same registered NPC');
     assert.equal(await page.evaluate(()=>mock.chat.length),0,'manual NPC sheet editing does not add a chat message');
-    await page.locator('#sr-settings-button').click();await page.locator('#sr-memory-charm').check();await page.locator('#sr-memory-lorebook').check();
+    await page.locator('#sr-settings-button').click();assert.equal(await page.locator('#sr-memory-charm').isDisabled(),true);assert.equal(await page.locator('#sr-memory-lorebook').isDisabled(),true);assert.equal(await page.locator('#sr-memory-reserved').evaluate(e=>e.open),false);assert.ok(await page.locator('#sr-memory-reserved').evaluate(e=>e.parentElement.closest('details').textContent.includes('제작자 모드')));
     await page.locator('#sr-reasoner-profile').selectOption('test-profile');
     await page.locator('#sr-continuity-enabled').check();
     await page.locator('[data-sr-tab="flow"]').click();
@@ -88,14 +95,46 @@ try{
     await page.locator('#sr-settings-button').click();
     await page.locator('#sr-continuity-enabled').uncheck();
     await page.locator('[data-sr-tab="characters"]').click();
+    const beforeCompilation=requests.filter(r=>r.url.endsWith('/systemone')).length;
+    const rosa=store.characters.npcs.find(entry=>entry.name==='Rosa Valentine');
+    await page.locator('[data-character-view-id="'+rosa.id+'"]').click();
+    await page.locator('#sr-character-analysis-result [data-character-edit-id]').click();
+    await page.locator('.sr-lore-editor summary').click();
+    await page.locator('#sr-character-lore-book').selectOption('Hunter Lore');
+    await page.locator('[data-lore-pick="0"]').check();
+    await page.locator('#sr-character-save').click();
+    await page.waitForFunction(()=>document.getElementById('sr-character-task-status').textContent.includes('판독 필요'));
+    assert.equal(store.characters.npcs.find(entry=>entry.id===rosa.id).selectedLore.length,1);
+    // Saving the editor must not leave the existing lore picker with a stale handler.
+    await page.locator('[data-lore-pick="1"]').check();
+    assert.equal(await page.locator('.sr-lore-selected').count(),2);
+    await page.locator('[data-lore-pick="1"]').uncheck();
+    assert.equal(await page.locator('.sr-lore-selected').count(),1);
+    await page.locator('#sr-character-analyze').click();
+    await page.locator('#sr-character-analysis-result').getByText('Rosa Valentine knows office procedures.',{exact:true}).waitFor();
+    assert.equal(requests.filter(r=>r.url.endsWith('/systemone')).length,beforeCompilation,'static compile never calls Jev');
+    assert.equal(store.characters.npcs.find(entry=>entry.id===rosa.id).recordBank.records.length,2);
+    assert.equal(await page.locator('.sr-tabs [data-sr-tab]').count(),4,'no additional tabs');
+    await page.locator('.sr-record-card details summary').first().click();
+    await page.locator('.sr-record-source').first().waitFor();
+    for(const width of [320,390,768,1280]) {
+        await page.setViewportSize({width,height:850});
+        assert.equal(await page.locator('#scene-reader-dialog').evaluate(e=>e.scrollWidth>e.clientWidth+2),false,'retrieval UI overflow at '+width);
+        if(width<=600) assert.equal(await page.locator('.sr-character-analysis-browser').evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1,'mobile records use one column');
+    }
+    await mkdir(path.join(root,'artifacts'),{recursive:true});
+    await page.screenshot({path:path.join(root,'artifacts','retrieval-desktop.png')});
+    await page.setViewportSize({width:390,height:850});
+    await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();
+    await page.screenshot({path:path.join(root,'artifacts','retrieval-mobile.png')});
     await page.locator('#sr-npc-read-names').click();
     await page.locator('[data-npc-candidate="0"]').check();
     await page.locator('#sr-npc-add-selected').click();
     assert.ok(store.characters.npcs.some(entry=>entry.name==='Sawyer Valentine' && entry.source===''),'NPC name reading registers only the chosen name');
     await page.locator('[data-sr-tab="flow"]').click();
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door.'});await mock.emit('MESSAGE_SENT',0);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
-    assert.ok(requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Lore:1')),'linked character lore must reach Jev');
-    assert.ok(requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Extra:3')),'auxiliary character lore must reach Jev');
+    assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.length),'reserved memory must not reach Jev even with old enabled settings');
+    assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Extra:3')),'reserved auxiliary lore stays off');
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Lore:2')),'irrelevant lore must not reach Jev');
     assert.ok(await page.evaluate(()=>mock.prompts['scene-reader-router']?.length>0),'prompt slot receives injection');
     await page.context().grantPermissions(['clipboard-read','clipboard-write']);
@@ -113,7 +152,7 @@ try{
     await page.locator('#sr-settings-button').click();await page.locator('#sr-injection-mode').selectOption('macro');
     const beforeMacro=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door again.'});await mock.emit('MESSAGE_SENT',3);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
-    assert.ok(requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeMacro).some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Lore:1')),'character lore reaches Jev in macro mode');
+    assert.ok(!requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeMacro).some(r=>r.body.state?.memory_reference?.entries?.length),'reserved memory stays off in macro mode');
     const beforeLoreEdit=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.evaluate(async()=>{
         mock.worldBooks['Hunter Lore'].entries[1].content='The door now needs a brass key.';
@@ -121,18 +160,18 @@ try{
         await mock.emit('GENERATION_AFTER_COMMANDS','swipe',{},false);
     });
     const afterLoreEdit=requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeLoreEdit);
-    assert.ok(afterLoreEdit.some(r=>r.body.state?.memory_reference?.entries.some(e=>e.text.includes('brass key'))),'changed linked book forces fresh judgment on swipe');
+    assert.ok(!afterLoreEdit.some(r=>r.body.state?.memory_reference?.entries?.length),'lore edit does not activate reserved memory');
     assert.ok(!(await page.evaluate(()=>Object.values(mock.prompts).join(' '))).includes('The door now needs a brass key.'),'raw lore is not reinjected');
-    await page.locator('#sr-settings-button').click();await page.locator('#sr-memory-lorebook').uncheck();
-    await page.waitForFunction(()=>document.getElementById('sr-memory-status').textContent.includes('로어북: 사용 안 함'));
+    await page.locator('#sr-settings-button').click();assert.equal(await page.locator('#sr-memory-lorebook').isDisabled(),true);
+    await page.waitForFunction(()=>document.getElementById('sr-memory-status').textContent.includes('준비 중'));
     const beforeCharm=requests.filter(r=>r.url.endsWith('/systemone')).length;
-    await page.evaluate(async()=>{window.__charmBridge={getStoryContext:()=> 'An earlier promise remains open.'};mock.chat.push({is_user:true,mes:'Ask about the promise.'});await mock.emit('MESSAGE_SENT',4);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    await page.evaluate(async()=>{window.__charmBridge={getStoryContext:()=> {throw new Error('reserved bridge must not be called')}};mock.chat.push({is_user:true,mes:'Ask about the promise.'});await mock.emit('MESSAGE_SENT',4);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     const charmRequest=requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeCharm).find(r=>r.body.state?.memory_reference);
-    assert.ok(charmRequest?.body.state.memory_reference.entries.some(e=>e.sourceKind==='charm'),'Charm remains available when character lore is off');
+    assert.ok(!charmRequest?.body.state.memory_reference.entries.some(e=>e.sourceKind==='charm'),'reserved Charm bridge stays off');
     assert.ok(!charmRequest?.body.state.memory_reference.entries.some(e=>e.sourceKind==='lorebook'),'disabled character lore is not sent');
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Wade enters the room.'});await mock.emit('MESSAGE_SENT',5);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.ok(requests.some(r=>r.body.state?.character_profiles?.people?.some(person=>person.name==='Wade' && person.profileCandidates.length)),'stored Wade rules reach live Jev selection');
-    assert.match(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Wade: Wade tends to control his son on family matters\./,'the selected rule reaches the final injection');
+    assert.match(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Wade[^\n]*Wade tends to control his son on family matters\./,'the selected rule reaches the final injection');
     await mkdir(path.join(root,'artifacts'),{recursive:true});await page.locator('[data-sr-tab="characters"]').click();await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(root,'artifacts','mobile-characters.png')});
     await page.evaluate(()=>{document.documentElement.style.setProperty('--SmartThemeBodyColor','#202020');document.documentElement.style.setProperty('--SmartThemeBlurTintColor','#f5f5f7');});await page.screenshot({path:path.join(root,'artifacts','mobile-light.png')});
     await page.locator('#sr-npc-sheet-new').evaluate(e=>e.closest('details').open=true);
@@ -146,16 +185,54 @@ try{
     await page.locator('#sr-character-analysis-result [data-character-edit-id]').click();await page.locator('#sr-character-delete').click();
     await page.locator('#sr-character-editor').waitFor({state:'hidden'});
     assert.equal(store.characters.npcs.some(p=>p.name==='Mara'),false);
+    await page.locator('[data-sr-tab="flow"]').click();
+    for (const id of ['sr-roleplay-pace','sr-event-chance','sr-progression-mode','sr-judgment-style','sr-world-export','sr-world-import-open','sr-world-import-panel']) assert.equal(await page.locator('#'+id).count(),0,`${id} removed`);
+    for (const value of ['static','dynamic','balanced']) {
+        await page.locator('#sr-development-style').selectOption(value);
+        await page.waitForFunction(value=>document.getElementById('sr-development-style').value===value,value);
+        await page.locator('[data-sr-tab="advanced"]').click();await page.locator('[data-sr-tab="flow"]').click();
+        assert.equal(await page.locator('#sr-development-style').inputValue(),value);
+        assert.equal(store.chat.preferences.developmentStyle,value);
+    }
+    for (const [id,key,value] of [['sr-relationship-pace','relationshipPace','slow'],['sr-resolution-pace','resolutionPace','fast'],['sr-appearance-chance','appearanceChance','35']]) {
+        await page.locator('#'+id).selectOption(value);
+        await page.locator('[data-sr-tab="advanced"]').click();await page.locator('[data-sr-tab="flow"]').click();
+        assert.equal(String(store.chat.preferences[key]),value);
+        assert.equal(await page.locator('#'+id).inputValue(),value);
+    }
+    await page.locator('[data-sr-tab="advanced"]').click();
+    await page.locator('#sr-advanced-style').selectOption('active');
+    await page.locator('[data-sr-tab="flow"]').click();await page.locator('[data-sr-tab="advanced"]').click();
+    assert.equal(store.chat.preferences.advancedStyle,'active');
+    assert.equal(await page.locator('#sr-advanced-style').inputValue(),'active');
     await page.locator('[data-sr-tab="advanced"]').click();await page.locator('#sr-world-new').evaluate(e=>e.closest('details').open=true);await page.locator('#sr-world-new').click();
     await page.locator('#sr-world-edit-name').fill('Garden world');await page.locator('#sr-world-edit-prompt').fill('An ordinary garden with no supernatural powers.');await page.locator('#sr-world-save').click();
     await page.locator('#sr-world-editor').waitFor({state:'hidden'});assert.ok(store.settings.worlds.some(w=>w.name==='Garden world'));
+    await page.locator('#sr-world-manager-list button').filter({hasText:'Garden world'}).click();
+    await page.locator('#sr-world-edit-prompt').fill('A quiet garden by the river.');await page.locator('#sr-world-save').click();
+    await page.locator('#sr-world-editor').waitFor({state:'hidden'});
+    assert.equal(store.settings.worlds.find(w=>w.name==='Garden world').prompt,'A quiet garden by the river.');
     await page.locator('#sr-world-manager-list button').filter({hasText:'Garden world'}).click();await page.locator('#sr-world-delete').click();await page.locator('#sr-world-editor').waitFor({state:'hidden'});
     assert.equal(store.settings.worlds.some(w=>w.name==='Garden world'),false);
     await page.locator('#sr-settings-button').click();
+    assert.equal(await page.locator('#sr-progress-intensity').inputValue(),'1.0');
+    await page.locator('#sr-progress-intensity').focus();await page.keyboard.press('ArrowUp');await page.keyboard.press('Tab');
+    await page.waitForFunction(()=>document.getElementById('sr-progress-intensity').value==='1.1');
+    await page.locator('[data-sr-tab="flow"]').click();await page.locator('#sr-settings-button').click();
+    assert.equal(store.chat.preferences.progressIntensity,1.1);
+    assert.equal(await page.locator('#sr-progress-intensity').inputValue(),'1.1');
+    await page.locator('#sr-progress-intensity').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Tab');
+    await page.waitForFunction(()=>document.getElementById('sr-progress-intensity').value==='1.0');
+    await page.locator('#sr-progress-intensity').fill('1.3');await page.keyboard.press('Tab');
+    await page.locator('[data-sr-tab="flow"]').click();await page.locator('#sr-settings-button').click();
+    assert.equal(store.chat.preferences.progressIntensity,1.3);
+    await page.locator('#sr-progress-intensity-reset').click();
+    await page.waitForFunction(()=>document.getElementById('sr-progress-intensity').value==='1.0');
+    assert.equal(store.chat.preferences.progressIntensity,1);
     await page.locator('#sr-copy-macro').evaluate(e=>{const d=e.closest('details');if(d)d.open=true;});await page.locator('#sr-copy-macro').click();
     assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'{{scene-reader}}');
     await page.locator('#sr-close').click();
     await page.waitForFunction(()=>document.getElementById('toast-container')?.parentElement===document.body);
     assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>mock.errors),[]);
-    console.log('Browser passed: 4 viewport sizes × 4 tabs, controls, character details, linked primary/auxiliary lorebooks in depth and macro modes, prompt slot, OOC clearing, sheet/world save-delete, clipboard.');
+    console.log('Browser passed: 4 viewport sizes × 4 tabs, retrieval compile/save/source display with selected lore and no Jev call, controls, canonical live selection, OOC, save-delete, clipboard.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

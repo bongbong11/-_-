@@ -1,3 +1,4 @@
+import { prepareProfileItems, createProfile } from './tests/fixtures/legacy-profiles.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -10,7 +11,7 @@ import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvanced
 import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
 import { appendPendingUserMessage, buildInputKey, buildRecentContext, buildRecentTranscript, filterNonRpHistory, generationCycleSalt, latestUserMessageText, pendingComposerText, selectRecentMessages, splitOocText } from './runtime-utils.js';
 import { sha256Fallback, sha256Hex } from './security-utils.js';
-import { buildCharacterInjection, buildCharacterTurnQuestions, buildLiveCharacterPlan, resolveLiveCharacterPlan, prepareProfileItems, createProfile, currentProfileItems, profileStatus, chunkSheet, defaultCharacterStore, normalizeCharacterStore, selectActiveEntries, selectRelevantChunks } from './character-library.js';
+import { buildCharacterInjection, buildCharacterTurnQuestions, buildLiveCharacterPlan, resolveLiveCharacterPlan, currentProfileItems, profileStatus, chunkSheet, defaultCharacterStore, normalizeCharacterStore, selectActiveEntries, selectRelevantChunks } from './character-library.js';
 import { applyDecisionPolicy, buildVerificationQuestions, decisionPolicyKind, pendingPlanEffects, stableFingerprint, verificationSummary } from './decision-engine.js';
 import { commitObservedState, commitVerifiedPlan, updateProgressionPressure } from './state-engine.js';
 import { selectActionPlan, nextDeferredRoutes } from './action-coordinator.js';
@@ -37,11 +38,12 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.16.3');
+assert.equal(manifest.version, '0.17.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
-assert.match(source, /적극적은 현재 근거로 실행 가능한 행동 하나를 확실히 수행/);
+assert.match(source, /sr-development-style/);
+assert.doesNotMatch(source, /sr-world-(?:export|import)/);
 assert.match(library, /If a new-event route fails, an existing event, relationship pressure, current interaction, or prior action may still move/);
 assert.match(library, /A registered person being active does not prohibit another suitable NPC from entering/);
 assert.equal(pkg.main, 'server-plugin/index.cjs');
@@ -67,7 +69,7 @@ assert.doesNotMatch(source, /data-sr-tab="settings"/);
 assert.match(source, /관계 진전 속도/);
 assert.match(source, /사건 해결 속도/);
 assert.match(source, /공통 인물 등장 확률/);
-assert.match(source, /새 사건 발생 확률/);
+assert.match(source, /고급 이벤트 발생 확률/);
 assert.match(source, /부정 편향을 최우선으로 사용/);
 assert.match(source, /이번 턴 최종 적용/);
 assert.match(source, /현재 사건·인물 현황/);
@@ -131,7 +133,8 @@ assert.match(source, /event_types\.MESSAGE_DELETED/);
 assert.match(source, /runEventTask/);
 assert.match(source, /직전 저장 상태를 복원했습니다/);
 assert.doesNotMatch(source, /rec\.stateHistory/);
-assert.match(source, /id="sr-roleplay-pace"/);
+assert.doesNotMatch(source, /id="sr-roleplay-pace"/);
+assert.match(source, /id="sr-development-style"/);
 assert.match(source, /id="sr-owner-card"/);
 assert.match(source, /<details id="sr-owner-card"/);
 assert.match(source, /OWNER_PASSWORD_HASH/);
@@ -480,8 +483,8 @@ assert.match(continuingAdvancedQuestions.advanced_element.instructions, /stored 
 const storedAdvancedQuestions = buildQuestions({ preferences: { ...preferences, advancedEnabled: true, advancedElements: ['social'] }, hasVillain: false, hasNpc: false, hasEvent: true, eventSource: 'advanced' });
 assert.equal(storedAdvancedQuestions.event_route, undefined, 'a stored advanced event has one owner and no duplicate ordinary event route');
 assert.equal(storedAdvancedQuestions.primary_focus.criteria.new_event, undefined, 'a second central event is not offered while one is stored');
-assert.match(source, /progression\.disabled = false/);
-assert.match(source, /eventChance\.disabled = prefs\.progressionMode === 'off'/);
+assert.doesNotMatch(source, /id="sr-progression-mode"/);
+assert.doesNotMatch(source, /id="sr-event-chance"/);
 assert.doesNotMatch(source, /decisions\.advanced_route === 'create' && focus !== 'new_event'/, 'a direct primary must not erase an otherwise compatible advanced event candidate');
 assert.match(source, /진행 중인 사건의 기존 요소 유지/);
 assert.equal((source.match(/id="sr-world-profile"/g) || []).length, 1, 'active world selector must exist only once');
@@ -633,7 +636,7 @@ assert.equal(selectActiveEntries(characterStoreFixture,'Wade enters. Alice watch
 assert.ok(chunkSheet('a'.repeat(3000),1000).length>=3);
 assert.ok(selectRelevantChunks(characterStoreFixture.characters[0].source,'London',1).some(chunk=>/London/.test(chunk)));
 assert.equal(currentProfileItems(characterStoreFixture.npcs[0]).length,1);
-assert.equal(profileStatus(characterStoreFixture.npcs[0]),'인물 규칙 저장됨');
+assert.equal(profileStatus(characterStoreFixture.npcs[0]),'이전 인물 규칙 보관 중 · 새 인물 기록 추출 필요');
 const stale=normalizeCharacterStore({...characterStoreFixture,npcs:[{...characterStoreFixture.npcs[0],source:sheet+' changed'}]});
 assert.equal(currentProfileItems(stale.npcs[0]).length,0);
 assert.match(profileStatus(stale.npcs[0]),/재판독 필요/);

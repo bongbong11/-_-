@@ -1,8 +1,9 @@
+import { prepareProfileItems, createProfile } from '../fixtures/legacy-profiles.mjs';
 import assert from 'node:assert/strict';
 import { fixture } from './audit-v012.mjs';
-import { PROFILE_SYSTEM, CHARACTER_LIVE_SYSTEM, ACCESS_CHOICES } from '../../src/characters/prompts.js';
+import { CHARACTER_LIVE_SYSTEM, ACCESS_CHOICES } from '../../src/characters/prompts.js';
 import {
-    prepareProfileItems, createProfile, currentProfileItems, normalizeCharacterStore,
+    currentProfileItems, normalizeCharacterStore,
     buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan,
     buildCharacterInjection,
 } from '../../character-library.js';
@@ -11,7 +12,6 @@ import { buildInjection } from '../../prompt-library.js';
 import { parseNpcCandidates, suggestNpcAliases } from '../../src/characters/npc-sheet.js';
 import { debugReportText } from '../../src/ui/debug-report.js';
 
-assert.match(PROFILE_SYSTEM, /A sparse sheet may produce 0–3 items/);
 assert.match(CHARACTER_LIVE_SYSTEM, /Choose at most two distinct rule IDs/);
 assert.ok(ACCESS_CHOICES.inferred);
 
@@ -108,13 +108,13 @@ assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|
     fields.get('sr-character-name').value = 'Wade';
     fields.get('sr-character-source').value = source;
     let modelCalls = 0;
-    f.sandbox.mockExtract = async () => { modelCalls++; return { result: { items: [candidate] } }; };
+    f.sandbox.mockExtract = async () => { modelCalls++; return { result: { entity_type:'npc',entity_name:'Wade',records:[{type:'relationship',target:'son',when:['family decisions'],rule:candidate.rule,modality:'tendency',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}] } }; };
     f.run('requestWithConnectionProfile=mockExtract; settings.reasonerProfileId="p"; connectionRequestService={}');
     await f.run('saveCharacterEntry()');
     assert.equal(modelCalls, 0);
     await f.run('analyzeAndSaveCharacter()');
     assert.equal(modelCalls, 1, 'saving rules needs one normal-model call and no Jev save validation');
-    assert.equal(f.run('currentProfileItems(characterStore.npcs[0]).length'), 1);
+    assert.equal(f.run('characterStore.npcs[0].recordBank.records.length'), 1);
 }
 
 // Korean-only hidden NPC material needs a separate, bounded English identity,
@@ -133,7 +133,7 @@ assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|
     let calls = 0;
     f.sandbox.mockExtract = async (_service, _profile, prompt) => {
         calls++;
-        return { result: prompt.includes('minimum identity') ? { core: 'The user persona\'s father and a businessman.' } : { items: [] } };
+        return { result: prompt.includes('minimum identity') ? { core: 'The user persona\'s father and a businessman.' } : { entity_type:'npc',entity_name:'웨이드',records:[] } };
     };
     f.run('requestWithConnectionProfile=mockExtract; settings.reasonerProfileId="p"; connectionRequestService={}');
     await f.run('saveCharacterEntry()');

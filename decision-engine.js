@@ -2,7 +2,7 @@ export const OBSERVATION_KEYS = new Set([
     'advanced_world_rules', 'scene_state', 'conflict_state', 'relationship_motion', 'trust_signal',
     'intimacy_signal', 'romance_evidence', 'counterevidence',
     'unresolved', 'event_state', 'event_valence', 'event_blocker',
-    'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'context_change_source', 'continuity_trigger',
+    'progress_need', 'resolution_readiness', 'npc_presence', 'npc_valence', 'npc_knowledge_fit', 'context_change_source', 'continuity_trigger',
 ]);
 
 export const DIAGNOSTIC_KEYS = new Set([
@@ -26,7 +26,20 @@ export function certainty(answer) {
     return Math.max(0, Math.min(1, Number.isFinite(confidence) ? confidence : p));
 }
 
-export function applyDecisionPolicy({ key, answer, style = 'balanced', allowedChoices = [], fallback, baseThreshold = 0.7, choiceThreshold }) {
+// Explicit allowlist: this control cannot weaken evidence, access, pacing,
+// creation eligibility, retirement, or output-verification decisions.
+const ADJUSTABLE_PROGRESS = {
+    basic_move: ['dialogue', 'emotion', 'movement', 'action', 'choice', 'consequence'],
+    primary_focus: ['direct', 'event', 'relationship', 'conflict', 'npc', 'transition'],
+    progression_move: ['advance', 'complication', 'positive', 'consequence'],
+    event_route: ['continue'],
+    advanced_route: ['continue'],
+    advanced_move: ['advance'],
+    npc_route: ['reuse'],
+    villain_route: ['continue'],
+};
+
+export function applyDecisionPolicy({ key, answer, style = 'balanced', allowedChoices = [], fallback, baseThreshold = 0.7, choiceThreshold, progressIntensity = 1 }) {
     const candidate = String(answer?.choice || '');
     const selected = !allowedChoices.length || allowedChoices.includes(candidate) ? candidate : '';
     const score = certainty(answer);
@@ -39,13 +52,19 @@ export function applyDecisionPolicy({ key, answer, style = 'balanced', allowedCh
         ? { conservative: 0.08, balanced: 0, active: -0.12 }
         : { conservative: 0, balanced: 0, active: 0 };
     const rawThreshold = Number(choiceThreshold?.[selected] ?? baseThreshold);
-    const threshold = Math.max(0.4, Math.min(0.95, rawThreshold + (deltas[style] ?? 0)));
+    const baseAcceptanceThreshold = Math.max(0.4, Math.min(0.95, rawThreshold + (deltas[style] ?? 0)));
+    const parsedIntensity = Number(progressIntensity);
+    const intensity = Number.isFinite(parsedIntensity) && parsedIntensity > 0 ? Math.max(0.5, Math.min(1.5, parsedIntensity)) : 1;
+    const adjustable = ADJUSTABLE_PROGRESS[key]?.includes(selected) === true;
+    const threshold = adjustable ? Math.max(0.4, Math.min(0.78, baseAcceptanceThreshold / intensity)) : baseAcceptanceThreshold;
     const effective = selected && score >= threshold ? selected : fallback;
     return {
         selected,
         effective,
         certainty: score,
         threshold,
+        baseAcceptanceThreshold,
+        progressIntensity: adjustable ? intensity : 1,
         adjusted: selected !== effective,
         policy: kind,
         fallbackApplied: !(selected && score >= threshold),
@@ -85,7 +104,7 @@ export function buildVerificationQuestions(pendingPlan) {
     return Object.fromEntries(pendingPlan.effects.map((effect) => [`verification_${effect}`, {
         type: 'choice',
         instructions: effect === 'progress'
-            ? 'Evaluate only the immediately following CHARACTER output. Material progress means that the output actually changes an active exchange, decision, relationship pressure, event, access condition, knowledge state, action, or consequence. Rephrasing, atmosphere, preparation, warning, repeated questions, or handing the turn back without a concrete step is not progress. Do not use the current USER reaction as proof.'
+            ? 'Evaluate only the immediately following CHARACTER output. Material progress means that the output actually changes an active exchange, feeling, thought, decision, relationship pressure, event, access condition, knowledge state, action, or consequence. A quiet but specific new emotional or internal development counts; loud action is not required. Rephrasing, atmosphere, preparation, warning, repeated questions, or handing the turn back without a concrete step is not progress. Do not use the current USER reaction as proof.'
             : `Compare the prior pending plan with the immediately following CHARACTER output. Verify only actual execution of the planned ${EFFECT_LABELS[effect] || effect}. A mention, intention, atmosphere, or setup without material execution is not fulfillment. Do not use the current USER reaction as proof that the prior output executed the plan.`,
         criteria: {
             fulfilled: 'The prior CHARACTER output materially executed the planned effect.',

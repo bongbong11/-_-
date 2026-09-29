@@ -1,3 +1,4 @@
+import * as legacyProfiles from '../fixtures/legacy-profiles.mjs';
 import {createUiController} from '../../src/ui/controller.js';
 import {createSceneExecution} from '../../src/scene/execution.js';
 import {createOutputLifecycle} from '../../src/app/output-lifecycle.js';
@@ -35,7 +36,7 @@ const source = (await readFile(new URL('../../src/app/bootstrap.js', import.meta
 export function fixture() {
     const ctx = { characterId: 1, chatId: 'room-A', name1: 'User', name2: 'Hunter', chat: [], saveMetadata: async () => {} };
     const sandbox = {
-        createUiController,createSceneExecution,createOutputLifecycle,createRepository, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...npcSheet, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...security,
+        createUiController,createSceneExecution,createOutputLifecycle,createRepository, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...npcSheet, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...legacyProfiles, ...security,
         currentContext: ctx, chat_metadata: {}, extension_settings: {},
         console, structuredClone, setTimeout, clearTimeout, AbortController, AbortSignal,
         jQuery() {}, document: { getElementById() { return null; } },

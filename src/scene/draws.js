@@ -40,6 +40,9 @@ function prepareProfiles(rec, decisions, details) {
 }
 
 function prepareStandardProfiles(rec, decisions, details) {
+    if (rec.preferences.developmentStyle && ['create','replace'].includes(decisions.event_route)) {
+        overrideDecision(details, decisions, 'event_route', 'none', '기본 흐름의 새 사건 추첨 제거 · 고급 이벤트만 추첨');
+    }
     if (decisions.event_route === 'retire') {
         archiveCurrentEvent(rec, 'completed');
         rec.eventProfile = null;
@@ -63,6 +66,16 @@ function prepareStandardProfiles(rec, decisions, details) {
             }
         } else overrideDecision(details, decisions, 'event_route', 'continue', '저장된 중심 사건 계속');
     }
+    if (rec.preferences.settingsContract >= 3) {
+        const offer = rec.appearanceOffer;
+        for (const [kind,key,profileKey] of [['npc','npc_route','npcProfile'],['villain','villain_route','villainProfile']]) {
+            if (decisions[key] !== 'create') continue;
+            if (offer?.passed && offer.kind === kind && offer.candidate && decisions.arrival_mode && decisions.arrival_mode !== 'none') {
+                rec[profileKey] = {...offer.candidate, entry:decisions.arrival_mode, status:'pending'};
+                if(kind==='villain') rec.lastVillainRoll = {...offer,candidate:undefined};
+            } else overrideDecision(details,decisions,key,'none','유효한 선추첨·등장 판정 없음');
+        }
+    }
     if (decisions.villain_route === 'retire') {
         rec.villainProfile = null;
         rec.lastVillainRoll = null;
@@ -71,7 +84,7 @@ function prepareStandardProfiles(rec, decisions, details) {
         rec.villainProfile = null;
         rec.lastVillainRoll = null;
     }
-    if (['create', 'replace'].includes(decisions.villain_route)) {
+    if (rec.preferences.settingsContract < 3 || !rec.preferences.settingsContract) if (['create', 'replace'].includes(decisions.villain_route)) {
         if (!rec.villainProfile) {
             if (rec.lastVillainRoll?.opportunity === rec.sceneOpportunity) {
                 overrideDecision(details, decisions, 'villain_route', 'waiting', '같은 장면 기회의 빌런 추첨 완료');
@@ -94,7 +107,7 @@ function prepareStandardProfiles(rec, decisions, details) {
         rec.npcProfile = null;
         rec.lastNpcRoll = null;
     }
-    if (['create', 'replace'].includes(decisions.npc_route)) {
+    if (rec.preferences.settingsContract < 3 || !rec.preferences.settingsContract) if (['create', 'replace'].includes(decisions.npc_route)) {
         if (!rec.npcProfile || rec.npcProfile.status === 'retired') {
             if (rec.lastNpcRoll?.opportunity === rec.sceneOpportunity) {
                 overrideDecision(details, decisions, 'npc_route', 'waiting', '같은 장면 기회의 NPC 추첨 완료');

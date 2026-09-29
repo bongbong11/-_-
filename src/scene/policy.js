@@ -1,5 +1,8 @@
 import { applyDecisionPolicy } from '../../decision-engine.js';
 export const FALLBACKS = {
+    basic_move: 'continue',
+    progress_need: 'unclear',
+    arrival_mode: 'none',
     advanced_world_rules: 'unclear',
     scene_state: 'unclear',
     conflict_state: 'unclear',
@@ -52,6 +55,9 @@ export const FALLBACKS = {
 };
 
 const THRESHOLDS = {
+    basic_move: 0.55,
+    progress_need: 0.58,
+    arrival_mode: 0.55,
     advanced_world_rules: 0.8,
     scene_state: 0.50,
     conflict_state: 0.55,
@@ -76,10 +82,10 @@ const THRESHOLDS = {
     npc_knowledge_fit: 0.66,
     relationship_pacing: 0.72,
     relationship_beat: 0.68,
-    primary_focus: 0.62,
+    primary_focus: 0.55,
     event_route: 0.72,
     villain_route: 0.78,
-    progression_move: 0.72,
+    progression_move: 0.60,
     npc_route: 0.75,
     npc_target: 0.55,
     hesitation_drag: 0.62,
@@ -107,12 +113,13 @@ const CHOICE_THRESHOLDS = {
     advanced_route: { create: 0.60, continue: 0.56 },
 };
 
-export function applyPolicy(key, answer, judgmentStyle = 'balanced', allowedChoices = []) {
+export function applyPolicy(key, answer, judgmentStyle = 'balanced', allowedChoices = [], progressIntensity = 1) {
     const fallback = String(key).startsWith('verification_') ? 'not_applicable' : String(key).startsWith('continuity_candidate_') ? 'reject' : FALLBACKS[key];
     const result = applyDecisionPolicy({
         key,
         answer,
         style: judgmentStyle,
+        progressIntensity,
         allowedChoices,
         fallback: allowedChoices.includes(fallback) ? fallback : allowedChoices.includes('unclear') ? 'unclear' : allowedChoices.includes('not_applicable') ? 'not_applicable' : allowedChoices[0],
         baseThreshold: THRESHOLDS[key] ?? (String(key).startsWith('verification_') ? 0.66 : 0.7),

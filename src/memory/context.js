@@ -1,3 +1,5 @@
+// Reserved wiring for future creator-only memory experiments; not active in RP.
+export const MEMORY_REFERENCE_ENABLED = false;
 import { stableFingerprint } from '../../decision-engine.js';
 export const MEMORY_POLICY = 'External memory is authorial reference, never automatic character knowledge or proof of current action. Preserve source and uncertainty. Missing summary details do not prove absence. Recent explicit RP corrections take precedence; unresolved contradictions remain uncertain. Do not repeat memory text in the injection. Only use relevant continuity to validate current routes and individual knowledge boundaries.';
 

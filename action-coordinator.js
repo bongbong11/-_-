@@ -12,7 +12,8 @@ const ROUTE_LABELS = {
 
 function activeEventCandidate(decisions, settings, hasEventProfile, allowUnpreparedCreates) {
     const advanced = Boolean(settings.advancedEnabled && ['create', 'continue'].includes(decisions.advanced_route));
-    const route = advanced ? decisions.advanced_route : decisions.event_route;
+    const rawRoute = advanced ? decisions.advanced_route : decisions.event_route;
+    const route = settings.developmentStyle && !advanced && ['create','replace'].includes(rawRoute) ? 'none' : rawRoute;
     const move = advanced ? decisions.advanced_move : decisions.progression_move;
     const create = advanced ? route === 'create' : ['create', 'replace'].includes(route);
     const continuing = route === 'continue';
@@ -135,7 +136,7 @@ function secondaryCompatible(primary, candidate, decisions, settings) {
     if (candidate.external) return candidate.compatibleWith.includes(primary.kind) || candidate.compatibleWith.includes(primary.focus);
     if (primary.kind === 'relationship') {
         if (candidate.kind === 'event') return !candidate.isNew && ['advance', 'reveal', 'consequence', 'aftermath'].includes(String(candidate.move || ''));
-        return candidate.kind === 'npc' && !candidate.isNew && ['brief', 'background'].includes(candidate.weight);
+        return candidate.kind === 'npc' && (!candidate.isNew || settings.settingsContract >= 3) && ['brief', 'background'].includes(candidate.weight);
     }
     if (primary.kind === 'conflict') return candidate.kind === 'villain' || (candidate.kind === 'npc' && !candidate.isNew) || (candidate.kind === 'event' && !candidate.isNew && ['consequence', 'aftermath'].includes(String(candidate.move || '')));
     if (primary.kind === 'event') {
@@ -171,12 +172,12 @@ function secondaryScore(candidate, decisions, settings) {
         if (candidate.isNew && settings.judgmentStyle === 'conservative') score -= 18;
         // Creation is only eligibility for a draw. Give an active-mode candidate
         // a fair chance to reach that draw before a routine relationship beat.
-        if (candidate.isNew && settings.judgmentStyle === 'active') score += 32;
+        if (candidate.isNew && settings.judgmentStyle === 'active' && !settings.developmentStyle) score += 32;
         if (candidate.isNew && settings.advancedEnabled && decisions.advanced_route === 'create') score += 20;
     }
     if (candidate.kind === 'relationship') score += settings.relationshipPace === 'fast' ? 10 : settings.relationshipPace === 'slow' ? -8 : 0;
     if (candidate.kind === 'conflict' && decisions.conflict_state === 'active') score += 15;
-    if (candidate.kind === 'npc' && candidate.isNew && settings.judgmentStyle === 'active') score += 24;
+    if (candidate.kind === 'npc' && candidate.isNew && settings.judgmentStyle === 'active' && !settings.developmentStyle) score += 24;
     score += Math.min(3, Math.max(0, Number(settings.deferredRoutes?.[candidate.id]) || 0)) * 10;
     score += Number(candidate.priority || 0);
     return score;

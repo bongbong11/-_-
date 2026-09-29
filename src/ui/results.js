@@ -1,6 +1,8 @@
+import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { continuityView } from '../storage/knowledge.js';
 import { memoryStatusText } from '../memory/context.js';
 import { DECISION_LABELS, EXECUTION_CORRECTION_PRIORITY } from '../../prompt-library.js';
+import { currentRecords, RECORD_LABELS, recordBankIsCurrent } from '../characters/records.js';
 import { ITEM_LABELS, currentProfileItems, profileStatus } from '../../character-library.js';
 import { normalizeContinuity } from '../../continuity-engine.js';
 import { displayValue, verificationText } from './presentation.js';
@@ -11,13 +13,13 @@ function decisionTitle(key) {
     const user = context.name1 || '유저';
     const character = context.name2 || '캐릭터';
     return {
-        scene_state: '현재 장면의 진행 상태', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, counterevidence: '관계 진전의 반대 근거', unresolved: '현재 남은 핵심 문제', context_change_source: '새 장면 기회의 확정 출처', continuity_trigger: '연속성 추론 호출 근거', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', repetitive_ending: '최근 응답의 종결 구조 반복', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', secondary_focus: '이번 응답의 보조 진행', direct_execution: '현재 장면 직접 실행', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_target: '이번 NPC의 대상', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', npc_identity_route: 'NPC 정체 경로', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계', verification_progress: '직전 출력의 실질 진행', verification_relationship: '직전 관계 계획 이행', verification_event: '직전 사건 계획 이행', verification_npc: '직전 NPC 계획 이행', verification_conflict: '직전 갈등 계획 이행', verification_direct: '직전 직접 실행 이행',
+        scene_state: '현재 장면의 진행 상태', conflict_state: '인물 간 실제 갈등 상태', relationship_motion: `${character}↔${user} 관계 움직임`, trust_signal: `${character}가 보인 신뢰 근거`, intimacy_signal: `${character}가 보인 친밀감 근거`, romance_evidence: `${character}가 보인 로맨틱 근거`, counterevidence: '관계 진전의 반대 근거', unresolved: '현재 남은 핵심 문제', context_change_source: '새 장면 기회의 확정 출처', continuity_trigger: '연속성 추론 호출 근거', event_state: '현재 중심 사건 단계', event_valence: '현재 사건 방향', event_blocker: '현재 사건의 주된 방해', resolution_readiness: '현재 사건의 해결 준비', npc_presence: '현재 NPC 참여 상태', npc_valence: '현재 NPC 방향', hesitation_drag: `${character}의 과도한 망설임`, refusal_stall: `${character}의 거절 반복 정체`, circularity: '최근 대화의 내용 반복', user_handoff: `${character}가 질문으로 턴을 넘김`, input_echo: '유저 입력 에코·되풀이', repetitive_ending: '최근 응답의 종결 구조 반복', action_evasion: '필요한 행동 실행 회피', directive_followthrough: '직전 전체 지시 이행', scene_cutoff: '행동 전 장면 종료·생략', progress_need:'최근 흐름의 진행 필요', arrival_mode:'새 인물 등장 방식', basic_move: '이번 장면의 기본 진행', response_cadence: '이번 응답의 서술 호흡', world_direction: '세계 반응', relationship_direction: `${character}→${user} 관계 방향`, negative_priority: '부정 편향 우선순위', relationship_pacing: `${character}↔${user} 관계 변화`, relationship_beat: '관계·로맨스 표현 비트', primary_focus: '이번 응답의 주요 초점', secondary_focus: '이번 응답의 보조 진행', direct_execution: '현재 장면 직접 실행', resolution_pacing: '중심 사건 해결 범위', event_route: '중심 사건 유지·생성', npc_autonomy: '갈등 속 NPC', fight_sustain: '실제 싸움 유지', villain_route: '빌런 개입', world_hostility: '세계 적대성', npc_guard: 'NPC 특별취급 방지', misfortune: '유저 불운', progression_move: '사건·장면 진행 기능', npc_route: '일반 NPC 필요·연결', npc_target: '이번 NPC의 대상', npc_role: 'NPC의 이번 장면 역할', npc_weight: 'NPC의 이번 장면 비중', npc_knowledge: 'NPC가 사용할 수 있는 지식', npc_disclosure: 'NPC의 정보 사용 태도', npc_followthrough: '직전 NPC 지시 이행', npc_knowledge_fit: 'NPC 지식 범위 적합성', npc_identity_route: 'NPC 정체 경로', advanced_entry: '고급 전개 진입 가능성', advanced_route: '고급 사건 사용', advanced_cause: '고급 전개의 원인 경로', advanced_element: '선택된 고급 요소', advanced_move: '이번 고급 실행 단계', verification_progress: '직전 출력의 실질 진행', verification_relationship: '직전 관계 계획 이행', verification_event: '직전 사건 계획 이행', verification_npc: '직전 NPC 계획 이행', verification_conflict: '직전 갈등 계획 이행', verification_direct: '직전 직접 실행 이행',
     }[key] || (key.startsWith('verification_') ? '직전 출력의 실제 이행' : '추가 판정');
 }
 
 const RESULT_GROUPS = {
-    'sr-scene-relation': ['scene_state', 'context_change_source', 'continuity_trigger', 'response_cadence', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
-    'sr-event-npc': ['primary_focus', 'secondary_focus', 'direct_execution', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'npc_target', 'npc_identity_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
+    'sr-scene-relation': ['scene_state', 'context_change_source', 'continuity_trigger', 'progress_need', 'basic_move', 'unresolved', 'relationship_motion', 'trust_signal', 'intimacy_signal', 'romance_evidence', 'counterevidence', 'relationship_direction', 'relationship_pacing', 'relationship_beat'],
+    'sr-event-npc': ['primary_focus', 'secondary_focus', 'direct_execution', 'event_state', 'event_valence', 'event_blocker', 'resolution_readiness', 'event_route', 'progression_move', 'resolution_pacing', 'npc_presence', 'npc_valence', 'npc_route', 'arrival_mode', 'npc_target', 'npc_identity_route', 'npc_role', 'npc_weight', 'npc_knowledge', 'npc_disclosure', 'npc_followthrough', 'npc_knowledge_fit', 'villain_route', 'npc_autonomy'],
     'sr-advanced-judgment': ['advanced_entry', 'advanced_route', 'advanced_cause', 'advanced_element', 'advanced_move'],
     'sr-conflict-quality': ['world_direction', 'conflict_state', 'fight_sustain', 'negative_priority', 'world_hostility', 'npc_guard', 'misfortune', 'hesitation_drag', 'refusal_stall', 'circularity', 'user_handoff', 'input_echo', 'repetitive_ending', 'action_evasion', 'directive_followthrough', 'scene_cutoff'],
 };
@@ -48,14 +50,14 @@ function renderCharacterTurnResults() {
         const audit = [presence && ['장면 역할',presence],direction && ['반응 방향',direction]].filter(Boolean).map(([label,detail]) =>
             '<div class="sr-decision-row"><span>' + label + '</span><small>Jev ' + escapeHtml(String(detail.selected || '응답 없음')) + ' → 확신 ' + Math.round((Number(detail.certainty)||0)*100) + '% / 기준 ' + Math.round((Number(detail.threshold)||0)*100) + '% → 최종 ' + escapeHtml(String(detail.effective || '없음')) + ' · ' + escapeHtml(detail.rule || '선택 유지') + '</small></div>').join('');
         const entry = [...characterStore.characters,...characterStore.npcs,characterStore.persona].filter(Boolean).find((item) => item.id === person.id);
-        const profileNames = (person.injectedRuleIds || []).map((id) => currentProfileItems(entry).find((item) => item.id === id)?.rule).filter(Boolean);
+        const profileNames = (person.injectedRuleIds || []).map((id) => (person.recordMode ? person.recordSelections || [] : currentProfileItems(entry)).find((item) => item.id === id)?.rule).filter(Boolean);
         const rows = [
             ['이번 역할', characterTurnLabel('presence',person.presence)],
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
             ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
             ['지식 접근 제외', (person.deniedIds || []).length ? person.deniedIds.length + '개 · 해당 정보만 제외' : '없음'],
-            ['반응 방향', characterTurnLabel('direction',person.direction)],
+            ...(!person.recordMode ? [['반응 방향', characterTurnLabel('direction',person.direction)]] : []),
         ].map(([label,value]) => '<div class="sr-decision-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>').join('');
         return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : person.kind === 'persona' ? '페르소나' : '캐릭터') + ' · ' + status + '</small></h4>' + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + '</details>' : '') + '</section>';
     }).join('');
@@ -85,7 +87,7 @@ function renderJudgment() {
         const rollKey = key === 'event_route' || key === 'advanced_route' ? 'event' : key === 'npc_route' ? 'npc' : key === 'villain_route' ? 'villain' : '';
         const roll = rollKey ? judgment.rolls?.[rollKey] : null;
         const rollText = roll ? ` · 추첨 ${Number(roll.roll)} / ${Number(roll.chance)}% → ${Number(roll.roll) <= Number(roll.chance) ? '통과' : '미통과'}` : '';
-        const extra = value.fixed ? `<small>확장 계산/사용자 고정${value.rule ? ` · ${escapeHtml(value.rule)}` : ''}</small>` : value.conditional ? '<small>NPC 존재·등장 조건 자동 연결</small>' : (settings.showConfidence ? `<small>Jev ${escapeHtml(selectedLabel || '응답 없음')} → 확신 ${score}% / 기준 ${threshold}% → 기준 적용 ${escapeHtml(policyLabel)} → 최종 적용 ${escapeHtml(label)} · ${escapeHtml(reason)}${escapeHtml(rollText)}</small>` : '');
+        const extra = value.fixed ? `<small>확장 계산/사용자 고정${value.rule ? ` · ${escapeHtml(value.rule)}` : ''}</small>` : value.conditional ? '<small>NPC 존재·등장 조건 자동 연결</small>' : (settings.showConfidence ? `<small>Jev ${escapeHtml(selectedLabel || '응답 없음')} → 확신 ${score}% / 기준 ${threshold}%${value.progressIntensity && value.progressIntensity !== 1 ? ` (기본 ${Math.round(value.baseAcceptanceThreshold * 100)}% · 적극성 ${value.progressIntensity.toFixed(1)})` : ''} → 기준 적용 ${escapeHtml(policyLabel)} → 최종 적용 ${escapeHtml(label)} · ${escapeHtml(reason)}${escapeHtml(rollText)}</small>` : '');
         return `<div class="sr-decision-row"><span>${escapeHtml(decisionTitle(key))}</span><strong>${escapeHtml(label)}</strong>${extra ? `<details class="sr-trace"><summary>적용 이유·확신도</summary>${extra}</details>` : ''}</div>`;
     };
     for (const [id, keys] of Object.entries(RESULT_GROUPS)) roots[id].innerHTML = keys.filter((key) => judgment.details[key]).map((key) => card([key, judgment.details[key]])).join('') || '<div class="sr-empty-small">이번 판독에 해당 항목이 없습니다.</div>';
@@ -122,7 +124,7 @@ function renderJudgment() {
         ...(record()?.preferences?.advancedEnabled ? [['고급 전개', `${resultLabel('advanced_route', d.advanced_route)} · ${resultLabel('advanced_element', d.advanced_element)} · ${resultLabel('advanced_move', d.advanced_move)}`]] : []),
         ['NPC', npcText],
         ['갈등용', conflictApplied.length ? conflictApplied.join(' · ') : '미적용'],
-        ['서술 호흡', resultLabel('response_cadence', d.response_cadence)],
+        ['기본 진행', resultLabel('basic_move', d.basic_move)],
         ['실행 교정', correctionIssues ? `${correctionIssues}개 감지 · ${appliedCorrections}개 우선 적용` : '문제 없음'],
         ['실질 진행 압력', `${Number(record()?.progressionState?.turnsSinceMeaningfulProgress) || 0}회 연속 미이행`],
         ['상태 반영', record()?.pendingPlan ? (record().pendingPlan.status === 'awaiting_verification' ? '출력 있음 · 다음 판독에서 검증 대기' : '출력 대기') : record()?.lastVerification ? verificationText(record().lastVerification) : '검증할 계획 없음'],
@@ -211,6 +213,23 @@ function renderCharacterAnalysisBrowser() {
     selectCharacter(selected ? { kind: selected.kind, id: selected.id } : { kind: '', id: '' });
     list.innerHTML = entries.map((entry) => `<button type="button" class="sr-character-view${selected?.id === entry.id && selected?.kind === entry.kind ? ' active' : ''}" data-character-view-kind="${entry.kind}" data-character-view-id="${escapeHtml(entry.id)}" aria-pressed="${selected?.id === entry.id && selected?.kind === entry.kind}"><span>${escapeHtml(entry.name)}</span><small>${entry.kind === 'npc' ? 'NPC' : entry.kind === 'persona' ? '페르소나' : '캐릭터'}</small></button>`).join('') || '<div class="sr-empty-small">저장된 인물 없음</div>';
     if (!selected) { result.innerHTML = '<div class="sr-empty-small">시트를 저장하면 여기서 판독 기준을 확인할 수 있습니다.</div>'; return; }
+    if (selected.recordBank) {
+        const records = currentRecords(selected);
+        const bank = selected.recordBank;
+        const esc = escapeHtml;
+        const readable = value => ({fact:'확정 서술',habit:'습관',preference:'선호',tendency:'경향',conditional:'조건부',possibility:'가능성',negation:'부정·금지',explicit:'원문에 명시',direct_inference:'원문에서 직접 도출',knows:'알고 있음',believes:'믿고 있음',suspects:'의심함',doubts:'확신하지 못함',misunderstands:'잘못 이해함',does_not_know:'모름',none:'해당 없음',self:'자기 자신',person:'다른 인물',relationship:'관계',history:'과거',event:'사건',secret:'비밀',professional:'전문 분야',organization:'조직',world:'세계',current:'현재 상황'}[value] || value);
+        const groups = Object.entries(RECORD_LABELS).map(([type,label]) => {
+            const rows = records.map((record,index)=>({record,index})).filter(({record})=>record.type===type);
+            if (!rows.length) return '';
+            return '<details class="sr-record-group" open><summary>'+esc(label)+' · '+rows.length+'</summary>'+rows.map(({record,index})=>
+                '<article class="sr-record-card"><p>'+esc(record.rule)+'</p><div class="sr-record-meta">'+esc(record.target || '특정 대상 없음')+' · '+esc(record.when.join(' / '))+'</div><details><summary>근거·상태·원문</summary><p class="sr-help">'+esc(readable(record.modality))+' · '+esc(readable(record.basis))+(record.type==='knowledge'?' · '+esc(readable(record.knowledge_domain))+' / '+esc(readable(record.knowledge_state)):'')+'</p>'+record.source_ids.map(id=>{
+                    const source=bank.sources.find(item=>item.id===id);
+                    return '<div class="sr-record-source"><strong>'+esc(id)+' · '+esc(source?.label || '')+'</strong><p>'+esc(source?.text || '원문 없음')+'</p></div>';
+                }).join('')+'</details></article>').join('')+'</details>';
+        }).join('');
+        result.innerHTML='<div class="sr-character-analysis-head"><strong>'+esc(selected.name)+'</strong><button type="button" class="menu_button" data-character-edit-kind="'+selected.kind+'" data-character-edit-id="'+esc(selected.id)+'">시트 수정</button></div><p class="sr-help">'+esc(profileStatus(selected))+'</p><p class="sr-help">현재 장면에 맞는 기록 후보를 추린 뒤 Jev가 필요한 기록을 최대 두 개 선택합니다. 선택할 기록이 없으면 별도 주입하지 않습니다.</p>'+ (groups || '<p class="sr-help">'+(recordBankIsCurrent(selected)?'저장된 기록 0개':'원문 변경으로 이전 기록은 적용되지 않습니다. 다시 추출하세요.')+'</p>')+'<details class="sr-trace"><summary>저장·검증 정보</summary><pre>'+esc(JSON.stringify({savedAt:bank.analyzedAt,apiVersion:bank.apiVersion,recordVersion:bank.recordVersion,compilerVersion:bank.compilerVersion,importLog:bank.import_log},null,2))+'</pre></details>';
+        return;
+    }
     const items = currentProfileItems(selected);
     const rejected = selected.profile?.sourceHash === selected.sourceHash ? selected.profile?.rejected || [] : [];
     const rows = items.map((item) => '<div class="sr-decision-row"><span>' + escapeHtml(ITEM_LABELS[item.kind] || item.kind) + (item.target ? ' · ' + escapeHtml(item.target) : '') + '</span><strong>' + escapeHtml(item.rule) + '</strong></div>').join('');
@@ -277,7 +296,7 @@ function renderContinuity() {
 
 function renderAll() {
     const memoryNode = document.getElementById('sr-memory-status');
-    if (memoryNode) memoryNode.textContent = memoryStatusText(record()?.preferences, record()?.lastJudgment?.memoryStatus);
+    if (memoryNode) memoryNode.textContent = MEMORY_REFERENCE_ENABLED ? memoryStatusText(record()?.preferences, record()?.lastJudgment?.memoryStatus) : '준비 중 · 현재 RP 판독에서는 사용하지 않습니다.';
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
     renderJudgment();
     renderProfiles();

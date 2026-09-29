@@ -1,14 +1,17 @@
 """Build install-only ZIPs from an explicit runtime allowlist. Python standard library only."""
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
-import json, hashlib, re
+import json, hashlib, re, argparse
 root = Path(__file__).resolve().parents[1]
 version = json.loads((root/'manifest.json').read_text(encoding='utf-8'))['version']
 plugin_version = json.loads((root/'server-plugin/package.json').read_text(encoding='utf-8'))['version']
-out = root/'downloads'
-out.mkdir(exist_ok=True)
+parser = argparse.ArgumentParser()
+parser.add_argument('--output-dir', type=Path, default=root/'downloads')
+out = parser.parse_args().output_dir
+out.mkdir(parents=True, exist_ok=True)
 runtime = sorted(root.glob('*.js')) + sorted((root/'src').rglob('*.js'))
-runtime += [root/p for p in ['manifest.json','package.json','style.css','README.md','INSTALL.md',f'AUDIT-v{version}.md']]
+runtime += sorted((root/'src/vendor').rglob('sync.json'))
+runtime += [root/p for p in ['manifest.json','package.json','style.css','README.md','INSTALL.md','CHANGELOG.md']]
 plugin = [root/'server-plugin'/p for p in ['index.cjs','storage.cjs','package.json']]
 for name, prefix, paths in [(f'scene-reader-sillytavern-v{version}.zip','scene-reader',runtime+plugin), (f'scene-reader-jev-plugin-v{plugin_version}.zip','scene-reader-jev',plugin)]:
     target=out/name

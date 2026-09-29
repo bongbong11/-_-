@@ -1,3 +1,4 @@
+import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { createRepository } from '../storage/repository.js';
 import { createOutputLifecycle } from '../app/output-lifecycle.js';
 import { createSceneExecution } from '../scene/execution.js';
@@ -10,11 +11,11 @@ import { createDraws } from '../scene/draws.js';
 import { createResults } from '../ui/results.js';
 import { dialogTemplate } from '../ui/dialog-template.js';
 
-import { PROFILE_SYSTEM, CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
+import { CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
 import { NPC_NAME_SYSTEM, NPC_CORE_SYSTEM, parseNpcCandidates, parseNpcCore, deriveEnglishCore, suggestNpcAliases } from '../characters/npc-sheet.js';
 import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
-import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, PACE_OPTIONS, buildQuestions, buildInjection } from '../../prompt-library.js';
+import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, normalizeDevelopmentPreferences, PACE_OPTIONS, buildQuestions, buildInjection } from '../../prompt-library.js';
 import { ADVANCED_STYLES, ADVANCED_ELEMENTS, ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS } from '../../advanced-library.js';
 import { allWorlds, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from '../../world-library.js';
 import { buildInputKey, buildRecentContext, filterNonRpHistory, generationCycleSalt, isVisibleRoleplayMessage, pendingComposerText, splitOocText } from '../../runtime-utils.js';
@@ -25,7 +26,7 @@ import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecond
 import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from '../../continuity-engine.js';
 import { listConnectionProfiles, requestWithConnectionProfile } from '../../st-profile-reasoner.js';
 import { sha256Hex } from '../../security-utils.js';
-import { prepareProfileItems, createProfile, profileStatus, normalizeCharacterStore, selectActiveEntries, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
+import { profileStatus, normalizeCharacterStore, selectActiveEntries, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
 
 import { createJobScope, createWriteQueue, StaleRunError } from '../app/jobs.js';
 import { messageSnapshot, firstChangedMessage, attachSelectedOutput } from '../input/message-identity.js';
@@ -72,6 +73,9 @@ const CHAT_DEFAULTS = {
     worldDirection: 'natural',
     relationshipDirection: 'dynamic',
     negativePriority: false,
+    settingsContract: 3,
+    progressIntensity: 1,
+    developmentStyle: 'balanced',
     progressionMode: 'natural',
     judgmentStyle: 'balanced',
     injectionMode: 'depth',
@@ -82,12 +86,10 @@ const CHAT_DEFAULTS = {
     advancedElements: ADVANCED_DEFAULT_ELEMENTS,
     relationshipPace: 'medium',
     resolutionPace: 'medium',
-    roleplayPace: 'medium',
     allowUserImpersonation: false,
     fightSustain: false,
     villainEnabled: true,
     appearanceChance: 10,
-    eventChance: 35,
     socialEnabled: false,
     worldHostility: false,
     privatePromptEnabled: false,
@@ -291,16 +293,20 @@ function record(create = false) {
         const validValue = (valueToCheck, choices, fallback) => Object.hasOwn(choices, valueToCheck) ? valueToCheck : fallback;
         value.preferences.worldDirection = validValue(value.preferences.worldDirection, WORLD_DIRECTIONS, CHAT_DEFAULTS.worldDirection);
         value.preferences.relationshipDirection = validValue(value.preferences.relationshipDirection, RELATIONSHIP_DIRECTIONS, CHAT_DEFAULTS.relationshipDirection);
-        value.preferences.progressionMode = validValue(value.preferences.progressionMode, PROGRESSION_MODES, CHAT_DEFAULTS.progressionMode);
-        value.preferences.judgmentStyle = validValue(value.preferences.judgmentStyle, JUDGMENT_STYLES, CHAT_DEFAULTS.judgmentStyle);
+        if (saved.settingsContract !== 3) {
+            value.lastJudgment = null;
+            if (!value.pendingPlan?.outputText) value.pendingPlan = null;
+        }
+        const migratedDevelopment = normalizeDevelopmentPreferences(saved);
+        value.preferences = normalizeDevelopmentPreferences({...value.preferences, developmentStyle:migratedDevelopment.developmentStyle});
         value.preferences.advancedStyle = validValue(value.preferences.advancedStyle, ADVANCED_STYLES, CHAT_DEFAULTS.advancedStyle);
-        for (const key of ['relationshipPace', 'resolutionPace', 'roleplayPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
+        for (const key of ['relationshipPace', 'resolutionPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
         for (const key of ['injectionMode', 'worldInjectionMode']) value.preferences[key] = ['depth', 'macro'].includes(value.preferences[key]) ? value.preferences[key] : CHAT_DEFAULTS[key];
         value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;
         value.preferences.advancedElements = [...new Set((Array.isArray(value.preferences.advancedElements) ? value.preferences.advancedElements : []).filter((key) => ADVANCED_ELEMENTS[key]))];
         if (!value.preferences.advancedElements.length) value.preferences.advancedElements = [...ADVANCED_DEFAULT_ELEMENTS];
         for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune', 'allowUserImpersonation']) value.preferences[key] = Boolean(value.preferences[key]);
-        for (const key of ['appearanceChance', 'eventChance']) value.preferences[key] = Math.max(1, Math.min(100, Number(value.preferences[key]) || CHAT_DEFAULTS[key]));
+        for (const key of ['appearanceChance']) value.preferences[key] = Math.max(1, Math.min(100, Number(value.preferences[key]) || CHAT_DEFAULTS[key]));
         const pacing = value.pacingState && typeof value.pacingState === 'object' ? value.pacingState : {};
         const relation = pacing.relationship && typeof pacing.relationship === 'object' ? pacing.relationship : {};
         const event = pacing.event && typeof pacing.event === 'object' ? pacing.event : {};
@@ -671,7 +677,6 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get worldInfoModule() { return worldInfoModule; },
     get saveSession() { return saveSession; },
     get ADVANCED_ELEMENTS() { return ADVANCED_ELEMENTS; },
-    get PROFILE_SYSTEM() { return PROFILE_SYSTEM; },
     get JEV_KEY_STORAGE() { return JEV_KEY_STORAGE; },
     get JEV_MODEL() { return JEV_MODEL; },
     get OWNER_PASSWORD_HASH() { return OWNER_PASSWORD_HASH; },
@@ -683,8 +688,6 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get archiveCurrentEvent() { return archiveCurrentEvent; },
     get availableWorlds() { return availableWorlds; }, set availableWorlds(value) { availableWorlds = value; },
     get backupList() { return backupList; }, set backupList(value) { backupList = value; },
-    get prepareProfileItems() { return prepareProfileItems; },
-    get createProfile() { return createProfile; },
     get profileStatus() { return profileStatus; },
     get callJev() { return callJev; }, set callJev(value) { callJev = value; },
     get characterAnalysisSelection() { return characterAnalysisSelection; }, set characterAnalysisSelection(value) { characterAnalysisSelection = value; },
@@ -757,7 +760,7 @@ function optionsHtml(items) {
 function createDialog() {
     dialog = document.createElement('dialog');
     dialog.id = 'scene-reader-dialog';
-    dialog.innerHTML = dialogTemplate({optionsHtml, escapeHtml, WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, PACE_OPTIONS, ADVANCED_STYLES, ADVANCED_ELEMENTS});
+    dialog.innerHTML = dialogTemplate({optionsHtml, escapeHtml, WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, PACE_OPTIONS, ADVANCED_STYLES, ADVANCED_ELEMENTS});
     document.body.append(dialog);
     // A modal dialog sits in the browser's top layer. Body-level toasts would
     // render behind it regardless of z-index, so keep the shared toast container
@@ -836,7 +839,7 @@ function cachedJudgmentMatches(rec, context, inputKey, allowOutputChange = false
 
 async function onLorebookUpdated(name, data) {
     lorebookRevisions.set(name, stableFingerprint(data));
-    if (!preferences().lorebookMemory || !linkedCharacterBooks(getContext(), worldInfoModule?.world_info).includes(name)) return;
+    if (!MEMORY_REFERENCE_ENABLED || !preferences().lorebookMemory || !linkedCharacterBooks(getContext(), worldInfoModule?.world_info).includes(name)) return;
     invalidateReasonerJobs();
     const rec = record(true);
     rec.lastJudgment = null;

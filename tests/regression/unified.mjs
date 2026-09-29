@@ -66,15 +66,15 @@ assert.equal((await readCharacterLorebooks({...loreModule,loadWorldInfo:()=>new 
     assert.equal(f.run('record().pendingPlan'),null);
 }
 
-// Editing a linked book invalidates the cached judgment, but not verified-output evidence.
+// Reserved memory wiring ignores book changes without invalidating RP judgment.
 {
     const f=fixture();f.ctx.characters=loreContext.characters;
     f.sandbox.loreModule=loreModule;
     f.run('worldInfoModule=loreModule; record(true).preferences.lorebookMemory=true; record().lastJudgment={inputKey:"old"}; record().pendingPlan={outputText:"Actual output"};');
     const before=f.run('sourceRevisionKey(record(),selectedWorld())');
     await f.run('onLorebookUpdated("Main Book",{entries:{1:{content:"Updated fact"}}})');
-    assert.notEqual(f.run('sourceRevisionKey(record(),selectedWorld())'),before);
-    assert.equal(f.run('record().lastJudgment'),null);
+    assert.equal(f.run('sourceRevisionKey(record(),selectedWorld())'),before);
+    assert.equal(f.run('record().lastJudgment.inputKey'),'old');
     assert.equal(f.run('record().pendingPlan.outputText'),'Actual output');
 }
 const personState={continuity:{knowledge:[{factId:'letter',character:'Alice',source:'observed'}]}};
@@ -120,14 +120,14 @@ console.log('Unified regression passed: source-grounded profiles, memory, per-pe
     f.sandbox.fetch=async()=>{throw Error('disk unavailable');};
     await assert.rejects(f.run('runJudge({force:true})'),/disk unavailable/);
     assert.equal(f.run('record().relationshipState.trust'),'old-trust');
-    assert.equal(f.run('record().pendingPlan'),undefined);assert.equal(f.run('activeInjectionPayload'),'');
+    assert.equal(f.run('record().pendingPlan'),null);assert.equal(f.run('activeInjectionPayload'),'');
 }
 // Editing before retained history invalidates derived facts, but preserves user configuration.
 {
     const f=fixture();f.ctx.chat=Array.from({length:30},(_,i)=>({is_user:i%2===0,mes:'message '+i}));
-    f.run('var r=record(true); r.preferences.judgmentStyle="active"; r.relationshipState.trust="invalid"; stateHistoryCache.set(stateChatKey(),[{assistantIndex:21,plan:{chatCount:21},before:{relationshipState:{trust:"also invalid"}}}]);');
+    f.run('var r=record(true); r.preferences.developmentStyle="dynamic"; r.relationshipState.trust="invalid"; stateHistoryCache.set(stateChatKey(),[{assistantIndex:21,plan:{chatCount:21},before:{relationshipState:{trust:"also invalid"}}}]);');
     await f.run('rollbackChangedOutput(1,"edited")');
-    assert.equal(f.run('record().preferences.judgmentStyle'),'active');
+    assert.equal(f.run('record().preferences.developmentStyle'),'dynamic');
     assert.equal(f.run('record().relationshipState'),undefined);
     assert.equal((await f.run('loadStateHistory()')).length,0);
 }

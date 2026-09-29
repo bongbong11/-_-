@@ -30,6 +30,35 @@ export const JUDGMENT_STYLES = {
     active: '적극적',
 };
 
+export const DEVELOPMENT_STYLES = { static: '정적', balanced: '균형', dynamic: '동적' };
+export const DEVELOPMENT_GUIDANCE = {
+    static: 'Favor staying with the current scene through meaningful dialogue, emotional nuance, and small relational or practical changes. Static does not mean repetition, passivity, or avoiding a necessary action. Favor the two people’s relationship, emotions, thoughts, and dialogue. Natural arrivals and small happenings remain possible; quietness alone does not forbid them.',
+    balanced: 'Balance the current exchange with supported actions, choices, and external developments. Choose the movement that best fits the current scene without favoring either stillness or disruption.',
+    dynamic: 'Favor supported actions, decisions, external responses, and consequences that change the immediate situation. Dynamic does not require a new event, larger stakes, a time jump, faster relationship change, or premature resolution.',
+};
+export const BASIC_MOVES = {
+    continue: 'Continue the meaningful current exchange without repetition or an unrelated new incident.',
+    dialogue: 'Let a relevant line or interpersonal response change the current exchange without inventing feelings or knowledge.',
+    action: 'Carry out one supported action already available to this person; preserve any outcome requiring another participant.',
+    choice: 'Let the responsible character make a supported choice or refusal and show its immediate implication.',
+    emotion: 'Let a character-consistent feeling, thought, or relational tension become a specific response or expression; do not dictate the user’s inner state.',
+    movement: 'Attempt or propose a practical movement, shared activity, or change of place when it fits; preserve others’ decisions and do not force a transition.',
+    consequence: 'Let an established action produce a supported immediate reaction or consequence, without inventing a separate event.',
+};
+export function normalizeDevelopmentPreferences(value = {}) {
+    const developmentStyle = Object.hasOwn(DEVELOPMENT_STYLES, value.developmentStyle) ? value.developmentStyle
+        : value.progressionMode === 'off' || value.judgmentStyle === 'conservative' ? 'static'
+            : value.judgmentStyle === 'active' ? 'dynamic' : 'balanced';
+    // Legacy routing consumers use derived values; these are no longer independent controls.
+    const result = { ...value, settingsContract:3, developmentStyle, progressionMode: 'natural',
+        judgmentStyle: 'balanced' };
+    const intensity = Number(value.progressIntensity);
+    result.progressIntensity = Number.isFinite(intensity) && intensity > 0 ? Math.round(Math.max(0.5, Math.min(1.5, intensity)) * 10) / 10 : 1;
+    delete result.roleplayPace;
+    delete result.eventChance;
+    return result;
+}
+
 export const PACE_OPTIONS = {
     slow: '느리게',
     medium: '중간',
@@ -37,6 +66,9 @@ export const PACE_OPTIONS = {
 };
 
 export const DECISION_LABELS = {
+    progress_need: {flowing:'의미 있는 변화가 이어짐',stalled:'반복을 벗어날 움직임 필요',unclear:'비교 근거 부족'},
+    arrival_mode: {none:'이번 등장 없음',visit:'직접 방문',encounter:'자연스러운 마주침',participate:'현재 활동에 참여',background:'주변 인물의 개입',contact:'연락·메시지'},
+    basic_move: {emotion:'감정·생각의 표현',movement:'이동·활동 시도',continue:'현재 교류 이어가기',dialogue:'대화로 변화',action:'행동 실행',choice:'선택·거절',consequence:'기존 행동의 결과'},
     world_direction: WORLD_DIRECTIONS,
     negative_priority: { off: '사용 안 함', on: '부정 편향 최우선' },
     scene_state: { active: '활발히 진행 중', normal: '정상 진행', stalled: '정체·반복', transition_ready: '전환 가능', unclear: '불명확' },
@@ -384,6 +416,7 @@ export function rollVillainProfile(random = Math.random) {
 }
 
 export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = false, eventSource = '', pacingState = {} }) {
+    if (preferences.developmentStyle) preferences = normalizeDevelopmentPreferences(preferences);
     const progressionMode = preferences.progressionMode;
     const newEventEnabled = !hasEvent && (preferences.advancedEnabled || progressionMode !== 'off');
     const posture = 'Use the same evidence standard regardless of routing style. Select none only when the recent exchange affirmatively supports absence; select unclear when relevant evidence exists but is insufficient or contradictory. Do not turn desired next movement into an observed fact.';
@@ -688,6 +721,23 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
         eventTitle: preferences.advancedEventTitle || '',
         eventElement: preferences.advancedEventElement || '',
     }));
+    if (preferences.developmentStyle) {
+        delete questions.response_cadence;
+        questions.progress_need = {type:'choice', instructions:'Compare actual recent CHARACTER outputs with their preceding exchanges. Did anything meaningful change in dialogue, feelings, thoughts, a choice, action, or consequence? Quiet relational/emotional movement counts. Use stalled only for repeated content or preparation without a new step; waiting for a necessary user choice is not failure. Never demand that every issue be resolved.', criteria:{flowing:'Meaningful interaction or change is continuing.',stalled:'Actual outputs keep repeating, preparing, or deferring without a meaningful step.',unclear:'Not enough comparable outputs.'}};
+        questions.basic_move = { type:'choice', instructions:`Choose how the current RP should keep moving, including inside an advanced event. ${DEVELOPMENT_GUIDANCE[preferences.developmentStyle]} This is the manner of carrying the selected main beat, not an extra independent plot. Respect the main prompt's narrative speed, genre, and style.`, criteria:BASIC_MOVES };
+        // Basic movement continues without drawing a separate event.
+        if (!preferences.advancedEnabled) delete questions.primary_focus.criteria.new_event;
+        if (questions.event_route) {
+            delete questions.event_route.criteria.create;
+            delete questions.event_route.criteria.replace;
+            questions.event_route.instructions = 'Manage an already established event only: continue, keep in the background, or retire a completed stored event. Do not create or replace an event here. New independent events are available only through enabled advanced progression.';
+        }
+        const guide = DEVELOPMENT_GUIDANCE[preferences.developmentStyle] + ' Static/dynamic changes the medium of movement only, never the evidentiary bar. Even the most cautious setting should allow an ordinary response, attempt, emotion, or small consequence without requiring a major event.';
+        for (const key of ['primary_focus','progression_move','npc_route','villain_route','relationship_beat','advanced_route','advanced_move']) {
+            if (questions[key]) questions[key].instructions += `\nBasic development tendency: ${guide} This applies inside advanced events too. Follow the main prompt's genre and narrative pace; do not determine prose length or descriptive density here.`;
+        }
+        questions.relationship_pacing.instructions += '\nSlow: normally allow only incremental movement; reserve major changes for accumulated causes. Balanced: allow changes proportionate to clear current conduct. Fast: allow a warranted major change without repeated accumulation, never fabricate it. This applies to both closeness and distance. Never replay the same interaction just to delay change.';
+    }
     return questions;
 }
 
@@ -738,6 +788,7 @@ ${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or
 }
 
 export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '' }) {
+    if (settings.developmentStyle) settings = normalizeDevelopmentPreferences(settings);
     const blocks = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
     if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
     const cadencePrompts = {
@@ -745,7 +796,8 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         natural: 'Give ordinary space to one primary beat. Include at most one secondary reaction and only when it follows directly; let incidental input pass implicitly.',
         linger: 'Stay close to one decisive action, revelation, sensation, or emotional turn. Include at most one directly dependent secondary reaction; do not broaden the response into coverage of every input point.',
     };
-    blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
+    if (settings.developmentStyle) blocks.push(`<BASIC_DEVELOPMENT tendency="${settings.developmentStyle}">\n${DEVELOPMENT_GUIDANCE[settings.developmentStyle]}\n${BASIC_MOVES[decisions.basic_move] || BASIC_MOVES.continue}\n${decisions.progress_need === 'stalled' ? 'Recent output repeated or deferred without movement. Be more forthcoming in ONE fitting way: change the conversational approach, express a relevant feeling/thought, attempt an available action, or propose movement. Select one; do not complete every issue, invent success, or skip another participant’s choice.' : 'Let the present exchange yield a specific fresh response, feeling, attempt, or small consequence. Do not force a new plot merely to demonstrate progress.'} Apply this within the selected main beat, not as an additional independent action.\nFollow the narrative speed, rhythm, detail, length, genre, and style specified in the main prompt. This tendency guides in-world movement, not prose pacing. Keep the current interaction moving within any advanced event; do not introduce a separate event to fill a quota.\n</BASIC_DEVELOPMENT>`);
+    else blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
     const corrections = [];
     if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
     if (corrections.length < 2 && ['partial', 'missed'].includes(decisions.directive_followthrough)) corrections.push('Carry out the highest-priority unfulfilled relationship, event, conflict, NPC, or execution route from the prior response through one concrete action, fact, choice, or consequence now. Do not merely restate the intended development.');
@@ -803,6 +855,10 @@ Continue the active exchange through one concrete, character-consistent response
         const progressionRelevant = move !== 'hold' || ['event', 'new_event', 'transition'].includes(decisions.primary_focus);
         if (prompt && progressionRelevant) blocks.push(`<RP_PROGRESSION mode="${settings.progressionMode}">\n${prompt}\n</RP_PROGRESSION>`);
     }
+    if (['create','replace'].includes(decisions.npc_route) || ['create','replace'].includes(decisions.villain_route)) {
+        const arrival = {visit:'Arrive in person for a setting-compatible reason.',encounter:'Meet naturally along an established activity or route.',participate:'Join or become involved in the current activity.',background:'Let a previously peripheral person become locally involved without rewriting their prior role.',contact:'Make a plausible bounded contact; a call or message is one option, not the default.'}[decisions.arrival_mode];
+        if (arrival) blocks.push(`<PERSON_ARRIVAL>${arrival} Keep the entrance proportionate to the current interaction. Do not invent prior familiarity, hidden access, or duplicate a registered person.</PERSON_ARRIVAL>`);
+    }
     const npc = npcIsSheetCast ? '' : genreNpcPrompt(npcProfile, decisions.npc_route);
     if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
     if (sheetNpcTarget && decisions.npc_route === 'reuse') blocks.push(`<SHEET_NPC_SCENE>Let ${sheetNpcTarget} perform one scene-relevant ${decisions.npc_role || 'participant'} function at ${decisions.npc_weight || 'brief'} weight. Follow this person's specific sheet boundaries for motive, knowledge, and response.</SHEET_NPC_SCENE>`);
@@ -832,6 +888,7 @@ Continue the active exchange through one concrete, character-consistent response
         blocks.push(`<CONFLICT_PROGRESSION>\n${priority}${conflictBlocks.join('\n\n')}\n</CONFLICT_PROGRESSION>`);
     }
 
+    if (sheetCastNames.length) blocks.push(`<SHEET_CAST_OWNERSHIP>Registered identities: ${[...new Set(sheetCastNames)].join(', ')}. Never regenerate these people as independent default NPCs. Registration remains authoritative even with disabled analysis, stale records, absence, or zero selected records. Follow their original visible characterization when no additional record applies.</SHEET_CAST_OWNERSHIP>`);
     if (String(characterBlock || '').trim()) blocks.push('<SHEET_CAST_SCOPE>Apply the following specific boundaries to their named people within the selected scene, event, conflict, and world constraints. Those broader constraints do not rewrite their established knowledge, relationships, or characterization; these individual boundaries do not cancel valid scene progression.</SHEET_CAST_SCOPE>', String(characterBlock).trim());
 
     return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n)`;
