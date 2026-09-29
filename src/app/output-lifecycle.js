@@ -78,6 +78,14 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     if (kind === 'deleted' && rec.nonRpOutputIndices?.length) {
         rec.nonRpOutputIndices = rec.nonRpOutputIndices.map((value) => value > index ? value - 1 : value);
     }
+    // A verdict made from edited/removed RP cannot keep a scene paused or reuse its injection.
+    // Changes to the newly generated reply leave the earlier input verdict reusable.
+    const sceneGateAffected=Boolean(rec.sceneIntimacy && (!Number.isInteger(rec.sceneIntimacy.contextEndIndex) || index<=rec.sceneIntimacy.contextEndIndex));
+    if(sceneGateAffected) {
+        rec.sceneIntimacy=null;
+        rec.lastJudgment=null;
+        await clearInjection();
+    }
     const earliest = history.length ? Number(history[0].plan?.chatCount ?? history[0].assistantIndex) - 1 : null;
     if (earliest !== null && index < earliest) {
         for (const key of Object.keys(deps.reversibleStateSnapshot(rec))) delete rec[key];
@@ -91,7 +99,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     if (affected < 0) {
         const pendingAffected = rec.pendingPlan && Number(rec.pendingPlan.outputIndex ?? rec.pendingPlan.chatCount) >= index;
         if (!pendingAffected) {
-            if (kind === 'edited') { rec.lastJudgment = null; await clearInjection(); await deps.saveSession(chatKey, rec, history); deps.renderAll(); }
+            if (kind === 'edited' || sceneGateAffected) { rec.lastJudgment = null; await clearInjection(); await deps.saveSession(chatKey, rec, history); deps.renderAll(); }
             return;
         }
         if (['swiped', 'regenerated'].includes(kind)) {
@@ -126,8 +134,9 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
         return;
     }
     const entry = history[affected];
-    const canReuseSwipe = ['swiped', 'regenerated'].includes(kind) && entry.plan && entry.judgment;
+    const canReuseSwipe = !sceneGateAffected && ['swiped', 'regenerated'].includes(kind) && entry.plan && entry.judgment;
     deps.restoreReversibleState(rec, entry.before);
+    if(sceneGateAffected)rec.sceneIntimacy=null;
     history = history.slice(0, affected);
     rec.lastVerification = null;
     if (canReuseSwipe) {

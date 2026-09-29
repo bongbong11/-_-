@@ -13,6 +13,8 @@ assert.equal(judge('0','unclear','none','paused').route,'paused','unclear does n
 assert.equal(judge('2','paused','2','paused').route,'paused','temporary interruption stays in scene');
 assert.equal(judge('0','ended','2','paused').transition,'exited','confirmed scene end resumes ordinary flow');
 assert.equal(judge('4','ended','2','paused').route,'paused','contradictory level and phase cannot end the scene');
+assert.equal(judge('unclear','ended','2','paused').route,'paused','unknown level cannot authorize scene exit');
+assert.equal(judge('invalid','ended','2','paused').route,'paused','invalid level cannot authorize scene exit');
 const prompt=buildPausedInjection({settings:{},referenceLines:['<CHARACTER_REFERENCE>Stored reference.</CHARACTER_REFERENCE>']});
 assert.match(prompt,/Stored reference/);
 assert.match(prompt,/NSFW, and character-specific kink instructions/);

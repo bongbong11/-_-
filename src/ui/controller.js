@@ -257,6 +257,7 @@ async function analyzeAndSaveCharacter() {
     const signature = characterFormSignature();
     const activityOwner = `sheet:${job.id || Date.now()}`;
     let failureStage='model';
+    let saved=false,applied=false;
     const assertEditor = () => {
         job.assert();
         if (revision !== characterEditorRevision || signature !== characterFormSignature()) throw new deps.StaleRunError();
@@ -296,8 +297,11 @@ async function analyzeAndSaveCharacter() {
     // Replace the old analysis only after the new profile and server persistence succeed.
     failureStage='save';
     await deps.saveCharacterStore(chatKey, next);
+    saved=true;
+    failureStage='apply';
     job.assert();
     deps.characterStore = next;
+    applied=true;
     invalidatePreparedJudgment();
     await deps.persistChat();
     await deps.clearInjection();
@@ -307,8 +311,8 @@ async function analyzeAndSaveCharacter() {
     deps.document.getElementById('sr-character-analysis-result')?.scrollIntoView?.({ block: 'nearest' });
     deps.updateActivity(`${name} · ${deps.profileStatus(entry)}`, { done: true, owner: activityOwner });
     } catch (error) {
-        if(!(error instanceof deps.StaleRunError))captureCharacterError(error,failureStage);
-        taskStatus(`판정 실패 · 기존 결과 보관 · ${error.message}`, !(error instanceof deps.StaleRunError));
+        if(!(error instanceof deps.StaleRunError))captureCharacterError(error,failureStage,{saved,applied});
+        taskStatus(`${saved?'인물 기록 저장 완료 · 후속 반영 실패':'판정 실패 · 기존 결과 보관'} · ${error.message}`, !(error instanceof deps.StaleRunError));
         deps.updateActivity(error.message, { error: !(error instanceof deps.StaleRunError), done: error instanceof deps.StaleRunError, owner: activityOwner });
         if (!(error instanceof deps.StaleRunError)) { error.activityReported = true; throw error; }
     } finally { job.finish(); }

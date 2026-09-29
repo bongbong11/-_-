@@ -453,6 +453,7 @@ function reversibleStateSnapshot(rec) {
         relationshipState: rec.relationshipState,
         observationState: rec.observationState,
         sceneState: rec.sceneState,
+        sceneIntimacy: rec.sceneIntimacy || null,
         eventProfile: rec.eventProfile || null,
         npcProfile: rec.npcProfile || null,
         villainProfile: rec.villainProfile || null,
@@ -477,6 +478,7 @@ function reversibleStateSnapshot(rec) {
 function restoreReversibleState(rec, snapshot) {
     if (!snapshot) return;
     Object.assign(rec, JSON.parse(JSON.stringify(snapshot)));
+    rec.sceneIntimacy = snapshot.sceneIntimacy ? structuredClone(snapshot.sceneIntimacy) : null;
 }
 
 let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection} = createOutputLifecycle({

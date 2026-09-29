@@ -70,4 +70,12 @@ function setup() {
     await f.run('analyzeAndSaveCharacter()');
     assert.equal(f.run('JSON.stringify(characterStore.npcs[0].recordBank)'),original,'stale response cannot replace saved bank');
 }
-console.log('Retrieval core passed: provenance, versions, knowledge contract, >10 records, zero records, legacy isolation, failed/stale save preservation.');
+{
+    const {f,fields}=setup();
+    await f.run('saveCharacterEntry()');
+    f.run('persistChat=async()=>{throw new Error("session write failure")};');
+    await assert.rejects(f.run('analyzeAndSaveCharacter()'),/session write failure/);
+    assert.ok(f.run('characterStore.npcs[0].recordBank'),'the character bank was successfully saved before session failure');
+    assert.match(fields.get('sr-character-task-status').textContent,/저장 완료/,'post-save failure must not claim that the old bank was retained');
+}
+console.log('Retrieval core passed: provenance, versions, knowledge contract, >10 records, zero records, legacy isolation, failed/stale save preservation, accurate post-save errors.');

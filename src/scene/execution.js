@@ -12,6 +12,7 @@ function sourceRevisionKey(rec, world) {
         reasoner: deps.settings.reasonerProfileId || '',
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
         characterSelectorContract: 2,
+        sceneGateContract: 2,
         characterCore: CORE_SHA256,
         characterEnabled: Boolean(deps.characterStore.enabled),
         preferences: rec?.preferences, recentTurns: deps.settings.recentTurns,
@@ -277,9 +278,10 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         memoryNode.textContent = MEMORY_REFERENCE_ENABLED ? deps.memoryStatusText(prefs, memory.status) : '준비 중 · 현재 RP 판독에서는 사용하지 않습니다.';
     }
     const previousSceneRoute = rec.sceneIntimacy?.route === 'paused' ? 'paused' : 'normal';
-    const carriedGateIds = (rec.lastJudgment?.characterTrace || []).filter(item=>item?.presence==='active').map(item=>item.id);
+    const previousParticipantIds=previousSceneRoute==='paused' ? rec.sceneIntimacy?.participantIds||[] : [];
+    const carriedGateIds = [...new Set([...previousParticipantIds,...(rec.lastJudgment?.characterTrace || []).filter(item=>(item?.presence||item?.final?.presence)==='active').map(item=>item.id)])];
     const gatePeople = deps.characterStore.enabled ? deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedGateIds, {allowUserImpersonation:prefs.allowUserImpersonation}).slice(0,6) : [];
-    const gateRequest = sceneGateRequest({model:deps.JEV_MODEL,transcript,previous:previousSceneRoute,people:gatePeople});
+    const gateRequest = sceneGateRequest({model:deps.JEV_MODEL,transcript,previous:previousSceneRoute,people:gatePeople,previousParticipantIds});
     let sceneGate;
     deps.judgeInFlight = true;
     deps.judgeCompletionPromise = new Promise(resolve=>{deps.resolveJudgeCompletion=resolve;});
@@ -292,15 +294,15 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         sceneGate=resolveSceneGate(gateData.answers,gateRequest,previousSceneRoute);
     } catch(error) {
         if(error instanceof deps.StaleRunError || !run.valid())throw error;
-        sceneGate={route:previousSceneRoute,transition:'',level:null,phase:'unclear',evidence:null,participantIds:rec.sceneIntimacy?.participantIds||[]};
+        sceneGate=resolveSceneGate({},gateRequest,previousSceneRoute);
         deps.updateActivity(`장면 상태 확인 실패 · 기존 상태 유지: ${error.message}`,{error:true});
     } finally {
         deps.judgeInFlight=false;
         deps.resolveJudgeCompletion?.();deps.resolveJudgeCompletion=null;
         deps.setBusy(false);
     }
-    if(sceneGate.route==='paused' && sceneGate.participantIds.length===0 && previousSceneRoute==='paused')sceneGate.participantIds=rec.sceneIntimacy?.participantIds||[];
-    rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey};
+    const sceneContextEndIndex=Math.max(-1,...context.selected.map(message=>(deps.getContext().chat||[]).indexOf(message)),String(pendingUserText||'').trim()?(deps.getContext().chat||[]).length:-1);
+    rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey,contextEndIndex:sceneContextEndIndex};
     if(sceneGate.route==='paused') {
         const referenceLines=[];
         for(const entry of gatePeople) {
@@ -362,9 +364,9 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         ? [...pendingExternalCandidates(rec, sourceKey), ...storedFollowupCandidates.filter((item) => !(rec.pendingContinuityCandidates || []).some((pending) => pending.id === item.id))].slice(0, 5)
         : [];
     Object.assign(questions, deps.buildPendingCandidateQuestions(pendingCandidates));
-    const carriedCharacterIds = (rec.lastJudgment?.characterTrace || [])
+    const carriedCharacterIds = [...new Set([...sceneGate.participantIds,...(rec.lastJudgment?.characterTrace || [])
         .filter((item) => (item?.presence || item?.final?.presence) && (item.presence || item.final.presence) !== 'absent')
-        .map((item) => item.id);
+        .map((item) => item.id)])];
     const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds, { allowUserImpersonation: prefs.allowUserImpersonation });
     const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
