@@ -47,7 +47,8 @@ for(const style of ['static','balanced','dynamic']) for(const advanced of [false
     assert.equal(people.length,impersonate?3:2);
     assert.equal(people.some(p=>p.kind==='persona'),impersonate);
     assert.ok(people.every(p=>p.recordMode && p.recordStatus==='current'));
-    assert.doesNotMatch(JSON.stringify(req.state.character_profiles),/OLD_CORE_SENTINEL|RAW_SOURCE_SENTINEL|OLD_PROFILE_SENTINEL/);
+    assert.ok(people.every(p=>!Object.hasOwn(p,'sourceExcerpt') && !Object.hasOwn(p,'personaReference') && !Object.hasOwn(p,'core') && !Object.hasOwn(p,'recordBank')));
+    assert.doesNotMatch(JSON.stringify(req),/OLD_CORE_SENTINEL|RAW_SOURCE_SENTINEL|OLD_PROFILE_SENTINEL/);
     assert.ok(!Object.keys(req.questions).some(key=>/response_direction|response_basis/.test(key)));
     const judgment=JSON.parse(f.run('JSON.stringify(record().lastJudgment)'));
     assert.match(judgment.payload,/BASIC_DEVELOPMENT/);
@@ -59,7 +60,7 @@ for(const style of ['static','balanced','dynamic']) for(const advanced of [false
         assert.equal(trace.injectedRuleIds.length,1);
     }
     assert.match(judgment.payload,/knowledge=suspects/);
-    assert.doesNotMatch(judgment.payload,/OLD_PROFILE_SENTINEL|Direction:/);
+    assert.doesNotMatch(judgment.payload,/RAW_SOURCE_SENTINEL|OLD_CORE_SENTINEL|OLD_PROFILE_SENTINEL|Direction:/);
     runs++;
 }
 for(const mode of ['none','unknown','absent']) {

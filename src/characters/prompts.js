@@ -11,7 +11,7 @@ Use only supplied IDs. Do not rewrite a rule or create a new one. Keep observati
 export const PROFILE_SELECT = CHARACTER_LIVE_SYSTEM;
 export const CONTEXT_SELECT = 'Choose one current or continuity item only if it materially affects this person in the next response. A world fact is not automatically this person\'s knowledge. Choose none when nothing needs emphasis.';
 export const DIRECTION_SELECT = 'Choose one character-consistent response direction from the actual scene and legitimate information. This is a proposal, not an established action. Choose none when no extra direction is needed.';
-export const ACCESS_INSTRUCTION = `For this person and this specific information, identify the narrowest acquisition route established by the sheet, verified continuity, or RP evidence.
+export const ACCESS_INSTRUCTION = `For this person and this specific information, identify the narrowest acquisition route established by a supplied stored record, verified continuity, or RP evidence.
 
 Model-visible material, another person's knowledge, intimacy, intelligence, profession, status, intuition, or a convenient deduction cannot by itself provide access. Preserve the difference between a world fact, a report, a belief, a suspicion, and a past state whose present validity is unknown.`;
 export const ACCESS_CHOICES = {

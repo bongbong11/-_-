@@ -20,7 +20,7 @@ let worldEditorRevision = 0;
 async function worldTask(action) {
     if (worldBusy) return;
     worldBusy = true;
-    const controls = ['sr-world-new','sr-world-save','sr-world-delete','sr-world-cancel','sr-world-advanced-save','sr-world-advanced-generate','sr-world-advanced-delete','sr-world-advanced-file','sr-world-advanced-cancel'].map(id=>deps.document.getElementById(id)).filter(Boolean);
+    const controls = ['sr-world-new','sr-world-save','sr-world-delete','sr-world-cancel','sr-world-advanced-save','sr-world-advanced-delete','sr-world-advanced-file','sr-world-advanced-cancel'].map(id=>deps.document.getElementById(id)).filter(Boolean);
     controls.forEach(control=>{control.disabled=true;});
     try { return await action(); }
     catch (error) {
@@ -839,25 +839,6 @@ function bindForm() {
         await deps.copyText(WORLD_COMPILER_PROMPT);
         deps.window.toastr?.success?.('분석 명령문을 복사했습니다. 뒤에 세계관 원문을 붙여 주세요.', '씬판독기');
     })(), '분석 명령문을 복사하지 못했습니다.'));
-    deps.document.getElementById('sr-world-advanced-generate')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
-        const source = String(deps.document.getElementById('sr-world-advanced-source')?.value || '').trim();
-        const revision = worldEditorRevision;
-        if (!source) throw new Error('세계관 원문을 먼저 붙여 넣으세요.');
-        if (!deps.settings.reasonerProfileId) throw new Error('설정에서 연결 프로필 모델을 먼저 선택하세요.');
-        const status = deps.document.getElementById('sr-world-advanced-status');
-        status.textContent = '설정의 연결 프로필 모델이 세계관을 나누고 있습니다…';
-        await deps.loadReasonerProfiles();
-        if (!deps.connectionRequestService) throw new Error(deps.reasonerProfileError || '연결 프로필을 읽지 못했습니다.');
-        const response = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, WORLD_COMPILER_PROMPT,
-            { world_prompt: source }, { maxTokens: 12000 });
-        if (worldEditorRevision !== revision || String(deps.document.getElementById('sr-world-advanced-source')?.value || '').trim() !== source) throw new Error('판독 중 원문이나 편집 화면이 바뀌었습니다. 다시 생성하세요.');
-        const parsed = parseAdvancedWorld(response.result);
-        deps.document.getElementById('sr-world-advanced-json').value = JSON.stringify(parsed, null, 2);
-        const normalizedSource = source.replace(/\s+/g, ' ');
-        if (parsed.records.some(record => !normalizedSource.includes(record.source_quote.replace(/\s+/g, ' ')))) throw new Error('생성한 기록 중 원문에서 확인되지 않는 근거 구절이 있습니다. JSON과 원문을 확인하세요.');
-        deps.document.getElementById('sr-world-advanced-json').value = JSON.stringify(parsed, null, 2);
-        status.textContent = `생성 완료 · 기록 ${parsed.records.length}개 · JSON을 확인하고 저장하세요.`;
-    }), '설정의 연결 프로필 모델로 세계관을 생성하지 못했습니다.'));
     deps.document.getElementById('sr-world-advanced-file')?.addEventListener('change', event => deps.runUiTask(worldTask(async () => {
         const file = event.target.files?.[0];
         if (!file) return;

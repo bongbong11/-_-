@@ -398,11 +398,12 @@ try{
     assert.equal(await page.locator('#sr-world-advanced').evaluate(e=>e.hidden),false,'advanced world importer is available without developer unlock');
     assert.equal(await page.locator('#sr-owner-card').evaluate(e=>e.hidden),true,'other developer tools remain locked');
     await page.locator('#sr-world-advanced').evaluate(e=>e.open=true);
+    assert.equal(await page.locator('#sr-world-advanced-generate').count(),0,'advanced world uses external JSON import only');
+    assert.equal(await page.locator('#sr-world-advanced-source').count(),0,'advanced world has no redundant source box');
     await page.locator('#sr-world-advanced-copy').click();
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/scene-reader-world/,'copy supplies the world compiler contract');
-    await page.locator('#sr-world-advanced-source').fill('Moonlight opens the garden gate.');
-    await page.locator('#sr-world-advanced-generate').click();
-    await page.waitForFunction(()=>document.getElementById('sr-world-advanced-status').textContent.includes('생성 완료'));
+    await page.locator('#sr-world-advanced-file').setInputFiles({name:'garden.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({format:'scene-reader-world',version:1,name:'Moonlit Garden',short_description:'A garden whose gate responds to moonlight.',fixed_rules:'The garden remains an ordinary place except for its moonlit gate.',franchise:false,calendar_topics:[],records:[{id:'W001',category:'mechanism',when:'When moonlight reaches the gate.',keywords:['moonlight','gate'],rule:'Moonlight opens the garden gate.',source_quote:'Moonlight opens the garden gate.'}]}))});
+    await page.waitForFunction(()=>document.getElementById('sr-world-advanced-status').textContent.includes('garden.json'));
     assert.match(await page.locator('#sr-world-advanced-json').inputValue(),/Moonlight opens the garden gate/);
     await page.locator('#sr-world-advanced-save').click();
     await page.waitForFunction(()=>document.getElementById('sr-world-manager-list').textContent.includes('Moonlit Garden'));
@@ -443,6 +444,8 @@ try{
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'At the moonlit garden gate, Hunter waits.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     await page.waitForFunction(()=>(mock.macros['scene-reader-world']?.()||'').includes('Moonlight opens the garden gate.'));
     assert.match(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),/ordinary place.*Moonlight opens the garden gate/s,'chosen world record reaches the world macro');
+    assert.doesNotMatch(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Moonlight opens the garden gate/,'scene instructions do not duplicate the world-rule category');
+    assert.match(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Active world: Moonlit Garden/,'scene routing retains only a short world reference');
     const worldGate=requests.filter(request=>request.url.endsWith('/systemone')).findLast(request=>request.body.state?.world_record_candidates?.length);
     assert.equal(worldGate.body.state.world_record_candidates[0].id,'W001','the scene gate judges bounded world candidates');
     gateScenario={level:'3',phase:'active'};

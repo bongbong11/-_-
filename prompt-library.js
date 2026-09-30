@@ -868,7 +868,7 @@ Within the selected scene or event, answer the current interaction through a con
     }
     const npc = npcIsSheetCast ? '' : genreNpcPrompt(npcProfile, decisions.npc_route);
     if (npc && ['create', 'replace', 'reuse', 'background'].includes(decisions.npc_route)) blocks.push(npc);
-    if (sheetNpcTarget && decisions.npc_route === 'reuse') blocks.push(`<SHEET_NPC_SCENE>Let ${sheetNpcTarget} perform one scene-relevant ${decisions.npc_role || 'participant'} function at ${decisions.npc_weight || 'brief'} weight. Follow this person's specific sheet boundaries for motive, knowledge, and response.</SHEET_NPC_SCENE>`);
+    if (sheetNpcTarget && decisions.npc_route === 'reuse') blocks.push(`<SHEET_NPC_SCENE>Let ${sheetNpcTarget} perform one scene-relevant ${decisions.npc_role || 'participant'} function at ${decisions.npc_weight || 'brief'} weight. Follow established characterization and any selected stored records for motive, knowledge, and response.</SHEET_NPC_SCENE>`);
     const npcExecution = npcIsSheetCast || sheetNpcTarget ? '' : npcExecutionPrompt(decisions);
     if (npcExecution) blocks.push(npcExecution);
 

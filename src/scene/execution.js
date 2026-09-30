@@ -410,8 +410,11 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     if (prefs.settingsContract >= 3) addAppearanceQuestions(questions,rec.appearanceOffer);
     const structuredCharacterContext = liveCharacters.length ? {
         policy: deps.CHARACTER_LIVE_SYSTEM,
-        npcRolePolicy: 'NPC villain, ally, or mixed is a broad role hint, not a personality or knowledge override. Use the sheet and actual RP to judge this person\'s specific motives and conduct. An ally may disagree; a villain may cooperate for a reason.',
-        people: liveCharacters,
+        npcRolePolicy: 'NPC villain, ally, or mixed is a broad role hint, not a personality or knowledge override. Use the stored records and actual RP to judge this person\'s specific motives and conduct. An ally may disagree; a villain may cooperate for a reason.',
+        // Only compiled records and live context may cross the Jev boundary.
+        // Keep local sheet, lorebook, bank provenance, and legacy excerpts out.
+        people: liveCharacters.map(({ index, id, name, kind, npcRole, recordStatus, recordMode, profileCandidates, contextCandidates }) =>
+            ({ index, id, name, kind, npcRole, recordStatus, recordMode, profileCandidates, contextCandidates })),
     } : null;
 
     deps.judgeInFlight = true;
