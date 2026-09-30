@@ -169,8 +169,9 @@ async function onAssistantOutputChanged(messageId, kind) {
 async function applyStoredInjection({ exactSnapshot = false } = {}) {
     const rec = deps.record();
     const payload = deps.settings.enabled && rec?.lastJudgment?.payload ? rec.lastJudgment.payload : '';
+    const world = deps.selectedWorld(rec);
     const worldPayload = deps.settings.enabled
-        ? String(exactSnapshot ? rec?.lastJudgment?.worldPayload || '' : deps.selectedWorld(rec)?.prompt || '')
+        ? String(exactSnapshot ? rec?.lastJudgment?.worldPayload || '' : rec?.lastJudgment?.worldId === world?.id ? rec.lastJudgment.worldPayload || '' : world?.prompt || '')
         : '';
     const macroMode = rec?.preferences?.injectionMode === 'macro' && deps.macroAvailable;
     const worldMacroMode = rec?.preferences?.worldInjectionMode === 'macro' && deps.macroAvailable;

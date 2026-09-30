@@ -1,3 +1,5 @@
+import { bundledWorldBank } from './src/world/bundled.js';
+import { parseAdvancedWorld, storedWorldToJson } from './src/world/advanced.js';
 export const CUSTOM_WORLD_STORAGE = 'scene-reader-custom-worlds-v1';
 
 export const INITIAL_CUSTOM_WORLDS = [
@@ -35,12 +37,15 @@ Use surrounding details only when they change what a character notices, says, do
         id: 'custom-harry-potter',
         name: '해리포터',
         franchise: true,
+        calendarTopics: ['holidays'],
         hint: 'Harry Potter canon logic appropriate to the established continuity, location, and year, with active roleplay and lore taking precedence.',
         prompt: `## HARRY_POTTER_WORLD_CHECK
 
 {{// Apply silently only when the active setting belongs to Harry Potter canon. Supplements CANON_FIDELITY_PASS.}}
 
 Apply Harry Potter-specific world logic appropriate to the established continuity, location, and year.
+
+At Hogwarts, the school year begins on 1 September, when the Hogwarts Express leaves King's Cross at 11 a.m. Halloween falls in the autumn term; Christmas brings a winter holiday and some students remain at school; Easter is a spring break that may still involve schoolwork. Exams and the end of the school year belong near summer. Use these as calendar anchors for a Hogwarts scene, not as compulsory celebrations or a fixed schedule for every magical school.
 
 Preserve canonical distinctions among magical and non-magical people, including witches, wizards, Muggles, Squibs, Muggle-borns, half-bloods, and pure-bloods. Let blood status affect prejudice, family pressure, reputation, marriage politics, institutional treatment, insults, and social risk where relevant.
 
@@ -212,29 +217,18 @@ Keep this check internal.`,
     },
 ];
 
-export function makeWorldHint(name, prompt) {
-    const cleaned = String(prompt || '')
-        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
-        .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/<\/?[A-Z][^>]*>/g, ' ')
-        .replace(/^\s*#{1,6}\s*/gm, '')
-        .replace(/[*_`>|-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    const excerpt = cleaned.slice(0, 360).replace(/\s+\S*$/, '').trim() || cleaned.slice(0, 360);
-    return `${String(name || 'Custom world').trim()}: ${excerpt || 'Follow the stored world prompt and active roleplay continuity.'}`;
-}
-
 function normalizeCustomWorld(world) {
     const prompt = String(world.prompt || '');
+    const bank = world.advanced ? parseAdvancedWorld(storedWorldToJson(world)) : null;
     return {
         id: String(world.id),
         name: String(world.name),
-        hint: String(world.hint || makeWorldHint(world.name, prompt)),
+        hint: String(world.hint || world.name || ''),
         prompt,
         franchise: Object.hasOwn(world, 'franchise')
             ? Boolean(world.franchise)
             : /CANON_FIDELITY_PASS|HARRY_POTTER_WORLD_CHECK|established[- ]franchise|원작\s*(?:세계|인물|캐릭터)/i.test(`${world.id} ${world.name} ${world.hint || ''} ${prompt}`),
+        ...(bank ? { advanced: { version: bank.version, calendar_topics: bank.calendar_topics, records: bank.records } } : {}),
     };
 }
 
@@ -255,7 +249,7 @@ export function loadCustomWorlds() {
                 if (seen.has(world.id)) return false;
                 seen.add(world.id);
                 return true;
-            }).map(normalizeCustomWorld);
+            }).flatMap(world => { try { return [normalizeCustomWorld(world)]; } catch { return []; } });
         }
     } catch { /* use bundled defaults */ }
     const initial = structuredClone(INITIAL_CUSTOM_WORLDS);
@@ -274,5 +268,11 @@ export function saveCustomWorlds(worlds) {
 }
 
 export function allWorlds(builtins, customs = loadCustomWorlds()) {
-    return [...builtins.map((world) => ({ ...world, franchise: Boolean(world.franchise), builtin: true })), ...customs.map((world) => ({ ...normalizeCustomWorld(world), builtin: false }))];
+    return [...builtins.map((world) => bundledWorldBank({ ...world, franchise: Boolean(world.franchise), builtin: true })), ...customs.map((world) => {
+        const normalized = { ...normalizeCustomWorld(world), builtin: false };
+        const original = INITIAL_CUSTOM_WORLDS.find(item => item.id === world.id);
+        const oldHarryPrompt = original?.id === 'custom-harry-potter' ? original.prompt.replace(/\n\nAt Hogwarts,[\s\S]*?magical school\./, '') : '';
+        if (!world.advanced && original && [original.prompt, oldHarryPrompt].includes(world.prompt)) return bundledWorldBank({ ...normalized, prompt: original.prompt, calendarTopics: original.calendarTopics || [] });
+        return normalized;
+    })];
 }

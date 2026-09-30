@@ -8,7 +8,7 @@ export function sceneGateRequest({model,transcript,previous='normal',people=[],p
         scene_evidence:{type:'choice',instructions:'Select the one supplied RP message that best supports the current scene phase and level. Do not cite OOC, an imagined action, or an absent message.',criteria:{none:'No message reliably supports a transition.',...Object.fromEntries(messageIds.map(id=>[id,`RP message [${id}]`]))}},
     };
     for(const [index,person] of people.entries())questions[`scene_participant_${index}`]={type:'choice',instructions:`Is registered ${person.name} actually participating in the current interaction? Do not equate mere mention with participation. Judge this independently of other answers.`,criteria:{yes:'Currently participating.',no:'Absent, mentioned, or only background.',unclear:'Cannot determine.'}};
-    return {model,state:{scope:'Classify current scene continuity only. Do not propose actions, character traits, or a new scene.',recent_roleplay:transcript,previous_route:previous,previous_participant_ids:previous==='paused'?previousParticipantIds:[],registered_people:people.map(person=>({id:person.id,name:person.name,aliases:person.aliases||[]}))},questions};
+    return {model,state:{scope:'Classify current scene continuity and any supplied world-rule relevance. Do not propose actions, character traits, or a new scene.',recent_roleplay:transcript,previous_route:previous,previous_participant_ids:previous==='paused'?previousParticipantIds:[],registered_people:people.map(person=>({id:person.id,name:person.name,aliases:person.aliases||[]}))},questions};
 }
 
 export function resolveSceneGate(answers,request,previous='normal') {

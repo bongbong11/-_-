@@ -5,11 +5,26 @@ import { characterErrorReport } from './character-error.js';
 import { compilerRequest, createRecordBank } from '../characters/records.js';
 import { archiveRecordVersion } from '../characters/versions.js';
 import { bindCharacterTransfer } from './character-transfer.js';
+import { WORLD_COMPILER_PROMPT, parseAdvancedWorld, advancedWorldToStored, storedWorldToJson } from '../world/advanced.js';
+import { SEASONAL_OPTIONS } from '../world/seasonal.js';
 export function createUiController(deps) {
 let characterEditorRevision = 0;
 let editorLore = [];
 let loreLoadingPromise = null;
 let lastCharacterError = null;
+let worldBusy = false;
+let worldEditorRevision = 0;
+async function worldTask(action) {
+    if (worldBusy) return;
+    worldBusy = true;
+    const controls = ['sr-world-new','sr-world-save','sr-world-delete','sr-world-cancel','sr-world-advanced-save','sr-world-advanced-generate','sr-world-advanced-delete','sr-world-advanced-file','sr-world-advanced-cancel'].map(id=>deps.document.getElementById(id)).filter(Boolean);
+    controls.forEach(control=>{control.disabled=true;});
+    try { return await action(); }
+    catch (error) {
+        if (deps.document.getElementById('sr-world-advanced')?.open) deps.document.getElementById('sr-world-advanced-status').textContent = `처리 실패 · ${error.message}`;
+        throw error;
+    } finally { worldBusy=false; controls.forEach(control=>{control.disabled=false;}); }
+}
 function captureCharacterError(error,stage,meta={}) {
     lastCharacterError=characterErrorReport(error,{stage,...meta});
     const button=deps.document.getElementById('sr-character-error-copy');
@@ -36,6 +51,7 @@ function setFormValues() {
     setValue('sr-development-style', prefs.developmentStyle);
     setValue('sr-progress-intensity', Number(prefs.progressIntensity ?? 1).toFixed(1));
     setValue('sr-world-profile', prefs.selectedWorldId);
+    for (const key of Object.keys(SEASONAL_OPTIONS)) setChecked(`sr-season-${key}`, prefs.seasonalReferences?.includes(key));
     setChecked('sr-advanced-enabled', prefs.advancedEnabled);
     setValue('sr-advanced-style', prefs.advancedStyle);
     for (const key of Object.keys(deps.ADVANCED_ELEMENTS)) setChecked(`sr-advanced-${key}`, prefs.advancedElements.includes(key));
@@ -92,10 +108,13 @@ function renderWorldControls() {
         select.value = worlds.some((world) => world.id === current) ? current : 'current';
     }
     const manager = deps.document.getElementById('sr-world-manager-list');
-    if (manager) manager.innerHTML = deps.loadCustomWorlds().map((world) => `<button type="button" class="sr-world-item" data-world-id="${deps.escapeHtml(world.id)}"><span>${deps.escapeHtml(world.name)}${world.franchise ? ' · 원작 세계' : ''}</span><i class="fa-solid fa-pen" aria-hidden="true"></i></button>`).join('') || '<div class="sr-empty-small">저장한 커스텀 세계관 없음</div>';
+    if (manager) manager.innerHTML = deps.loadCustomWorlds().map((world) => `<button type="button" class="sr-world-item" data-world-id="${deps.escapeHtml(world.id)}"><span>${deps.escapeHtml(world.name)}${world.franchise ? ' · 원작 세계' : ''}${world.advanced ? ' · 고급' : ''}</span><i class="fa-solid fa-pen" aria-hidden="true"></i></button>`).join('') || '<div class="sr-empty-small">저장한 커스텀 세계관 없음</div>';
 }
 
 function showWorldEditor(world = null) {
+    if (worldBusy) return;
+    worldEditorRevision++;
+    if (world?.advanced) { showAdvancedWorldEditor(world); return; }
     const listView = deps.document.getElementById('sr-world-list-view');
     const editor = deps.document.getElementById('sr-world-editor');
     if (!listView || !editor) return;
@@ -109,11 +128,33 @@ function showWorldEditor(world = null) {
     deps.document.getElementById('sr-world-editor-title').textContent = world ? `세계관 수정 · ${world.name}` : '새 세계관 작성';
 }
 
+function showAdvancedWorldEditor(world) {
+    if (!deps.ownerUnlocked()) { deps.window.toastr?.warning?.('제작자 모드를 먼저 열어 주세요.', '씬판독기'); return; }
+    const panel = deps.document.getElementById('sr-world-advanced');
+    panel.open = true;
+    deps.document.getElementById('sr-world-list-view').hidden = true;
+    deps.document.getElementById('sr-world-editor').hidden = true;
+    deps.document.getElementById('sr-world-advanced-edit-id').value = world.id;
+    deps.document.getElementById('sr-world-advanced-json').value = JSON.stringify(storedWorldToJson(world), null, 2);
+    deps.document.getElementById('sr-world-advanced-status').textContent = `${world.name} · 기록 ${world.advanced.records.length}개`;
+    deps.document.getElementById('sr-world-advanced-delete').hidden = false;
+    deps.document.getElementById('sr-world-advanced-cancel').hidden = false;
+}
+
 function showWorldList() {
+    worldEditorRevision++;
     const listView = deps.document.getElementById('sr-world-list-view');
     const editor = deps.document.getElementById('sr-world-editor');
     if (listView) listView.hidden = false;
     if (editor) editor.hidden = true;
+    const advanced = deps.document.getElementById('sr-world-advanced');
+    if (advanced) advanced.open = false;
+    const id = deps.document.getElementById('sr-world-advanced-edit-id');
+    if (id) id.value = '';
+    const deleteButton = deps.document.getElementById('sr-world-advanced-delete');
+    if (deleteButton) deleteButton.hidden = true;
+    const cancelButton = deps.document.getElementById('sr-world-advanced-cancel');
+    if (cancelButton) cancelButton.hidden = true;
     renderWorldControls();
 }
 
@@ -443,6 +484,7 @@ function bindForm() {
             judgedAt: judgment.judgedAt, model: judgment.model,
             request: frame?.request || '원문 요청은 재시작 또는 다른 채팅으로 전환되어 메모리에 남아 있지 않습니다.',
             rawJevAnswers: frame?.answers || judgment.rawChoices,
+            worldSelection: judgment.worldSelection, worldGate: frame?.worldGate,
             decisions: judgment.details, actionPlan: judgment.actionPlan, rolls: judgment.rolls,
             verification: judgment.priorVerification, finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
         }, deps.ownerPrompt());
@@ -492,6 +534,10 @@ function bindForm() {
     deps.document.getElementById('sr-world-direction')?.addEventListener('change', (event) => deps.runUiTask(savePreference('worldDirection', event.target.value)));
     deps.document.getElementById('sr-relationship-direction')?.addEventListener('change', (event) => deps.runUiTask(savePreference('relationshipDirection', event.target.value)));
     deps.document.getElementById('sr-world-profile')?.addEventListener('change', (event) => deps.runUiTask(savePreference('selectedWorldId', event.target.value)));
+    for (const key of Object.keys(SEASONAL_OPTIONS)) deps.document.getElementById(`sr-season-${key}`)?.addEventListener('change', () => {
+        const selected = Object.keys(SEASONAL_OPTIONS).filter(option => deps.document.getElementById(`sr-season-${option}`)?.checked);
+        deps.runUiTask(savePreference('seasonalReferences', selected).then(setFormValues));
+    });
     deps.document.getElementById('sr-advanced-enabled')?.addEventListener('change', (event) => deps.runUiTask(savePreference('advancedEnabled', event.target.checked).then(setFormValues)));
     deps.document.getElementById('sr-advanced-style')?.addEventListener('change', (event) => deps.runUiTask(savePreference('advancedStyle', event.target.value)));
     for (const key of Object.keys(deps.ADVANCED_ELEMENTS)) deps.document.getElementById(`sr-advanced-${key}`)?.addEventListener('change', () => {
@@ -662,34 +708,120 @@ function bindForm() {
     });
     deps.document.getElementById('sr-world-new')?.addEventListener('click', () => showWorldEditor());
     deps.document.getElementById('sr-world-cancel')?.addEventListener('click', showWorldList);
-    deps.document.getElementById('sr-world-save')?.addEventListener('click', () => deps.runUiTask((async () => {
+    deps.document.getElementById('sr-world-save')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
         const name = String(deps.document.getElementById('sr-world-edit-name')?.value || '').trim();
         const hint = String(deps.document.getElementById('sr-world-edit-hint')?.value || '').trim();
         const prompt = String(deps.document.getElementById('sr-world-edit-prompt')?.value || '').trim();
         const franchise = Boolean(deps.document.getElementById('sr-world-edit-franchise')?.checked);
+        const revision = worldEditorRevision;
         if (!name || !prompt) { deps.window.toastr?.warning?.('세계관 이름과 전문을 입력하세요.', '씬판독기'); return; }
         const worlds = deps.loadCustomWorlds();
         const oldId = String(deps.document.getElementById('sr-world-edit-id')?.value || '');
         const id = oldId || `custom-${Date.now()}`;
-        const next = { id, name, hint: hint || deps.makeWorldHint(name, prompt), prompt, franchise };
+        let finalHint = hint;
+        if (!finalHint) {
+            if (!deps.settings.reasonerProfileId) throw new Error('짧은 세계관 설명을 직접 적거나 설정에서 SillyTavern 연결 프로필을 선택하세요.');
+            await deps.loadReasonerProfiles();
+            if (!deps.connectionRequestService) throw new Error(deps.reasonerProfileError || '연결 프로필을 읽지 못했습니다.');
+            const response = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId,
+                'Read the supplied world prompt as source data. Return JSON only: {"short_description":"One concise English sentence explaining the setting and its governing logic for a scene judge."} Preserve the source scope and uncertainty. Do not invent lore or output a prompt excerpt.',
+                { name, world_prompt: prompt }, { maxTokens: 350 });
+            finalHint = String(response.result?.short_description || '').trim();
+            if (!finalHint || finalHint.length > 700) throw new Error('연결 모델이 유효한 짧은 세계관 설명을 만들지 못했습니다. 원문은 그대로 남아 있습니다.');
+            if (worldEditorRevision !== revision || ['sr-world-edit-name', 'sr-world-edit-hint', 'sr-world-edit-prompt'].some((id, index) => String(deps.document.getElementById(id)?.value || '').trim() !== [name, hint, prompt][index]) || Boolean(deps.document.getElementById('sr-world-edit-franchise')?.checked) !== franchise) throw new Error('생성 중 세계관 내용이 바뀌었습니다. 다시 저장하세요.');
+            deps.document.getElementById('sr-world-edit-hint').value = finalHint;
+        }
+        const next = { id, name, hint: finalHint, prompt, franchise };
         const index = worlds.findIndex((world) => world.id === id);
         if (index >= 0) worlds[index] = next; else worlds.push(next);
+        const previous = deps.loadCustomWorlds();
         if (!deps.saveCustomWorlds(worlds)) { deps.window.toastr?.error?.('브라우저 저장소에 세계관을 저장하지 못했습니다.', '씬판독기'); return; }
-        await deps.saveServerSettings();
-        if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
+        try { await deps.saveServerSettings(); }
+        catch (error) { deps.saveCustomWorlds(previous); throw error; }
         invalidatePreparedJudgment(); await deps.persistChat();
+        if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
         showWorldList();
         deps.window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
-    })(), '커스텀 세계관을 저장하지 못했습니다.'));
-    deps.document.getElementById('sr-world-delete')?.addEventListener('click', () => deps.runUiTask((async () => {
+    }), '커스텀 세계관을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-world-advanced-copy')?.addEventListener('click', () => deps.runUiTask((async () => {
+        if (!deps.ownerUnlocked()) return;
+        await deps.copyText(WORLD_COMPILER_PROMPT);
+        deps.window.toastr?.success?.('분석 명령문을 복사했습니다. 뒤에 세계관 원문을 붙여 주세요.', '씬판독기');
+    })(), '분석 명령문을 복사하지 못했습니다.'));
+    deps.document.getElementById('sr-world-advanced-generate')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        if (!deps.ownerUnlocked()) return;
+        const source = String(deps.document.getElementById('sr-world-advanced-source')?.value || '').trim();
+        const revision = worldEditorRevision;
+        if (!source) throw new Error('세계관 원문을 먼저 붙여 넣으세요.');
+        if (!deps.settings.reasonerProfileId) throw new Error('설정에서 연결 프로필 모델을 먼저 선택하세요.');
+        const status = deps.document.getElementById('sr-world-advanced-status');
+        status.textContent = '설정의 연결 프로필 모델이 세계관을 나누고 있습니다…';
+        await deps.loadReasonerProfiles();
+        if (!deps.connectionRequestService) throw new Error(deps.reasonerProfileError || '연결 프로필을 읽지 못했습니다.');
+        const response = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, WORLD_COMPILER_PROMPT,
+            { world_prompt: source }, { maxTokens: 12000 });
+        if (worldEditorRevision !== revision || String(deps.document.getElementById('sr-world-advanced-source')?.value || '').trim() !== source) throw new Error('판독 중 원문이나 편집 화면이 바뀌었습니다. 다시 생성하세요.');
+        const parsed = parseAdvancedWorld(response.result);
+        deps.document.getElementById('sr-world-advanced-json').value = JSON.stringify(parsed, null, 2);
+        const normalizedSource = source.replace(/\s+/g, ' ');
+        if (parsed.records.some(record => !normalizedSource.includes(record.source_quote.replace(/\s+/g, ' ')))) throw new Error('생성한 기록 중 원문에서 확인되지 않는 근거 구절이 있습니다. JSON과 원문을 확인하세요.');
+        deps.document.getElementById('sr-world-advanced-json').value = JSON.stringify(parsed, null, 2);
+        status.textContent = `생성 완료 · 기록 ${parsed.records.length}개 · JSON을 확인하고 저장하세요.`;
+    }), '설정의 연결 프로필 모델로 세계관을 생성하지 못했습니다.'));
+    deps.document.getElementById('sr-world-advanced-file')?.addEventListener('change', event => deps.runUiTask(worldTask(async () => {
+        if (!deps.ownerUnlocked()) return;
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const value = await file.text();
+        deps.document.getElementById('sr-world-advanced-json').value = value;
+        deps.document.getElementById('sr-world-advanced-status').textContent = `${file.name} · 검증 후 저장을 누르세요.`;
+        event.target.value = '';
+    }), 'JSON 파일을 읽지 못했습니다.'));
+    deps.document.getElementById('sr-world-advanced-cancel')?.addEventListener('click', showWorldList);
+    deps.document.getElementById('sr-world-advanced-save')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        if (!deps.ownerUnlocked()) return;
+        const status = deps.document.getElementById('sr-world-advanced-status');
+        let parsed;
+        try { parsed = parseAdvancedWorld(deps.document.getElementById('sr-world-advanced-json').value); }
+        catch (error) { status.textContent = `검증 실패 · ${error.message}`; return; }
+        const oldId = deps.document.getElementById('sr-world-advanced-edit-id').value;
+        const id = oldId || `advanced-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const previous = deps.loadCustomWorlds();
+        const next = [...previous];
+        const index = next.findIndex(world => world.id === id);
+        if (index >= 0) next[index] = advancedWorldToStored(parsed, id); else next.push(advancedWorldToStored(parsed, id));
+        if (!deps.saveCustomWorlds(next)) { status.textContent = '브라우저 저장소에 저장하지 못했습니다.'; return; }
+        try { await deps.saveServerSettings(); }
+        catch (error) { deps.saveCustomWorlds(previous); throw error; }
+        invalidatePreparedJudgment(); await deps.persistChat();
+        if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
+        showWorldList();
+        deps.window.toastr?.success?.(`고급 세계관 ${parsed.name} · 기록 ${parsed.records.length}개 저장`, '씬판독기');
+    }), '고급 세계관을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-world-advanced-delete')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        if (!deps.ownerUnlocked()) return;
+        const id = deps.document.getElementById('sr-world-advanced-edit-id').value;
+        if (!id) return;
+        const previous = deps.loadCustomWorlds();
+        if (!deps.saveCustomWorlds(previous.filter(world => world.id !== id))) throw new Error('브라우저 저장소에서 삭제하지 못했습니다.');
+        try { await deps.saveServerSettings(); }
+        catch (error) { deps.saveCustomWorlds(previous); throw error; }
+        if (deps.preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
+        invalidatePreparedJudgment(); await deps.persistChat();
+        showWorldList();
+        deps.window.toastr?.success?.('고급 세계관을 삭제했습니다.', '씬판독기');
+    }), '고급 세계관을 삭제하지 못했습니다.'));
+    deps.document.getElementById('sr-world-delete')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
         const id = String(deps.document.getElementById('sr-world-edit-id')?.value || '');
         if (!id) return;
-        if (!deps.saveCustomWorlds(deps.loadCustomWorlds().filter((world) => world.id !== id))) { deps.window.toastr?.error?.('브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
-        await deps.saveServerSettings();
+        const previous = deps.loadCustomWorlds();
+        if (!deps.saveCustomWorlds(previous.filter((world) => world.id !== id))) { deps.window.toastr?.error?.('브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
+        try { await deps.saveServerSettings(); }
+        catch (error) { deps.saveCustomWorlds(previous); throw error; }
         if (deps.preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
         showWorldList();
         deps.window.toastr?.success?.('커스텀 세계관을 삭제했습니다.', '씬판독기');
-    })(), '커스텀 세계관을 삭제하지 못했습니다.'));
+    }), '커스텀 세계관을 삭제하지 못했습니다.'));
     deps.document.getElementById('sr-reset-npc')?.addEventListener('click', () => deps.runUiTask((async () => {
         deps.invalidateReasonerJobs();
         const rec = structuredClone(deps.record(true));

@@ -8,7 +8,7 @@ lock=json.loads((root/'src/vendor/character-reasoner/sync.json').read_text(encod
 assert lock['sourceDirty'] is False, 'release core must refer to a committed source'
 assert re.fullmatch(r'[0-9a-f]{40}',lock['sourceCommit'])
 assert hashlib.sha256((root/'src/vendor/character-reasoner/index.js').read_bytes()).hexdigest()==lock['sha256']
-for doc in ['README.md']:
+for doc in ['README.md','CHANGELOG.md']:
     content=(root/doc).read_text(encoding='utf-8')
     for target in re.findall(r'\]\(([^)]+)\)',content):
         if target.startswith(('https://','http://','#')):continue
@@ -28,10 +28,11 @@ with ZipFile(archive_path) as archive:
     assert 'scene-reader/src/ui/character-transfer.js' in archive.namelist()
     assert 'scene-reader/src/ui/character-error.js' in archive.namelist()
     assert 'scene-reader/src/scene/intimacy-gate.js' in archive.namelist()
-    assert 'scene-reader/README.md' in archive.namelist()
-    assert not any(name.endswith(('INSTALL.md','CHANGELOG.md','MAINTENANCE.md')) for name in archive.namelist())
+    for required in ['README.md','CHANGELOG.md','src/world/advanced.js','src/world/seasonal.js','src/world/bundled.js']:
+        assert 'scene-reader/'+required in archive.namelist()
+    assert not any(name.endswith(('INSTALL.md','MAINTENANCE.md')) for name in archive.namelist())
 assert not list(root.glob('AUDIT-*.md')), 'remove stale release audit notes'
 assert not (root/'docs/character-phase1-contract.md').exists()
-assert not any((root/name).exists() for name in ['INSTALL.md','CHANGELOG.md','docs/MAINTENANCE.md'])
+assert not any((root/name).exists() for name in ['INSTALL.md','docs/MAINTENANCE.md'])
 assert len(list((root/'downloads').glob('scene-reader-sillytavern-v*.zip')))==1, 'keep only the current installation ZIP'
 print(f"Release distribution passed: {manifest['version']}, committed canonical core, current files, valid docs, install-only archive.")

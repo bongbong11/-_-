@@ -17,6 +17,7 @@ import vm from 'node:vm';
 import * as prompt from '../../prompt-library.js';
 import * as advanced from '../../advanced-library.js';
 import * as world from '../../world-library.js';
+import * as seasonal from '../../src/world/seasonal.js';
 import * as runtime from '../../runtime-utils.js';
 import * as decision from '../../decision-engine.js';
 import * as state from '../../state-engine.js';
@@ -36,7 +37,7 @@ const source = (await readFile(new URL('../../src/app/bootstrap.js', import.meta
 export function fixture() {
     const ctx = { characterId: 1, chatId: 'room-A', name1: 'User', name2: 'Hunter', chat: [], saveMetadata: async () => {} };
     const sandbox = {
-        createUiController,createSceneExecution,createOutputLifecycle,createRepository, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...npcSheet, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...legacyProfiles, ...security,
+        createUiController,createSceneExecution,createOutputLifecycle,createRepository, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...npcSheet, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...seasonal, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...legacyProfiles, ...security,
         currentContext: ctx, chat_metadata: {}, extension_settings: {},
         console, structuredClone, setTimeout, clearTimeout, AbortController, AbortSignal,
         jQuery() {}, document: { getElementById() { return null; } },

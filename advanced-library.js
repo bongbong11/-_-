@@ -22,34 +22,76 @@ export const BUILTIN_WORLDS = [
     { id: 'current', name: '프리셋 기본 세계관 사용', hint: 'No preset or lorebook text is supplied to Jev here. Infer world constraints only from the recent roleplay and explicitly supplied character context; do not assume unseen world rules. Route progression without adding or replacing setting facts.', prompt: '' },
     { id: 'fantasy', name: '범용 판타지', hint: 'Fantasy world logic; established magic, peoples, institutions, travel, economy, religion, and technology control what is possible.', prompt: `<FANTASY_WORLD>
 Use established magic, peoples, institutions, travel, economy, religion, technology, and social order as practical world rules. Do not import unrelated fantasy systems or grant convenient magic, knowledge, access, creatures, or resources without support.
+
+Recall compatible fantasy knowledge for everyday life: roads and settlements, local rulers and obligations, guilds and trades, inns and markets, worship and seasonal customs. Let distance, weather, resources, rank, hospitality, and reputation shape ordinary choices. Use the active world's own names and customs when available.
+
+When magic, unusual peoples, or creatures matter, preserve who can use or recognize them, their costs and limits, and how ordinary society responds. Show relevant consequences through the scene rather than explaining a setting encyclopedia. An existing quiet interaction can continue inside this world without requiring a quest or battle.
 </FANTASY_WORLD>` },
     { id: 'urban-supernatural', name: '현대 판타지·초자연', hint: 'Modern society with setting-supported hidden or public supernatural forces; secrecy, institutions, evidence, and ordinary infrastructure still matter.', prompt: `<URBAN_SUPERNATURAL_WORLD>
 Keep supernatural forces consistent with their established visibility, rules, access, costs, and limits inside ordinary modern society. Preserve secrecy, evidence, institutions, technology, law, and public reaction; do not grant convenient occult knowledge or solutions.
+
+Recall modern transport, work, housing, money, healthcare, communications, and public institutions alongside the setting's supernatural communities. Hidden and publicly acknowledged supernatural worlds produce different expectations, risks, and opportunities; use the established arrangement.
+
+When an unusual incident leaves witnesses, recordings, injuries, damage, or an interrupted routine, let those traces have plausible consequences. A character's supernatural identity does not automatically supply social authority, expertise, or knowledge of another hidden group.
 </URBAN_SUPERNATURAL_WORLD>` },
     { id: 'science-fiction', name: 'SF·미래', hint: 'Science-fiction setting; established technology, infrastructure, distance, institutions, and material limits govern access and consequences.', prompt: `<SCIENCE_FICTION_WORLD>
 Use established technology, infrastructure, distance, resources, institutions, and scientific limits as material constraints. Do not grant unexplained devices, universal access, instant expertise, or convenient technical solutions.
+
+Recall compatible science-fiction knowledge for habitats, spacecraft or cities, energy, communications, work, trade, medicine, law, and ordinary domestic life. Determine whether travel, information, automation, and artificial intelligence are scarce, routine, delayed, controlled, or unreliable in this particular setting.
+
+When equipment or infrastructure matters, preserve its availability, access permissions, operating limits, maintenance, and failure consequences. Let advanced technology change what people can reasonably do without making every problem an engineering lecture or every character an expert.
 </SCIENCE_FICTION_WORLD>` },
     { id: 'superhero', name: '슈퍼히어로', hint: 'Superhero setting; powers, identities, organizations, law, publicity, collateral effects, and power limitations matter.', prompt: `<SUPERHERO_WORLD>
 Keep powers, identities, organizations, law, public knowledge, collateral effects, and technological limits consistent with the active setting. Powers create access and consequences but do not grant unrelated knowledge, effortless solutions, or automatic authority.
+
+Recall the active world's established hero culture: civilian routines, rescue work, public reputation, journalism, institutions, rival groups, secret identities, and ordinary relationships. Publicly licensed heroes, vigilantes, and hidden powered people face different expectations.
+
+When powers are used, preserve reach, limitations, visibility, damage, witnesses, and the distinction between physical ability and legitimate authority. Recognition or fear can affect a scene without turning every encounter into combat or reproducing a famous canon event.
 </SUPERHERO_WORLD>` },
     { id: 'zombie', name: '좀비·감염', hint: 'Zombie or infection survival; infection, detection, movement, shelter, supplies, groups, and practical survival pressure apply.', prompt: `<ZOMBIE_WORLD>
 Keep infection, transmission, detection, movement, injury, and death rules consistent with the established setting. Let noise, population density, routes, shelter, supplies, fatigue, and survivor groups produce practical consequences. Do not invent immunity, easy cures, arbitrary hordes, or guaranteed infection without established cause.
+
+Recall the setting's stage of collapse and the actual behavior of its infected: speed, senses, persistence, incubation, and environmental limits. A quiet route, a defensible room, transport, water, medication, and information can matter as much as a weapon.
+
+Allow shelter, recovery, work, disagreement, care, and ordinary conversation between threats. Scarcity and infection are persistent conditions, not a requirement to attack or punish the cast every turn. Carry established injuries, resources, trust, and exposure risks forward.
 </ZOMBIE_WORLD>` },
     { id: 'post-apocalypse', name: '포스트아포칼립스', hint: 'Post-apocalyptic setting; damaged infrastructure, scarcity, settlement politics, travel, repair, and persistent consequences matter.', prompt: `<POST_APOCALYPTIC_WORLD>
 Keep infrastructure, scarcity, travel, communication, repair, settlement politics, and environmental danger consistent with the established collapse. Resources and safety require plausible access and cost; do not create arbitrary deprivation, rescue, or intact services for convenience.
+
+Recall how people live after this specific collapse: salvage and repair, food and water, local trade, shelter, transport, work, institutions, and adapted customs. Different settlements may preserve different capabilities; a ruined world is not uniformly empty or lawless.
+
+Let environmental conditions, damaged networks, ownership, reputation, and local agreements shape access. Recovery, stable routines, and modest improvements are possible alongside danger. Preserve the material consequences of earlier choices without manufacturing a fresh disaster.
 </POST_APOCALYPTIC_WORLD>` },
     { id: 'occult', name: '심령·퇴마', hint: 'Occult haunting and exorcism; manifestations, curses, possession, ritual knowledge, rules, costs, and evidence must remain consistent.', prompt: `<OCCULT_WORLD>
 Keep manifestations, possession, curses, rituals, and exorcism bound to consistent causes, signs, access, costs, and limits. Reveal rules through events and evidence; do not grant convenient spiritual knowledge, instant cleansing, or new exceptions merely to resolve the scene.
+
+Recall the established religious, folkloric, or occult tradition rather than mixing every supernatural convention. Separate observed phenomena, testimony, belief, fraud, and confirmed mechanisms. A specialist's claims are not automatically true, and an unexplained event need not already establish a haunting.
+
+When an established phenomenon acts, preserve its location, reach, pattern, material traces, and effects on witnesses or routines. Investigation and response can proceed through supported observations; quiet aftermath and unresolved uncertainty are valid scene states.
 </OCCULT_WORLD>` },
     { id: 'creature', name: '크리처·괴물', hint: 'Creature or monster setting; senses, ecology, habits, territory, capabilities, limits, and material traces determine encounters.', prompt: `<CREATURE_WORLD>
 Keep creatures governed by established senses, ecology, habits, territory, capabilities, and limits. Let traces, access, contact, pursuit, injury, and retreat follow material causes; do not invent perfect tracking, instant weaknesses, or attacks without a route.
+
+Recall the creature's established habitat, feeding, movement, communication, social behavior, and relation to human activity. Tracks, sounds, altered surroundings, timing, and defensive behavior can signal a presence before direct contact.
+
+Let distance, barriers, weather, visibility, competing needs, and learned behavior affect an encounter. A creature may avoid, observe, investigate, defend, pursue, or withdraw according to its nature; neither constant aggression nor convenient domestication is automatic.
 </CREATURE_WORLD>` },
     { id: 'historical', name: '시대·역사 배경', hint: 'Historical or period setting; the active era controls technology, communication, travel, institutions, law, custom, medicine, and knowledge.', prompt: `<HISTORICAL_WORLD>
 Keep technology, communication, transport, institutions, law, medicine, material life, and social assumptions appropriate to the established place and period. Do not import modern access, language, values, procedures, or knowledge without support.
+
+Recall ordinary life in the active period: household organization, work, clothing, food, travel, money, education, religion, seasonal customs, and public institutions. Class, gender, profession, nationality, and location shape access and expectations without replacing individual characterization.
+
+Use contemporary understandings and available means when characters act or explain events. Keep later historical knowledge separate from what a person could know at that time. Show practical differences through choices and consequences instead of constant historical exposition.
 </HISTORICAL_WORLD>` },
-    { id: 'campus', name: '현대 대학·캠퍼스', hint: 'Modern university or campus life; infer the country, institution, academic calendar, and current season from active setting before using local conventions.', prompt: `<MODERN_CAMPUS_WORLD>
-Use the established country, institution, year, academic calendar, campus layout, housing, courses, assessment, clubs, sports, finances, and student culture. Infer missing details conservatively from location and date. For US settings, keep semesters or quarters, residence life, Greek life, homecoming, and college-football seasons aligned with the specific school; for UK settings, keep terms, halls or colleges, societies, tutorials, and examination periods aligned with the specific institution. Do not mix national systems, invent elite access, or turn ordinary campus life into a compulsory event. Let classes, assignments, friendships, activities, and routines progress naturally when no larger event is active.
+    { id: 'campus', name: '현대 대학·캠퍼스 (국가 미지정)', hint: 'Modern university life; the established country and RP date govern the broad academic rhythm and local customs.', prompt: `<MODERN_CAMPUS_WORLD>
+Use the established country, school, RP date, campus layout, housing, courses, assessment, clubs, finances, and student culture. Keep national systems distinct and allow classes, assignments, friendships, activities, and routines to move naturally. Do not invent elite access or turn ordinary campus life into a compulsory event.
 </MODERN_CAMPUS_WORLD>` },
+    { id: 'campus-us', name: '미국 대학·캠퍼스', calendarTopics: ['us_university'], hint: 'Typical US university setting with autumn and spring semesters, winter break, summer sessions, campus routines, and local variation.', prompt: `<US_CAMPUS_WORLD>
+Use a typical US autumn semester from late August or September through December, winter break around late December, a spring semester from January through May, and summer break or optional summer sessions thereafter. Let classes, assignments, exams, residence life, clubs, work, and campus routines reflect that broad rhythm. A specific university or established RP calendar overrides these averages. Do not assume every campus uses the same schedule, that Greek life or football is universal, or that an occasion must happen this turn.
+</US_CAMPUS_WORLD>` },
+    { id: 'campus-uk', name: '영국 대학·캠퍼스', calendarTopics: ['uk_university'], hint: 'Typical UK university setting with autumn, winter or spring, and spring or summer terms, vacations, exams, and local variation.', prompt: `<UK_CAMPUS_WORLD>
+Use a typical UK academic year with an autumn term around September or October to December, a winter or spring term around January to March, a spring or summer term around April to June, and a long summer vacation. Let courses, assessments, halls, societies, work, and campus routines follow the broad season. A specific university or established RP calendar overrides these averages. Do not assume every institution names or dates terms identically, grant college access without basis, or make a campus occasion compulsory.
+</UK_CAMPUS_WORLD>` },
 ];
 
 const EVENT_TABLES = {

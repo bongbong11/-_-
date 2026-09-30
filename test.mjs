@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { LEGACY_PROMPTS } from './legacy-prompts.js';
 import { buildInjection, buildQuestions, rollEventProfile, rollNpcProfile } from './prompt-library.js';
 import { ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS, advancedChance, rollAdvancedEvent } from './advanced-library.js';
-import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from './world-library.js';
+import { CUSTOM_WORLD_STORAGE, INITIAL_CUSTOM_WORLDS, isFranchiseWorld, loadCustomWorlds, saveCustomWorlds } from './world-library.js';
 import { appendPendingUserMessage, buildInputKey, buildRecentContext, buildRecentTranscript, filterNonRpHistory, generationCycleSalt, latestUserMessageText, pendingComposerText, selectRecentMessages, splitOocText } from './runtime-utils.js';
 import { sha256Fallback, sha256Hex } from './security-utils.js';
 import { buildCharacterInjection, buildCharacterTurnQuestions, buildLiveCharacterPlan, resolveLiveCharacterPlan, currentProfileItems, profileStatus, chunkSheet, defaultCharacterStore, normalizeCharacterStore, selectActiveEntries, selectRelevantChunks } from './character-library.js';
@@ -38,7 +38,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.19.2');
+assert.equal(manifest.version, '0.20.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -386,15 +386,13 @@ assert.match(presetWorld?.hint || '', /No preset or lorebook text is supplied to
 assert.equal(INITIAL_CUSTOM_WORLDS.length, 5);
 assert.equal(isFranchiseWorld(INITIAL_CUSTOM_WORLDS.find((world) => world.id === 'custom-harry-potter')), true);
 assert.equal(isFranchiseWorld(INITIAL_CUSTOM_WORLDS.find((world) => world.id === 'custom-general-world')), false);
-assert.match(makeWorldHint('테스트', '## TEST_WORLD\nUse established rules.\n<LOCK>Keep continuity.</LOCK>'), /^테스트: TEST WORLD Use established rules/);
-assert.ok(makeWorldHint('테스트', 'x'.repeat(800)).length <= 365);
 const savedLocalStorage = globalThis.localStorage;
 const localValues = new Map([[CUSTOM_WORLD_STORAGE, JSON.stringify([null, { id: 'custom-ok', name: '정상', prompt: 'Keep continuity.' }, { id: 'custom-ok', name: '중복', prompt: 'Duplicate.' }, { id: '', name: '손상', prompt: '' }])]]);
 globalThis.localStorage = { getItem: (key) => localValues.get(key) ?? null, setItem: (key, value) => localValues.set(key, value) };
 const recoveredWorlds = loadCustomWorlds();
 assert.equal(recoveredWorlds.length, 1);
 assert.equal(recoveredWorlds[0].id, 'custom-ok');
-assert.match(recoveredWorlds[0].hint, /^정상:/);
+assert.equal(recoveredWorlds[0].hint, '정상');
 assert.equal(recoveredWorlds[0].franchise, false);
 assert.equal(saveCustomWorlds([{ id: 'legacy-canon', name: '원작', prompt: '## CANON_FIDELITY_PASS' }]), true);
 assert.equal(JSON.parse(localValues.get(CUSTOM_WORLD_STORAGE))[0].franchise, true, 'legacy imported canon prompt must migrate to explicit franchise metadata');

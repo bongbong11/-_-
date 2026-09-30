@@ -16,8 +16,9 @@ import { NPC_CORE_SYSTEM, parseNpcCore, deriveEnglishCore, suggestNpcAliases } f
 import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
 import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, normalizeDevelopmentPreferences, PACE_OPTIONS, buildQuestions, buildInjection, buildPausedInjection } from '../../prompt-library.js';
+import { SEASONAL_OPTIONS } from '../world/seasonal.js';
 import { ADVANCED_STYLES, ADVANCED_ELEMENTS, ADVANCED_DEFAULT_ELEMENTS, BUILTIN_WORLDS } from '../../advanced-library.js';
-import { allWorlds, isFranchiseWorld, loadCustomWorlds, makeWorldHint, saveCustomWorlds } from '../../world-library.js';
+import { allWorlds, isFranchiseWorld, loadCustomWorlds, saveCustomWorlds } from '../../world-library.js';
 import { buildInputKey, buildRecentContext, filterNonRpHistory, generationCycleSalt, isVisibleRoleplayMessage, pendingComposerText, splitOocText } from '../../runtime-utils.js';
 import { buildVerificationQuestions, pendingPlanEffects, stableFingerprint, verificationSummary } from '../../decision-engine.js';
 import { archiveCurrentEvent, commitObservedState, commitVerifiedPlan, updateProgressionPressure } from '../../state-engine.js';
@@ -82,6 +83,7 @@ const CHAT_DEFAULTS = {
     injectionMode: 'depth',
     worldInjectionMode: 'macro',
     selectedWorldId: 'current',
+    seasonalReferences: [],
     advancedEnabled: false,
     advancedStyle: 'balanced',
     advancedElements: ADVANCED_DEFAULT_ELEMENTS,
@@ -217,8 +219,10 @@ function ownerPrompt() {
 function renderOwnerMode() {
     const unlocked = ownerUnlocked();
     const ownerCard = document.getElementById('sr-owner-card');
+    const advancedWorld = document.getElementById('sr-world-advanced');
     const ownerStatus = document.getElementById('sr-owner-status');
     if (ownerCard) ownerCard.hidden = !unlocked;
+    if (advancedWorld) advancedWorld.hidden = !unlocked;
     if (ownerStatus) ownerStatus.textContent = unlocked ? '이 SillyTavern 사용자에서 제작자 모드가 열려 있습니다.' : '잠금 상태';
     const promptInput = document.getElementById('sr-owner-prompt');
     if (promptInput && unlocked) promptInput.value = ownerPrompt();
@@ -304,6 +308,7 @@ function record(create = false) {
         for (const key of ['relationshipPace', 'resolutionPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
         for (const key of ['injectionMode', 'worldInjectionMode']) value.preferences[key] = ['depth', 'macro'].includes(value.preferences[key]) ? value.preferences[key] : CHAT_DEFAULTS[key];
         value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;
+        value.preferences.seasonalReferences = [...new Set((Array.isArray(value.preferences.seasonalReferences) ? value.preferences.seasonalReferences : []).filter(key => Object.hasOwn(SEASONAL_OPTIONS, key)))];
         value.preferences.advancedElements = [...new Set((Array.isArray(value.preferences.advancedElements) ? value.preferences.advancedElements : []).filter((key) => ADVANCED_ELEMENTS[key]))];
         if (!value.preferences.advancedElements.length) value.preferences.advancedElements = [...ADVANCED_DEFAULT_ELEMENTS];
         for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune', 'allowUserImpersonation']) value.preferences[key] = Boolean(value.preferences[key]);
@@ -714,7 +719,6 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get loadReasonerProfiles() { return loadReasonerProfiles; }, set loadReasonerProfiles(value) { loadReasonerProfiles = value; },
     get localStorage() { return localStorage; },
     get macroAvailable() { return macroAvailable; }, set macroAvailable(value) { macroAvailable = value; },
-    get makeWorldHint() { return makeWorldHint; },
     get normalizeCharacterStore() { return normalizeCharacterStore; },
     get normalizeContinuity() { return normalizeContinuity; },
     get ownerPrompt() { return ownerPrompt; }, set ownerPrompt(value) { ownerPrompt = value; },

@@ -3,12 +3,14 @@ import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
 import { sceneGateRequest, resolveSceneGate } from './intimacy-gate.js';
 import { recordBankIsCurrent } from '../characters/records.js';
+import { addWorldQuestions, worldPayload as buildWorldPayload } from '../world/advanced.js';
+import { seasonalWorldNote } from '../world/seasonal.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
 function sourceRevisionKey(rec, world) {
     return deps.stableFingerprint({
-        world: { id: world?.id || '', name: world?.name || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise) },
+        world: { id: world?.id || '', name: world?.name || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise), calendarTopics: world?.calendarTopics || [], advanced: world?.advanced || null },
         reasoner: deps.settings.reasonerProfileId || '',
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
         characterSelectorContract: 2,
@@ -282,19 +284,25 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const carriedGateIds = [...new Set([...previousParticipantIds,...(rec.lastJudgment?.characterTrace || []).filter(item=>(item?.presence||item?.final?.presence)==='active').map(item=>item.id)])];
     const gatePeople = deps.characterStore.enabled ? deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedGateIds, {allowUserImpersonation:prefs.allowUserImpersonation}).slice(0,6) : [];
     const gateRequest = sceneGateRequest({model:deps.JEV_MODEL,transcript,previous:previousSceneRoute,people:gatePeople,previousParticipantIds});
+    const worldRecordCandidates = addWorldQuestions(gateRequest, world, transcript);
     let sceneGate;
+    let worldRecordAnswers = {};
+    let worldSelectionFailed = false;
     deps.judgeInFlight = true;
     deps.judgeCompletionPromise = new Promise(resolve=>{deps.resolveJudgeCompletion=resolve;});
     deps.setBusy(true);
     try {
         deps.updateStatus('현재 장면 확인 중…');
-        const gateData=await deps.callJev(gateRequest,15000,run.controller.signal);
+        const gateData=await deps.callJev(gateRequest,worldRecordCandidates.length ? 30000 : 15000,run.controller.signal);
         run.assert();
         if(deps.currentInputKey(pendingUserText,cycleSalt)!==inputKey || deps.recentContext(pendingUserText).contextKey!==context.contextKey || sourceRevisionKey(deps.record(),deps.selectedWorld())!==sourceKey)throw new deps.StaleRunError();
+        worldRecordAnswers = gateData.answers || {};
+        worldSelectionFailed = worldRecordCandidates.some((_, index) => !['yes', 'no'].includes(worldRecordAnswers[`world_record_${index}`]?.choice));
         sceneGate=resolveSceneGate(gateData.answers,gateRequest,previousSceneRoute);
     } catch(error) {
         if(error instanceof deps.StaleRunError || !run.valid())throw error;
         sceneGate=resolveSceneGate({},gateRequest,previousSceneRoute);
+        worldSelectionFailed = true;
         deps.updateActivity(`장면 상태 확인 실패 · 기존 상태 유지: ${error.message}`,{error:true});
     } finally {
         deps.judgeInFlight=false;
@@ -303,6 +311,12 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     }
     const sceneContextEndIndex=Math.max(-1,...context.selected.map(message=>(deps.getContext().chat||[]).indexOf(message)),String(pendingUserText||'').trim()?(deps.getContext().chat||[]).length:-1);
     rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey,contextEndIndex:sceneContextEndIndex};
+    const seasonalContext = seasonalWorldNote(prefs, transcript, world);
+    const selectedWorldPayload = [buildWorldPayload(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed), seasonalContext].filter(Boolean).join('\n\n');
+    const worldSelection = { status: !world?.advanced ? 'plain' : worldSelectionFailed ? 'fallback' : 'selected', candidateIds: worldRecordCandidates.map(record=>record.id), selectedIds: worldRecordCandidates.filter((_,index)=>worldRecordAnswers[`world_record_${index}`]?.choice==='yes').map(record=>record.id) };
+    if (world?.advanced && worldSelectionFailed) deps.window.toastr?.warning?.('세계관 선택 응답을 확인하지 못해 이번 턴은 전체 세계 규칙을 조건과 함께 적용합니다.', '씬판독기');
+    const worldGateFrame = { request: gateRequest, answers: worldRecordAnswers };
+    deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: gateRequest, answers: worldRecordAnswers, worldGate: worldGateFrame, model: deps.JEV_MODEL };
     if(sceneGate.route==='paused') {
         const referenceLines=[];
         for(const entry of gatePeople) {
@@ -311,7 +325,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             if(reference)referenceLines.push(`<CHARACTER_REFERENCE name="${String(entry.name).replace(/["<>]/g,'')}">Use this person's stored information in the current interaction without inventing traits or forcing an action: ${reference}</CHARACTER_REFERENCE>`);
         }
         const payload=deps.buildPausedInjection({settings:prefs,privatePrompt:prefs.privatePromptEnabled?deps.ownerPrompt():'',referenceLines,activeWorldName:world?.name||''});
-        rec.lastJudgment={details:{},decisions:{},payload,worldPayload:String(world?.prompt||''),inputKey,contextKey:context.contextKey,sourceKey,continuityCacheKey,memoryKey,characterTrace:[],sceneIntimacy:rec.sceneIntimacy,judgedAt:new Date().toISOString(),model:deps.JEV_MODEL};
+        rec.lastJudgment={details:{},decisions:{},payload,worldSelection,worldId:world?.id||'',worldPayload:selectedWorldPayload,inputKey,contextKey:context.contextKey,sourceKey,continuityCacheKey,memoryKey,characterTrace:[],sceneIntimacy:rec.sceneIntimacy,judgedAt:new Date().toISOString(),model:deps.JEV_MODEL};
         run.assert();
         if(deps.storageVersion>=2)await deps.queueWrite('session:'+run.identity,()=>{run.assert();return deps.storagePost('transaction',{chatKey:run.identity,chat:structuredClone(rec),history:run.history.slice(-deps.STATE_HISTORY_LIMIT)});});
         else await deps.persistChat(run.identity,rec);
@@ -419,6 +433,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                     policy: 'Current OOC may direct the next route or impose facts and constraints, but it is never RP evidence. Past OOC is not a current instruction queue. Use past OOC only when it is still an active continuity fact, knowledge restriction, persistent character or relationship state, or explicitly ongoing constraint. One-turn and scene-specific progression requests expire after their applicable turn or scene. Ignore prose style, wording, length, format, translation, and language instructions for judgment. Never copy raw OOC into the scene-reader injection.',
                 },
                 controls: { ...prefs, progressIntensity: undefined, world: { id: world?.id, name: world?.name, hint: world?.hint } },
+                seasonal_context: seasonalContext || null,
+                applicable_world_rules: worldRecordCandidates.filter((_, index) => worldRecordAnswers[`world_record_${index}`]?.choice === 'yes').map(({ id, category, when, rule }) => ({ id, category, when, rule })),
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
@@ -434,7 +450,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const data = await deps.callJev(jevRequest, 30000, run.controller.signal);
         run.assert();
         if (!deps.settings.enabled || deps.currentInputKey(pendingUserText, cycleSalt) !== inputKey || deps.recentContext(pendingUserText).contextKey !== context.contextKey || sourceRevisionKey(deps.record(), deps.selectedWorld()) !== sourceKey) throw new deps.StaleRunError();
-        deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: jevRequest, answers: data.answers || {}, model: String(data.model || deps.JEV_MODEL) };
+        deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: jevRequest, answers: data.answers || {}, worldGate: worldGateFrame, model: String(data.model || deps.JEV_MODEL) };
         deps.updateStatus('판독 완료 · 주입문 조립 중…');
         deps.updateActivity(mixedOoc ? 'OOC 지시 확인 · 필요한 주입문을 조립하고 있습니다…' : '판독 완료 · 필요한 주입문을 조립하고 있습니다…');
         const details = {};
@@ -561,7 +577,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
         const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities }]));
-        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldPayload: String(world?.prompt || ''), inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
+        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
             rec.pendingPlan = {
