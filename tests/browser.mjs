@@ -335,13 +335,14 @@ try{
     await page.locator('#sr-character-editor-cancel').click();
     assert.equal(await page.locator('.sr-tabs [data-sr-tab]').count(),4);
     await page.locator('#sr-close').click();
-    store.settings.global.ownerUnlocked=true;
+    store.settings.global.ownerUnlocked=false;
     await page.reload();
     await page.locator('#sr-extension-open').evaluate(e=>e.closest('details').open=true);
     await page.locator('#sr-extension-open').click();
     await page.locator('[data-sr-tab="advanced"]').click();
     await page.locator('#sr-world-new').evaluate(e=>e.closest('details').open=true);
-    assert.equal(await page.locator('#sr-world-advanced').evaluate(e=>e.hidden),false,'advanced world importer shares the owner unlock');
+    assert.equal(await page.locator('#sr-world-advanced').evaluate(e=>e.hidden),false,'advanced world importer is available without developer unlock');
+    assert.equal(await page.locator('#sr-owner-card').evaluate(e=>e.hidden),true,'other developer tools remain locked');
     await page.locator('#sr-world-advanced').evaluate(e=>e.open=true);
     await page.locator('#sr-world-advanced-copy').click();
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/scene-reader-world/,'copy supplies the world compiler contract');
