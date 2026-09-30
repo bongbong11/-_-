@@ -35,7 +35,7 @@ const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end(host);return;}
     if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}}`);return;}
     if(req.url==='/scripts/extensions.js'){res.setHeader('Content-Type','application/javascript');res.end('export const extension_settings={};');return;}
-    if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){return window.mock.worldBooks[name]||null}");return;}
+    if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){if(window.mock.loreReady)await window.mock.loreReady;return window.mock.worldBooks[name]||null}");return;}
     if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('You are a source-grounded character retrieval compiler.')) { const name=prompt.split('ENTITY_NAME: ')[1].split('\\n')[0]; return {content:JSON.stringify({entity_type:'npc',entity_name:name,records:[{type:'knowledge',target:'',when:['office procedure'],rule:name+' knows office procedures.',modality:'fact',basis:'explicit',source_ids:['S001'],knowledge_domain:'professional',knowledge_state:'knows'},{type:'relationship',target:'Hunter',when:['interests change'],rule:name+' may help or oppose Hunter when her own interests change.',modality:'conditional',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]})}; } if(prompt.startsWith('Read the supplied world prompt as source data.'))return {content:JSON.stringify({short_description:'A quiet garden world with ordinary physical limits.'})};if(prompt.startsWith('You are compiling a roleplay world prompt'))return {content:JSON.stringify({format:'scene-reader-world',version:1,name:'Moonlit Garden',short_description:'A garden whose gate responds to moonlight.',fixed_rules:'The garden remains an ordinary place except for its moonlit gate.',franchise:false,calendar_topics:[],records:[{id:'W001',category:'mechanism',when:'When moonlight reaches the gate.',keywords:['moonlight','gate'],rule:'Moonlight opens the garden gate.',source_quote:'Moonlight opens the garden gate.'}]})};if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
     if(req.url.startsWith('/api/plugins/scene-reader-jev/')){
         let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):{};requests.push({url:req.url,body});
@@ -271,22 +271,47 @@ try{
     assert.equal(await page.locator('#sr-character-name').inputValue(),'Hunter');
     assert.match(await page.locator('#sr-character-source').inputValue(),/Sawyer Valentine/);
     assert.match(await page.locator('#sr-character-source').inputValue(),/Hunter speaks carefully under pressure/);
+    await page.evaluate(()=>{
+        mock.worldBooks['Hunter Lore'].entries[1].content='The council meeting is now on Friday.';
+        mock.loreReady=new Promise(resolve=>{mock.releaseLore=resolve;});
+    });
+    await page.locator('#sr-character-lore-refresh').click();
     await page.locator('#sr-character-copy-prompt').click();
+    await page.evaluate(()=>{mock.releaseLore();mock.loreReady=null;});
     await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('복사했습니다'));
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/ENTITY_NAME: Hunter/);
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/Hunter speaks carefully under pressure/,'character personality joins the copied analysis request');
+    assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/The council meeting is now on Friday/,'copy waits for refreshed lore before reading selected sources');
     const external={entity_type:'character',entity_name:'Hunter',records:[{type:'knowledge',target:'self',when:['before confirmation'],rule:'Hunter suspects the invitation is a trap.',modality:'possibility',basis:'explicit',source_ids:['S001'],knowledge_domain:'event',knowledge_state:'suspects'}]};
     const beforeImport=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.locator('#sr-character-import-file').setInputFiles({name:'hunter.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(external))});
     await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('형식 검사 완료'));
+    const beforeInvalidImport=JSON.stringify(store.characters);
+    await page.locator('#sr-character-import-file').setInputFiles({name:'broken.json',mimeType:'application/json',buffer:Buffer.from('{invalid')});
+    await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('저장되지 않음'));
+    assert.equal(await page.locator('#sr-character-import-json').inputValue(),'','a failed replacement upload cannot leave an older file ready to save');
     await page.locator('#sr-character-import').click();
+    await page.waitForFunction(()=>mock.errors.length>=2);
+    assert.equal(JSON.stringify(store.characters),beforeInvalidImport,'invalid replacement upload preserves saved records');
+    await page.evaluate(()=>mock.errors=[]);
+    await page.locator('#sr-character-import-file').setInputFiles({name:'hunter.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(external))});
+    await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('형식 검사 완료'));
+    await page.evaluate(()=>{
+        mock.worldBooks['Hunter Lore'].entries[1].content='The council meeting is now on Tuesday.';
+        mock.loreReady=new Promise(resolve=>{mock.releaseLore=resolve;});
+    });
+    await page.locator('#sr-character-lore-refresh').click();
+    await page.locator('#sr-character-import').click();
+    await page.evaluate(()=>{mock.releaseLore();mock.loreReady=null;});
     await page.waitForFunction(()=>document.getElementById('sr-character-modal').hidden);
+    assert.ok(store.characters.characters.find(entry=>entry.name==='Hunter').selectedLore.some(item=>item.content==='The council meeting is now on Tuesday.'),'save waits for the selected lore sources to finish refreshing');
     assert.equal(requests.filter(r=>r.url.endsWith('/systemone')).length,beforeImport,'import does not run Jev revalidation');
     await page.locator('[data-record-kind="character"]').click();
     const group1=store.characters.recordGroups.find(g=>g.name==='Hunter');
     const firstVersion=group1.versions[0].id;
     assert.equal(group1.versions.length,1);
     await page.locator('[data-record-version="'+firstVersion+'"][data-record-action="edit"]').click();
+    assert.equal(await page.locator('#sr-character-error-copy').isHidden(),true,'a newly opened editor does not offer the previous file error log');
     external.records[0].rule='Hunter doubts the invitation is genuine.';
     await page.locator('#sr-character-import-file').setInputFiles({name:'hunter-updated.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(external))});
     await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('형식 검사 완료'));

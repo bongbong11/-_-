@@ -10,6 +10,7 @@ assert re.fullmatch(r'[0-9a-f]{40}',lock['sourceCommit'])
 assert hashlib.sha256((root/'src/vendor/character-reasoner/index.js').read_bytes()).hexdigest()==lock['sha256']
 for doc in ['README.md','CHANGELOG.md']:
     content=(root/doc).read_text(encoding='utf-8')
+    assert not re.search(r'character[ _-]?reasoner|캐릭터[ _-]?리즈너|참[ -]?메모리|charm[ _-]?memory|제작자|개발자\s*모드|디버그|sceneowner', content, re.I), f'{doc}: remove private/developer or unrelated extension details'
     for target in re.findall(r'\]\(([^)]+)\)',content):
         if target.startswith(('https://','http://','#')):continue
         assert (root/target.split('#')[0]).is_file(), (doc,target)

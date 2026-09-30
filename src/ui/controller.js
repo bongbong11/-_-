@@ -168,6 +168,11 @@ function characterEntries(kind) {
 
 function showCharacterEditor(kind, entry = null) {
     characterEditorRevision++;
+    lastCharacterError=null;
+    deps.document.getElementById('sr-character-error-copy').hidden=true;
+    const errorPreview=deps.document.getElementById('sr-character-error-preview');
+    errorPreview.hidden=true;
+    errorPreview.value='';
     editorLore = structuredClone(entry?.selectedLore || []);
     availableEditorLore=[];
     initialEditorLoreBooks=entry ? new Set(editorLore.map(item=>item.book)) : null;
@@ -498,7 +503,7 @@ function bindForm() {
             name=context.name1 || entry?.name || '';
             source=context.personaDescription || context.persona?.description || (typeof entry==='string'?entry:entry?.description) || context.powerUserSettings?.persona_description || '';
         }
-        if(!String(source).trim())throw new Error('현재 인물의 시트 원문을 찾지 못했습니다. 직접 붙여 넣어 주세요.');
+        if(!String(source).trim())throw new Error('현재 인물의 시트 원문을 찾지 못했습니다. 캐릭터 카드나 페르소나 설정을 확인한 뒤 다시 가져오세요.');
         const input=deps.document.getElementById('sr-character-source');
         if(input.value.trim() && !deps.window.confirm('입력 중인 원문을 현재 시트로 바꿀까요?'))return;
         input.value=source;deps.document.getElementById('sr-character-name').value=name;

@@ -52,16 +52,15 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
     const npcSheet=`NPC 시트\n이름: \n역할·소속: \n주요 관계: \n원하는 것과 우선순위: \n평소 행동·대사: \n확인된 지식·능력·접근 범위: \n조건별 반응과 제한: `;
     el('sr-character-npc-template')?.addEventListener('click',()=>task(async()=>{await deps.copyText(npcSheet);status('NPC 시트 서식을 복사했습니다.');},'template'));
     el('sr-character-copy-prompt')?.addEventListener('click',()=>task(async()=>{
+        await ensureLoreLoaded();
         const form=characterForm();
         let prompt;
         if(form.kind==='npc'){
-            await ensureLoreLoaded();
             const hasLore=form.selectedLore.length>0;
             const sources=hasLore?buildSources('npc','',form.selectedLore):buildSources('npc','[Completed NPC sheet supplied alongside this instruction]',[]);
             const preface=hasLore?'Use the selected lorebook sheet below as the NPC source. Use its stated name as entity_name.':'The completed NPC sheet is supplied separately with this instruction. Use its stated name as entity_name and treat its contents as source S001.';
             prompt=preface+'\n\n'+promptText({entity_type:'npc',entity_name:'the name written in the supplied NPC sheet',npc_role:form.npcRole==='villain'?'antagonist':form.npcRole,sources});
         } else {
-            await ensureLoreLoaded();
             if(!form.name)throw new Error('먼저 현재 시트를 가져오세요.');
             prompt=compilerRequest(form).prompt;
         }
@@ -70,8 +69,8 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
         if(!el('sr-character-import-name').value.trim())el('sr-character-import-name').value=form.name;
     }),'prompt');
     el('sr-character-import')?.addEventListener('click',()=>task(async()=>{
-        const form=characterForm();
         await ensureLoreLoaded();
+        const form=characterForm();
         const sourceHash=form.source ? await deps.sha256Hex(form.source) : '';
         const result=importRecordVersion(deps.characterStore,el('sr-character-import-json').value,el('sr-character-import-name').value,{...form,sourceHash});
         await persist(result.store,result.entry);
@@ -81,6 +80,8 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
     },'validate'));
     async function readFile(file) {
         if(!file)return;
+        el('sr-character-import-json').value='';
+        el('sr-character-file-summary').textContent=`${file.name} · 아직 저장되지 않음`;
         if(!/\.json$/i.test(file.name))throw new Error('.json 파일을 선택하세요.');
         const chat=deps.stateChatKey(),raw=await file.text();
         if(chat!==deps.stateChatKey())throw new Error('채팅이 바뀌었습니다. 현재 채팅에서 파일을 다시 불러오세요.');
@@ -92,7 +93,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
         status(`형식 검사 완료${import_log.normalizations.length||import_log.when_cleanup.length?' · 안전한 형식 정리 적용':''}. 마지막 버튼을 눌러 저장하세요.`);
     }
     el('sr-character-import-file-button')?.addEventListener('click',()=>el('sr-character-import-file').click());
-    el('sr-character-import-file')?.addEventListener('change',event=>task(async()=>{await readFile(event.target.files?.[0]);event.target.value='';}));
+    el('sr-character-import-file')?.addEventListener('change',event=>task(async()=>{try{await readFile(event.target.files?.[0]);}finally{event.target.value='';}}));
     el('sr-character-import-json')?.addEventListener('dragover',event=>event.preventDefault());
     el('sr-character-import-json')?.addEventListener('drop',event=>{event.preventDefault();const file=event.dataTransfer.files?.[0];task(()=>readFile(file));});
     el('sr-character-versions')?.addEventListener('click',event=>{
