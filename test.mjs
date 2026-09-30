@@ -38,7 +38,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.20.0');
+assert.equal(manifest.version, '0.21.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -170,7 +170,7 @@ assert.match(css, /@media \(max-width: 600px\)/);
 assert.match(css, /#sr-tab-flow\.active \{ display: grid; grid-template-columns: repeat\(2/);
 assert.match(css, /\.sr-chip-grid \{ grid-template-columns: repeat\(2/);
 assert.match(css, /#sr-tab-conflict > \.sr-settings-card:not\(\.sr-owner-details\)/);
-assert.match(source, /<details class="sr-settings-card sr-settings-collapsible"><summary>제작자 모드/);
+assert.match(source, /<details class="sr-settings-card sr-settings-collapsible sr-developer-lock"><summary>개발자 모드/);
 assert.match(css, /\.sr-run-row \.menu_button \{[^\n]*min-width: 150px/);
 assert.match(css, /\[hidden\] \{ display: none !important; \}/);
 assert.match(css, /button \{[^\n]*writing-mode: horizontal-tb !important/);
@@ -715,7 +715,7 @@ for (const [name, payload] of Object.entries({ directPayload, relationshipPayloa
     assert.ok(payload.length < 6000, `${name} should remain compact unless an exact legacy conflict block is enabled`);
     assert.equal((payload.match(/^\(Meta:/gm) || []).length, 1, `${name} must have one meta wrapper`);
 }
-for (const id of ['sr-settings-button', 'sr-character-enabled', 'sr-character-save', 'sr-character-delete', 'sr-backup-create', 'sr-backup-import']) {
+for (const id of ['sr-settings-button', 'sr-character-enabled', 'sr-character-editor-cancel', 'sr-character-lore-refresh', 'sr-backup-create', 'sr-backup-import']) {
     assert.match(source, new RegExp(`getElementById\\('${id}'\\).*addEventListener`), `${id} must have a working event binding`);
 }
 assert.match(source, /\[\['sr-character-new', 'character'\], \['sr-persona-new', 'persona'\], \['sr-npc-sheet-new', 'npc'\]\].*addEventListener/);
@@ -729,7 +729,8 @@ assert.match(source, /id="sr-character-analysis-list"/);
 assert.match(source, /id="sr-character-analysis-result"/);
 assert.match(source, /characterAnalysisSelection = \{ kind, id: entry\.id \};\s*renderCharacterStore\(\)/, 'saving must select the saved person in the analysis browser');
 assert.match(source, /data-character-view-kind/);
-assert.match(source, /data-character-edit-kind/);
+assert.match(source, /id="sr-character-versions"/);
+assert.match(source, /showVersionEditor/);
 assert.match(source, /이번 시트에서 저장할 만한 개별 규칙이 없습니다/);
 assert.doesNotMatch(source, /id="sr-character-analysis"/, 'the old editor-bound analysis panel must be removed');
 assert.match(source, /id="sr-world-edit-franchise"/);

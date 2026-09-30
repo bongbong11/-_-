@@ -223,7 +223,7 @@ function renderOwnerMode() {
     const ownerStatus = document.getElementById('sr-owner-status');
     if (ownerCard) ownerCard.hidden = !unlocked;
     if (advancedWorld) advancedWorld.hidden = !unlocked;
-    if (ownerStatus) ownerStatus.textContent = unlocked ? '이 SillyTavern 사용자에서 제작자 모드가 열려 있습니다.' : '잠금 상태';
+    if (ownerStatus) ownerStatus.textContent = unlocked ? '열림' : '잠금 상태';
     const promptInput = document.getElementById('sr-owner-prompt');
     if (promptInput && unlocked) promptInput.value = ownerPrompt();
 }

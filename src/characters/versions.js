@@ -1,5 +1,5 @@
 import { normalizeCharacterStore } from './store.js';
-import { createImportedRecordBank, recordBankIsCurrent } from './records.js';
+import { createImportedRecordBank, createRecordBank, recordBankIsCurrent } from './records.js';
 import { validateImport } from '../vendor/character-reasoner/index.js';
 
 const uid = () => globalThis.crypto?.randomUUID?.() || `version-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -28,8 +28,10 @@ export function archiveRecordVersion(store, entry, saveName) {
     entry.appliedRecordVersion=version.id;
     return version;
 }
-export function importRecordVersion(store, input, saveName) {
+export function importRecordVersion(store, input, saveName, form = null) {
     const {output}=validateImport(input);
+    if (form?.kind && form.kind !== output.entity_type) throw new Error('선택한 인물 종류와 JSON의 인물 종류가 다릅니다.');
+    if (form?.name && form.kind !== 'npc' && form.name !== output.entity_name) throw new Error('가져온 시트 이름과 JSON의 인물 이름이 다릅니다.');
     saveName=String(saveName||'').trim()||output.entity_name;
     const next=normalizeCharacterStore(structuredClone(store));
     const matches=allEntries(next).filter(entry=>entry.kind===output.entity_type && [entry.name,...entry.aliases].some(name=>normalized(name)===normalized(output.entity_name)));
@@ -38,9 +40,11 @@ export function importRecordVersion(store, input, saveName) {
     const conflict=allEntries(next).find(entry=>entry.kind!==output.entity_type && [entry.name,...entry.aliases].some(name=>normalized(name)===normalized(output.entity_name)));
     if (conflict) throw new Error(`“${output.entity_name}”은 이미 다른 인물 종류로 등록돼 있습니다. 기존 등록을 확인하세요.`);
     const entry={...(existing || {}),id:existing?.id || uid(),kind:output.entity_type,name:output.entity_name,
-        source:existing?.source || '',selectedLore:existing?.selectedLore || [],aliases:[...new Set([...(existing?.aliases || []),...(existing && existing.name!==output.entity_name?[existing.name]:[])])],
-        sourceVisibleToMain:existing?.sourceVisibleToMain ?? output.entity_type!=='npc',npcRole:existing?.npcRole || (output.entity_type==='npc'?'mixed':''),updatedAt:new Date().toISOString()};
-    entry.recordBank=createImportedRecordBank(input,entry,uid());
+        source:form?.source || existing?.source || '',selectedLore:form?.selectedLore || existing?.selectedLore || [],aliases:[...new Set([...(existing?.aliases || []),...(existing && existing.name!==output.entity_name?[existing.name]:[])])],
+        sourceVisibleToMain:form?.sourceVisibleToMain ?? existing?.sourceVisibleToMain ?? output.entity_type!=='npc',npcRole:form?.npcRole || existing?.npcRole || (output.entity_type==='npc'?'mixed':''),updatedAt:new Date().toISOString()};
+    if(form?.sourceHash)entry.sourceHash=form.sourceHash;
+    entry.antagonist=entry.npcRole==='villain';
+    entry.recordBank=form?.source ? createRecordBank(input,entry,uid()) : createImportedRecordBank(input,entry,uid());
     if (entry.profile) {entry.legacyProfile=entry.profile;delete entry.profile;}
     putEntry(next,entry);
     archiveRecordVersion(next,entry,saveName);
