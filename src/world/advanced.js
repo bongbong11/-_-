@@ -66,6 +66,7 @@ export function worldCandidates(world, transcript, limit = 12) {
 export function addWorldQuestions(request, world, transcript) {
     const candidates = worldCandidates(world, transcript);
     if (!candidates.length) return candidates;
+    request.state.world_context = { name: String(world.name || ''), short_description: String(world.hint || '') };
     request.state.world_record_candidates = candidates.map(({ id, category, when, rule }) => ({ id, category, when, rule }));
     request.state.scope += ' Judge each world_record question independently. Select yes only when the stored rule actually matters to the current interaction, including active bodily states and hard world constraints. A selected world fact never becomes automatic character knowledge. World selection does not direct events or intimacy.';
     for (const [index, record] of candidates.entries()) request.questions[`world_record_${index}`] = {
@@ -76,8 +77,13 @@ export function addWorldQuestions(request, world, transcript) {
     return candidates;
 }
 
+export function selectedWorldRecords(world, candidates = [], answers = {}, failed = false) {
+    if (!world?.advanced) return [];
+    return failed ? (world.advanced.records || []) : candidates.filter((_, index) => answers[`world_record_${index}`]?.choice === 'yes');
+}
+
 export function worldPayload(world, candidates = [], answers = {}, failed = false) {
     if (!world?.advanced) return String(world?.prompt || '');
-    const selected = failed ? (world.advanced.records || []) : candidates.filter((_, index) => answers[`world_record_${index}`]?.choice === 'yes');
+    const selected = selectedWorldRecords(world, candidates, answers, failed);
     return [String(world.prompt || '').trim(), selected.length ? 'Apply the following world rules only within their stated conditions; their presence does not establish an event or grant character knowledge.' : '', ...selected.map(record => `Scope: ${record.when}\n${record.rule}`)].filter(Boolean).join('\n\n');
 }

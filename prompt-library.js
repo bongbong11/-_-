@@ -794,10 +794,40 @@ function activeWorldReference(name) {
     return value ? `Active world: ${value}.` : '';
 }
 
+function fixedSceneSettings(settings, privatePrompt, includePerspectives = false) {
+    const directions = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
+    if (settings.relationshipDirection !== 'hostile') directions.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
+    const fixed = [];
+    if (settings.worldHostility) fixed.push(L.WORLD_HOSTILITY);
+    if (settings.relationshipDirection === 'hostile') fixed.push(L.CHARACTER_TO_USER_DEFAULT);
+    if (String(privatePrompt || '').trim()) fixed.push(String(privatePrompt).trim());
+    if (settings.npcToUser) fixed.push(L.NPC_TO_USER_DEFAULT);
+    if (settings.userMisfortune) fixed.push(L.USER_MISFORTUNE);
+    if (fixed.length && includePerspectives) directions.push(L.INDEPENDENT_PERSPECTIVES);
+    directions.push(...fixed);
+    const priority = settings.negativePriority ? 'Enabled negative-bias constraints take priority over positive world or event routing. ' : '';
+    return `<FIXED_SCENE_SETTINGS>\n${priority}These ongoing settings govern the current scene. They do not establish completed events or override a named person's established facts, relationships, or knowledge boundaries.\n${directions.join('\n\n')}\n</FIXED_SCENE_SETTINGS>`;
+}
+
+const SCENE_FOCUS_LABELS = {
+    direct: 'the current dialogue or action', relationship: 'the current relationship interaction',
+    event: 'the ongoing event or goal', conflict: 'the established conflict', npc: 'the selected NPC involvement',
+    new_event: 'the selected new event', transition: 'the supported scene transition',
+    villain: 'the selected antagonist involvement', continuity: 'the selected continuity consequence',
+};
+
 export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '', activeWorldName = '' }) {
     if (settings.developmentStyle) settings = normalizeDevelopmentPreferences(settings);
-    const blocks = [activeWorldReference(activeWorldName), WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural].filter(Boolean);
-    if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
+    const castNames = new Set(sheetCastNames.map(name => String(name || '').trim().toLocaleLowerCase()).filter(Boolean));
+    const generatedName = String(npcProfile?.name || npcProfile?.identityName || npcProfile?.characterName || '').trim().toLocaleLowerCase();
+    const npcIsSheetCast = Boolean(generatedName && castNames.has(generatedName));
+    const blocks = [activeWorldReference(activeWorldName), fixedSceneSettings(settings, privatePrompt, true)].filter(Boolean);
+    if (String(continuityBlock || '').trim()) blocks.push(String(continuityBlock).trim());
+    if (sheetCastNames.length) blocks.push(`<SHEET_CAST_OWNERSHIP>Registered identities: ${[...new Set(sheetCastNames)].join(', ')}. Never regenerate these people as independent default NPCs. Registration remains authoritative even with disabled analysis, stale records, absence, or zero selected records. Follow their original visible characterization when no additional record applies.</SHEET_CAST_OWNERSHIP>`);
+    if (castNames.size && (['create','replace','reuse'].includes(decisions.npc_route) || settings.npcToUser || decisions.npc_autonomy === 'yes')) blocks.push('<NPC_CAST_SCOPE>Registered Sheet Cast retain their established identity, knowledge, and relationships even when their optional analysis is off or selects no rule. Generated Cast defaults and generic NPC execution apply only to other people; do not recreate an existing person.</NPC_CAST_SCOPE>');
+    const focus = SCENE_FOCUS_LABELS[decisions.primary_focus];
+    const secondary = SCENE_FOCUS_LABELS[decisions.secondary_focus];
+    if (focus) blocks.push(`<SCENE_FOCUS>Primary development: ${focus}.${secondary ? ` Dependent support: ${secondary}.` : ''} The following progression and reaction instructions belong to this same scene, not separate tasks.</SCENE_FOCUS>`);
     const cadencePrompts = {
         compress: 'Execute one primary beat; include at most one directly dependent secondary reaction. Compress repetition, connective steps, minor remarks, and already-understood context. Continue through the single detail, action, or question that most changes the immediate scene.',
         natural: 'Give ordinary space to one primary beat. Include at most one secondary reaction and only when it follows directly; let incidental input pass implicitly.',
@@ -817,12 +847,6 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
         if (corrections.length >= 2) break;
         if (decisions[key] === 'yes' && EXECUTION_CORRECTIONS[key]) corrections.push(EXECUTION_CORRECTIONS[key]);
     }
-    if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
-    if (String(continuityBlock || '').trim()) blocks.push(String(continuityBlock).trim());
-    const castNames = new Set(sheetCastNames.map(name => String(name || '').trim().toLocaleLowerCase()).filter(Boolean));
-    const generatedName = String(npcProfile?.name || npcProfile?.identityName || npcProfile?.characterName || '').trim().toLocaleLowerCase();
-    const npcIsSheetCast = Boolean(generatedName && castNames.has(generatedName));
-    if (castNames.size && (['create','replace','reuse'].includes(decisions.npc_route) || settings.npcToUser || decisions.npc_autonomy === 'yes')) blocks.push('<NPC_CAST_SCOPE>Registered Sheet Cast retain their established identity, knowledge, and relationships even when their optional analysis is off or selects no rule. Generated Cast defaults and generic NPC execution apply only to other people; do not recreate an existing person.</NPC_CAST_SCOPE>');
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
 Within the selected scene or event, answer the current interaction through a concrete, character-consistent response, decision, refusal, action, or immediate consequence. Do not recap the input, stop at intention when a supported step can be executed, or end on a question merely to hand back the turn. Do not add a separate event merely to answer. Leave {{user}}'s response and any outcome that depends on it open.
@@ -872,44 +896,23 @@ Within the selected scene or event, answer the current interaction through a con
     const npcExecution = npcIsSheetCast || sheetNpcTarget ? '' : npcExecutionPrompt(decisions);
     if (npcExecution) blocks.push(npcExecution);
 
-    // Keep the supplied Quick Reply blocks at the end as the most specific constraints.
-    // Inside each source group, preserve the original assembly order.
-    const conflictBlocks = [];
+    // Current conflict actions follow the scene plan; persistent settings are above.
+    // Preserve the supplied wording and order inside each source group.
     const fightBlocks = [];
     if (decisions.npc_autonomy === 'yes') fightBlocks.push(L.AUTONOMOUS_NPC_DYNAMICS);
     if (decisions.villain_route === 'create' && villainProfile) fightBlocks.push(antagonistPrompt(villainProfile, true));
     if (decisions.villain_route === 'replace' && villainProfile) fightBlocks.push(antagonistPrompt(villainProfile, true));
     if (decisions.villain_route === 'continue' && villainProfile) fightBlocks.push(antagonistPrompt(villainProfile, false));
     if (decisions.fight_sustain === 'yes') fightBlocks.push(L.SUSTAINED_INTERPERSONAL_CONFLICT);
-    if (fightBlocks.length) conflictBlocks.push(L.CONFLICT_EXECUTION, ...fightBlocks);
+    if (fightBlocks.length) blocks.push(`<CONFLICT_PROGRESSION>\nApply these conflict instructions through the selected scene and each participant's established motives, information, and means.\n${[L.CONFLICT_EXECUTION, ...fightBlocks].join('\n\n')}\n</CONFLICT_PROGRESSION>`);
 
-    const worldBlocks = [];
-    if (settings.worldHostility) worldBlocks.push(L.WORLD_HOSTILITY);
-    if (settings.relationshipDirection === 'hostile') worldBlocks.push(L.CHARACTER_TO_USER_DEFAULT);
-    if (String(privatePrompt || '').trim()) worldBlocks.push(String(privatePrompt).trim());
-    if (settings.npcToUser) worldBlocks.push(L.NPC_TO_USER_DEFAULT);
-    if (settings.userMisfortune) worldBlocks.push(L.USER_MISFORTUNE);
-    if (worldBlocks.length) conflictBlocks.push(L.INDEPENDENT_PERSPECTIVES, ...worldBlocks);
-    if (conflictBlocks.length) {
-        const priority = settings.negativePriority ? '[Priority: enabled negative-bias constraints cannot be cancelled by positive world or event routing. They do not rewrite a registered person\'s established knowledge, relationships, or characterization.]\n' : '';
-        blocks.push(`<CONFLICT_PROGRESSION>\n${priority}${conflictBlocks.join('\n\n')}\n</CONFLICT_PROGRESSION>`);
-    }
-
-    if (sheetCastNames.length) blocks.push(`<SHEET_CAST_OWNERSHIP>Registered identities: ${[...new Set(sheetCastNames)].join(', ')}. Never regenerate these people as independent default NPCs. Registration remains authoritative even with disabled analysis, stale records, absence, or zero selected records. Follow their original visible characterization when no additional record applies.</SHEET_CAST_OWNERSHIP>`);
     if (String(characterBlock || '').trim()) blocks.push('<SHEET_CAST_SCOPE>Apply the following specific boundaries to their named people within the selected scene, event, conflict, and world constraints. Those broader constraints do not rewrite their established knowledge, relationships, or characterization; these individual boundaries do not cancel valid scene progression.</SHEET_CAST_SCOPE>', String(characterBlock).trim());
+    if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\nRepair execution within the current selected scene and character boundaries. A prior missed direction applies only if still relevant; do not revive a superseded route or add an independent task.\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
 
     return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n${META_CLOSE}\n)`;
 }
 export function buildPausedInjection({settings,privatePrompt='',referenceLines=[],activeWorldName=''}={}) {
-    const blocks=[activeWorldReference(activeWorldName),WORLD_PROMPTS[settings.worldDirection]||WORLD_PROMPTS.natural].filter(Boolean);
-    if(settings.relationshipDirection!=='hostile')blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection]||RELATIONSHIP_PROMPTS.dynamic);
-    const fixed=[];
-    if(settings.worldHostility)fixed.push(L.WORLD_HOSTILITY);
-    if(settings.relationshipDirection==='hostile')fixed.push(L.CHARACTER_TO_USER_DEFAULT);
-    if(String(privatePrompt).trim())fixed.push(String(privatePrompt).trim());
-    if(settings.npcToUser)fixed.push(L.NPC_TO_USER_DEFAULT);
-    if(settings.userMisfortune)fixed.push(L.USER_MISFORTUNE);
-    if(fixed.length)blocks.push(`<FIXED_SCENE_SETTINGS>\n${fixed.join('\n\n')}\n</FIXED_SCENE_SETTINGS>`);
+    const blocks=[activeWorldReference(activeWorldName),fixedSceneSettings(settings,privatePrompt)].filter(Boolean);
     for(const line of referenceLines)if(String(line).trim())blocks.push(String(line).trim());
     return `${META_OPEN}\n\n${blocks.join('\n\n')}\n\n${META_CLOSE}\n)`;
 }

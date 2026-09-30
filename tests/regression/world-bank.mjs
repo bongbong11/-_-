@@ -13,6 +13,8 @@ for (const mutate of [r=>r.version=9,r=>r.records.push(r.records[0]),r=>r.record
 const request={state:{scope:'Current scene.'},questions:{}};
 const candidates=addWorldQuestions(request,world,'Moonlight falls on the gate.');
 assert.equal(candidates.length,1);assert.equal(request.state.world_record_candidates[0].source_quote,undefined);
+assert.deepEqual(request.state.world_context,{name:world.name,short_description:world.hint});
+assert.ok(!JSON.stringify(request.state).includes('Physical limits apply.'),'the gate receives the short description, not the full world source');
 assert.equal(worldPayload(world,candidates,{world_record_0:{choice:'no'}}),'Physical limits apply.');
 assert.match(worldPayload(world,candidates,{world_record_0:{choice:'yes'}}),/Scope: Moonlight reaches the gate\.\nThe gate opens\./);
 assert.match(worldPayload(world,[],{},true),/Scope: Moonlight reaches the gate/,'failure retains conditions');

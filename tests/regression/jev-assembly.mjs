@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { normalizeDevelopmentPreferences, buildQuestions, buildInjection } from '../../prompt-library.js';
+import { normalizeDevelopmentPreferences, buildQuestions, buildInjection, buildPausedInjection } from '../../prompt-library.js';
 import { applyPolicy, FALLBACKS } from '../../src/scene/policy.js';
 import { coordinateDecisions, coordinateActionBudget, deriveDependentDecisions } from '../../src/scene/coordinator.js';
 import { makeAppearanceOffer, addAppearanceQuestions, applyAppearanceOffer } from '../../src/scene/appearance.js';
@@ -74,6 +74,30 @@ const injection=buildCharacterInjection(resolved);
 assert.match(injection.text,/knowledge=suspects/);assert.match(injection.text,/before confirmation/);assert.match(injection.text,/Do not treat unshared/);assert.doesNotMatch(injection.text,/Direction:/);assert.equal(resolved[0].profileIds.length,1);
 assert.equal(buildLiveCharacterPlan([{...entry,source:'changed'}],{canonicalOnly:true})[0].profileCandidates.length,0);
 assert.match(buildInjection({settings:record({}).preferences,decisions:FALLBACKS,sheetCastNames:['Lucas']}),/Registration remains authoritative/);
+// Prompt categories: ongoing policies and evidence precede this-turn execution;
+// later corrections cannot revive an old route or override character boundaries.
+{
+    const settings={...record({developmentStyle:'balanced'}).preferences,worldHostility:true,npcToUser:true,negativePriority:true};
+    const payload=buildInjection({settings,decisions:{...FALLBACKS,primary_focus:'conflict',secondary_focus:'relationship',fight_sustain:'yes',direct_execution:'yes',relationship_beat:'rejection',directive_followthrough:'missed'},
+        characterBlock:injection.text,continuityBlock:'<CONTINUITY_CONTEXT>Known report; its claim is unconfirmed.</CONTINUITY_CONTEXT>',sheetCastNames:['Lucas']});
+    const ordered=['<FIXED_SCENE_SETTINGS>','<CONTINUITY_CONTEXT>','<SHEET_CAST_OWNERSHIP>','<SCENE_FOCUS>','<BASIC_DEVELOPMENT','<DIRECT_SCENE_EXECUTION>','<CONFLICT_PROGRESSION>','<CHARACTER_EXECUTION>','<EXECUTION_CORRECTION>','Apply these scene directions alongside'];
+    for(let i=0;i<ordered.length;i++) {
+        assert.ok(payload.includes(ordered[i]),ordered[i]);
+        if(i)assert.ok(payload.indexOf(ordered[i-1])<payload.indexOf(ordered[i]),`${ordered[i-1]} must precede ${ordered[i]}`);
+    }
+    const fixed=payload.match(/<FIXED_SCENE_SETTINGS>([\s\S]*?)<\/FIXED_SCENE_SETTINGS>/)[1];
+    const conflict=payload.match(/<CONFLICT_PROGRESSION>([\s\S]*?)<\/CONFLICT_PROGRESSION>/)[1];
+    assert.match(fixed,/<WORLD_HOSTILITY>/);assert.doesNotMatch(fixed,/<SUSTAINED_INTERPERSONAL_CONFLICT>/);
+    assert.match(conflict,/<SUSTAINED_INTERPERSONAL_CONFLICT>/);assert.doesNotMatch(conflict,/<WORLD_HOSTILITY>|<NPC_TO_USER_DEFAULT>/);
+    assert.match(payload,/<SCENE_FOCUS>Primary development: the established conflict\. Dependent support: the current relationship interaction\./);
+    assert.match(payload,/do not revive a superseded route or add an independent task/);
+    const quiet=buildInjection({settings,decisions:{...FALLBACKS,primary_focus:'direct'}});
+    assert.match(quiet,/<WORLD_HOSTILITY>/);assert.doesNotMatch(quiet,/<CONFLICT_PROGRESSION>/,'ongoing bias is not mislabeled as a current conflict');
+    const paused=buildPausedInjection({settings,referenceLines:['<CHARACTER_REFERENCE>Stored reference.</CHARACTER_REFERENCE>']});
+    assert.match(paused,/Enabled negative-bias constraints take priority/);
+    assert.ok(paused.indexOf('</FIXED_SCENE_SETTINGS>')<paused.indexOf('<CHARACTER_REFERENCE>'));
+    assert.doesNotMatch(paused,/<SCENE_FOCUS>|<BASIC_DEVELOPMENT|<CONFLICT_PROGRESSION>|<EXECUTION_CORRECTION>/,'paused scenes retain no dynamic execution categories');
+}
 // Real orchestration with mocked Jev: offer before request, record selection, no pre-output commit, verification afterwards.
 {
     const f=fixture();f.ctx.chat=[{is_user:true,name:'User',mes:'Lucas asks Anna about the password.'}];

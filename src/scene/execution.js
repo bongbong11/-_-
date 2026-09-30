@@ -3,7 +3,7 @@ import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
 import { sceneGateRequest, resolveSceneGate } from './intimacy-gate.js';
 import { recordBankIsCurrent } from '../characters/records.js';
-import { addWorldQuestions, worldPayload as buildWorldPayload } from '../world/advanced.js';
+import { addWorldQuestions, selectedWorldRecords, worldPayload as buildWorldPayload } from '../world/advanced.js';
 import { seasonalWorldNote } from '../world/seasonal.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
@@ -14,6 +14,7 @@ function sourceRevisionKey(rec, world) {
         reasoner: deps.settings.reasonerProfileId || '',
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
         characterSelectorContract: 2,
+        injectionAssemblyContract: 2,
         sceneGateContract: 2,
         characterCore: CORE_SHA256,
         characterEnabled: Boolean(deps.characterStore.enabled),
@@ -312,8 +313,9 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const sceneContextEndIndex=Math.max(-1,...context.selected.map(message=>(deps.getContext().chat||[]).indexOf(message)),String(pendingUserText||'').trim()?(deps.getContext().chat||[]).length:-1);
     rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey,contextEndIndex:sceneContextEndIndex};
     const seasonalContext = seasonalWorldNote(prefs, transcript, world);
+    const appliedWorldRecords = selectedWorldRecords(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed);
     const selectedWorldPayload = [buildWorldPayload(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed), seasonalContext].filter(Boolean).join('\n\n');
-    const worldSelection = { status: !world?.advanced ? 'plain' : worldSelectionFailed ? 'fallback' : 'selected', candidateIds: worldRecordCandidates.map(record=>record.id), selectedIds: worldRecordCandidates.filter((_,index)=>worldRecordAnswers[`world_record_${index}`]?.choice==='yes').map(record=>record.id) };
+    const worldSelection = { status: !world?.advanced ? 'plain' : worldSelectionFailed ? 'fallback' : 'selected', candidateIds: worldRecordCandidates.map(record=>record.id), selectedIds: worldRecordCandidates.filter((_,index)=>worldRecordAnswers[`world_record_${index}`]?.choice==='yes').map(record=>record.id), appliedIds: appliedWorldRecords.map(record=>record.id) };
     if (world?.advanced && worldSelectionFailed) deps.window.toastr?.warning?.('세계관 선택 응답을 확인하지 못해 이번 턴은 전체 세계 규칙을 조건과 함께 적용합니다.', '씬판독기');
     const worldGateFrame = { request: gateRequest, answers: worldRecordAnswers };
     deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: gateRequest, answers: worldRecordAnswers, worldGate: worldGateFrame, model: deps.JEV_MODEL };
@@ -437,7 +439,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 },
                 controls: { ...prefs, progressIntensity: undefined, world: { id: world?.id, name: world?.name, hint: world?.hint } },
                 seasonal_context: seasonalContext || null,
-                applicable_world_rules: worldRecordCandidates.filter((_, index) => worldRecordAnswers[`world_record_${index}`]?.choice === 'yes').map(({ id, category, when, rule }) => ({ id, category, when, rule })),
+                applicable_world_rules: appliedWorldRecords.map(({ id, category, when, rule }) => ({ id, category, when, rule })),
+                world_rule_selection: { status: worldSelection.status, scope: 'Rules constrain only scenes meeting their stated conditions. Fallback includes unfiltered rules, not confirmed current states. No rule alone establishes an event or character knowledge.' },
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,

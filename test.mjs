@@ -38,7 +38,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.22.1');
+assert.equal(manifest.version, '0.22.2');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -576,7 +576,7 @@ assert.match(exactPayload, /When an established intent, threat, hostile pressure
 assert.doesNotMatch(exactPayload, /Stop repeating near-actions/);
 const position = (text) => exactPayload.indexOf(text);
 assert.ok(position('<WORLD_DIRECTION') < position('<RELATIONSHIP_PACING'));
-assert.ok(position('<RELATIONSHIP_PACING') < position(LEGACY_PROMPTS.CHARACTER_TO_USER_DEFAULT));
+assert.ok(position(LEGACY_PROMPTS.CHARACTER_TO_USER_DEFAULT) < position('<RELATIONSHIP_PACING'), 'fixed relationship policy precedes this-turn relationship execution');
 assert.ok(position('<RELATIONSHIP_PACING') < position('<CONFLICT_PROGRESSION>'));
 assert.ok(position('<CONFLICT_EXECUTION>') < position('<AUTONOMOUS_NPC_DYNAMICS>'));
 assert.ok(position('<AUTONOMOUS_NPC_DYNAMICS>') < position('<SUSTAINED_INTERPERSONAL_CONFLICT>'));

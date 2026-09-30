@@ -448,6 +448,8 @@ try{
     assert.match(await page.evaluate(()=>mock.macros['scene-reader']?.()||''),/Active world: Moonlit Garden/,'scene routing retains only a short world reference');
     const worldGate=requests.filter(request=>request.url.endsWith('/systemone')).findLast(request=>request.body.state?.world_record_candidates?.length);
     assert.equal(worldGate.body.state.world_record_candidates[0].id,'W001','the scene gate judges bounded world candidates');
+    assert.equal(worldGate.body.state.world_context.name,'Moonlit Garden','world selector receives the setting identity');
+    assert.match(worldGate.body.state.world_context.short_description,/moonlight/);
     gateScenario={level:'3',phase:'active'};
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'At the moonlit garden gate, the explicit sexual interaction begins.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     await page.waitForFunction(()=>(mock.macros['scene-reader-world']?.()||'').includes('Moonlight opens the garden gate.'));
@@ -461,6 +463,10 @@ try{
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Hunter returns to the garden.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.equal(store.chat.lastJudgment.worldSelection.status,'fallback');
     assert.match(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),/Scope: When moonlight reaches the gate\.\nMoonlight opens the garden gate/,'invalid selector response falls back with conditions intact');
+    const fallbackRequest=requests.findLast(request=>request.body.state?.character_profiles!==undefined).body;
+    assert.equal(fallbackRequest.state.world_rule_selection.status,'fallback');
+    assert.equal(fallbackRequest.state.applicable_world_rules[0].rule,'Moonlight opens the garden gate.','progression judge and final injection use the same fallback rules');
+    assert.deepEqual(store.chat.lastJudgment.worldSelection.appliedIds,['W001']);
     worldChoice='no';
     gateScenario=null;
     await page.locator('#sr-world-profile').selectOption('current');
