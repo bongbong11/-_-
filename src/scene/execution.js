@@ -8,7 +8,7 @@ export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
 function sourceRevisionKey(rec, world) {
     return deps.stableFingerprint({
-        world: { id: world?.id || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise) },
+        world: { id: world?.id || '', name: world?.name || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise) },
         reasoner: deps.settings.reasonerProfileId || '',
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
         characterSelectorContract: 2,
@@ -310,7 +310,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             const reference=String(entry.recordBank?.intimacy_reference?.text||'').trim();
             if(reference)referenceLines.push(`<CHARACTER_REFERENCE name="${String(entry.name).replace(/["<>]/g,'')}">Use this person's stored information in the current interaction without inventing traits or forcing an action: ${reference}</CHARACTER_REFERENCE>`);
         }
-        const payload=deps.buildPausedInjection({settings:prefs,privatePrompt:prefs.privatePromptEnabled?deps.ownerPrompt():'',referenceLines});
+        const payload=deps.buildPausedInjection({settings:prefs,privatePrompt:prefs.privatePromptEnabled?deps.ownerPrompt():'',referenceLines,activeWorldName:world?.name||''});
         rec.lastJudgment={details:{},decisions:{},payload,worldPayload:String(world?.prompt||''),inputKey,contextKey:context.contextKey,sourceKey,continuityCacheKey,memoryKey,characterTrace:[],sceneIntimacy:rec.sceneIntimacy,judgedAt:new Date().toISOString(),model:deps.JEV_MODEL};
         run.assert();
         if(deps.storageVersion>=2)await deps.queueWrite('session:'+run.identity,()=>{run.assert();return deps.storagePost('transaction',{chatKey:run.identity,chat:structuredClone(rec),history:run.history.slice(-deps.STATE_HISTORY_LIMIT)});});
@@ -556,7 +556,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const sheetCastNames = [...deps.characterStore.characters, ...deps.characterStore.npcs, ...[deps.characterStore.persona].filter(Boolean)].flatMap(entry => [entry.name, ...(entry.aliases || [])]);
         const selectedSheetNpc = decisions.npc_route === 'reuse' && /^sheet_\d+$/.test(decisions.npc_target || '')
             ? npcTargets[Number(decisions.npc_target.slice(6))] || null : null;
-        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: selectedSheetNpc ? null : staged.npcProfile, sheetNpcTarget: selectedSheetNpc?.name || '', eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock, sheetCastNames });
+        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: selectedSheetNpc ? null : staged.npcProfile, sheetNpcTarget: selectedSheetNpc?.name || '', eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock, sheetCastNames, activeWorldName:world?.name||'' });
         const finalContinuityCacheKey = deps.settings.continuityEnabled
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';

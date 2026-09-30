@@ -789,9 +789,14 @@ ${role === 'secondary' ? 'Use only one directly dependent sign, clue, action, or
 </RP_EVENT_BEAT>`;
 }
 
-export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '' }) {
+function activeWorldReference(name) {
+    const value=String(name||'').replace(/\s+/g,' ').trim();
+    return value ? `Active world: ${value}.` : '';
+}
+
+export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '', activeWorldName = '' }) {
     if (settings.developmentStyle) settings = normalizeDevelopmentPreferences(settings);
-    const blocks = [WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural];
+    const blocks = [activeWorldReference(activeWorldName), WORLD_PROMPTS[settings.worldDirection] || WORLD_PROMPTS.natural].filter(Boolean);
     if (settings.relationshipDirection !== 'hostile') blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection] || RELATIONSHIP_PROMPTS.dynamic);
     const cadencePrompts = {
         compress: 'Execute one primary beat; include at most one directly dependent secondary reaction. Compress repetition, connective steps, minor remarks, and already-understood context. Continue through the single detail, action, or question that most changes the immediate scene.',
@@ -895,8 +900,8 @@ Continue the active exchange through one concrete, character-consistent response
 
     return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n${META_CLOSE}\n)`;
 }
-export function buildPausedInjection({settings,privatePrompt='',referenceLines=[]}={}) {
-    const blocks=[WORLD_PROMPTS[settings.worldDirection]||WORLD_PROMPTS.natural];
+export function buildPausedInjection({settings,privatePrompt='',referenceLines=[],activeWorldName=''}={}) {
+    const blocks=[activeWorldReference(activeWorldName),WORLD_PROMPTS[settings.worldDirection]||WORLD_PROMPTS.natural].filter(Boolean);
     if(settings.relationshipDirection!=='hostile')blocks.push(RELATIONSHIP_PROMPTS[settings.relationshipDirection]||RELATIONSHIP_PROMPTS.dynamic);
     const fixed=[];
     if(settings.worldHostility)fixed.push(L.WORLD_HOSTILITY);
