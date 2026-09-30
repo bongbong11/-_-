@@ -2,6 +2,7 @@ import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
 import { stableFingerprint } from '../../decision-engine.js';
 import { API_VERSION, RECORD_VERSION, COMPILER_VERSION, buildSources, promptText, compileResult, hardValidateRecords, validateImport } from '../vendor/character-reasoner/index.js';
 const PREVIOUS_CORE_SHA256 = 'cba337f701c7760b1414e394bb27c24c65ec23e0267197d2b4d8f68b21c35c11';
+const PRIOR_NPC_GUIDANCE_SHA256 = '188587338d3f4cad54d8e6f217418d13b437b18b0ddaaa3ca6d60ee724685783';
 
 export const RECORD_LABELS = { fact:'사실·정체성', core:'성향·습관', value:'가치·목표', relationship:'관계', knowledge:'지식 상태', reaction:'조건별 반응', expression:'표현', boundary:'경계·제한', capability:'능력·접근' };
 export function sourceSnapshot(entry) {
@@ -25,7 +26,8 @@ export function createRecordBank(input, entry, analysisId) {
 export function recordBankIsCurrent(entry) {
     const bank=entry?.recordBank;
     const currentCore = bank?.coreFingerprint===CORE_SHA256 && bank.apiVersion===API_VERSION && bank.compilerVersion===COMPILER_VERSION;
-    const compatiblePrevious = bank?.coreFingerprint===PREVIOUS_CORE_SHA256 && bank.apiVersion===1 && bank.compilerVersion==='1.0.0';
+    const compatiblePrevious = (bank?.coreFingerprint===PREVIOUS_CORE_SHA256 && bank.apiVersion===1 && bank.compilerVersion==='1.0.0') ||
+        (bank?.coreFingerprint===PRIOR_NPC_GUIDANCE_SHA256 && bank.apiVersion===API_VERSION && bank.compilerVersion===COMPILER_VERSION);
     if (!bank || !(currentCore || compatiblePrevious) || bank.recordVersion!==RECORD_VERSION || bank.sourceFingerprint!==recordSourceFingerprint(entry)) return false;
     try {
         if (bank.sourceMethod === 'external_json_import') {

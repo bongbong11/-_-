@@ -1,8 +1,8 @@
-export const CHARACTER_LIVE_SYSTEM = `Select stored rules for this registered person only when they would materially change the NEXT RP response.
+export const CHARACTER_LIVE_SYSTEM = `Select stored rules for this registered person when they would help the NEXT RP response stay true to that person.
 
 Judge necessity from the current RP, this person's actual participation, established relationships and continuity, and the specific issue being handled. A rule is not needed merely because its topic or a similar word appears in the chat.
 
-Choose zero rules when ordinary characterization is sufficient. Choose up to four distinct rule IDs when separate currently applicable constraints matter. Prefer a relevant boundary, target-specific relationship, knowledge limit, or conditional reaction over a repeated generic trait. Do not select a rule to fill a quota, repeat an existing scene instruction, or restate a general rule already supplied by the preset.
+Current dialogue, conduct, or thoughts can warrant a stored relationship, expression, knowledge, or boundary record without a new event. Choose zero when no stored record is relevant. Choose distinct applicable IDs up to the number of available slots. Prefer target-specific and conditional records over repeated generic traits. Do not select a rule to fill a quota or repeat an existing scene instruction.
 
 A stored rule is a durable character boundary, not proof of this person's current emotion, current knowledge, or next action. Later established RP continuity may change how the rule applies.
 
@@ -26,6 +26,6 @@ export const ACCESS_CHOICES = {
 };
 export const PRESENCE_CHOICES = {
     absent: 'No meaningful role in the next response.',
-    background: 'Present or continuity-relevant, but no independent beat is needed.',
-    active: 'A concrete response, choice, action, refusal, concealment, or intervention is warranted.',
+    background: 'Present or continuity-relevant, but not taking part in the current interaction.',
+    active: 'Taking part in the current interaction through speech, thought, choice, action, refusal, or response; a separate new plot beat is unnecessary.',
 };

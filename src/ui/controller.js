@@ -5,13 +5,14 @@ import { characterErrorReport } from './character-error.js';
 import { compilerRequest, createRecordBank } from '../characters/records.js';
 import { archiveRecordVersion } from '../characters/versions.js';
 import { bindCharacterTransfer } from './character-transfer.js';
+import { openPersonPreview } from './person-preview.js';
 import { WORLD_COMPILER_PROMPT, parseAdvancedWorld, advancedWorldToStored, storedWorldToJson } from '../world/advanced.js';
 import { SEASONAL_OPTIONS } from '../world/seasonal.js';
 export function createUiController(deps) {
 let characterEditorRevision = 0;
 let editorLore = [];
 let availableEditorLore = [];
-let initialEditorLoreBooks = null;
+let initialEditorLoreKeys = null;
 let loreLoadingPromise = null;
 let lastCharacterError = null;
 let worldBusy = false;
@@ -52,6 +53,7 @@ function setFormValues() {
     setChecked('sr-negative-priority', prefs.negativePriority);
     setValue('sr-development-style', prefs.developmentStyle);
     setValue('sr-progress-intensity', Number(prefs.progressIntensity ?? 1).toFixed(1));
+    setValue('sr-character-volume', prefs.characterVolume || 'generous');
     const intensityValue=deps.document.getElementById('sr-progress-intensity-value');
     if(intensityValue)intensityValue.textContent=Number(prefs.progressIntensity ?? 1).toFixed(1);
     setValue('sr-world-profile', prefs.selectedWorldId);
@@ -165,6 +167,11 @@ function characterEntries(kind) {
     if (kind === 'persona') return deps.characterStore.persona ? [deps.characterStore.persona] : [];
     return kind === 'npc' ? deps.characterStore.npcs : deps.characterStore.characters;
 }
+function updateSheetButton() {
+    const hasSource=Boolean(deps.document.getElementById('sr-character-source')?.value.trim());
+    deps.document.getElementById('sr-character-read-sheet').textContent=hasSource?'시트 확인하기':'시트 가져오기';
+    deps.document.getElementById('sr-character-sheet-refresh').hidden=!hasSource;
+}
 
 function showCharacterEditor(kind, entry = null) {
     characterEditorRevision++;
@@ -175,7 +182,7 @@ function showCharacterEditor(kind, entry = null) {
     errorPreview.value='';
     editorLore = structuredClone(entry?.selectedLore || []);
     availableEditorLore=[];
-    initialEditorLoreBooks=entry ? new Set(editorLore.map(item=>item.book)) : null;
+    initialEditorLoreKeys=new Set(editorLore.map(loreKey));
     deps.characterEditorKind = kind;
     deps.characterEditorId = entry?.id || '';
     const editor = deps.document.getElementById('sr-character-editor');
@@ -200,6 +207,7 @@ function showCharacterEditor(kind, entry = null) {
     deps.document.getElementById('sr-character-aliases').value = (entry?.aliases || []).join(', ');
     const sourceInput = deps.document.getElementById('sr-character-source');
     sourceInput.value = entry?.source || '';
+    updateSheetButton();
     deps.document.getElementById('sr-character-sheet-summary').textContent=entry?.source?'시트 원문을 보관 중입니다. 현재 시트를 다시 가져올 수 있습니다.':'현재 시트를 가져오세요.';
     sourceInput.placeholder = kind === 'npc'
         ? 'NPC 시트에 적어 주세요:\n· 역할·소속, 주요 관계\n· 원하는 것과 우선순위, 행동·거절 방식\n· 평소 말투와 설명하는 정도\n· 실제 지식·능력·접근권 및 한계\n· 확인된 과거와 성격의 모순\n빈칸을 억지로 채우거나 시트에 없는 비밀·전문성·접근권을 만들 필요는 없습니다.'
@@ -210,11 +218,12 @@ function showCharacterEditor(kind, entry = null) {
     if (roleSelect) roleSelect.value = entry?.npcRole || (entry?.antagonist ? 'villain' : 'mixed');
     const status = deps.document.getElementById('sr-character-task-status');
     if (status) status.textContent = entry ? deps.profileStatus(entry) : '원문을 넣고 분석 명령문을 복사하세요. 완성된 JSON은 아래에서 바로 가져올 수 있습니다.';
+    renderEditorLore('연결 로어북을 읽는 중…');
     beginLoreRefresh();
     editor.scrollTop=0;
 }
 function showVersionEditor(kind,entry,group,version){
-    showCharacterEditor(kind,entry);
+    showCharacterEditor(kind,version.entrySnapshot || entry);
     deps.document.getElementById('sr-character-editor-title').textContent=`${kind==='npc'?'NPC':kind==='persona'?'페르소나':'캐릭터'} · 저장본 수정`;
     deps.document.getElementById('sr-character-import-name').value=group.name;
     deps.document.getElementById('sr-character-import-json').value=JSON.stringify({entity_type:version.bank.entity_type,entity_name:version.bank.entity_name,intimacy_reference:version.bank.intimacy_reference,records:version.bank.records},null,2);
@@ -230,25 +239,55 @@ function closeCharacterEditor() {
     const modal=deps.document.getElementById('sr-character-modal');
     if(modal)modal.hidden=true;
 }
+function showSavedPerson(kind,id) {
+    const entry=characterEntries(kind).find(item=>item.id===id);
+    if(!entry)return;
+    const versions=(deps.characterStore.recordGroups||[]).filter(group=>group.kind===kind).flatMap(group=>group.versions.map(version=>({group,version}))).filter(item=>item.version.entryId===id);
+    const picked=versions.find(item=>item.version.id===entry.appliedRecordVersion) || versions.sort((a,b)=>b.version.savedAt.localeCompare(a.version.savedAt))[0];
+    const label=picked?`${entry.name} · ${new Date(picked.version.savedAt).toLocaleString('ko-KR')}${picked.version.id===entry.appliedRecordVersion?' · 적용 중':' · 최근 저장본'}`:entry.name;
+    openPersonPreview(deps.document,deps.escapeHtml,{entry,version:picked?.version,title:label});
+}
+function showVersionPreview(group,version) {
+    const entry=characterEntries(group.kind).find(item=>item.id===version.entryId);
+    openPersonPreview(deps.document,deps.escapeHtml,{entry,version,title:`${group.name} · ${new Date(version.savedAt).toLocaleString('ko-KR')}${entry?.appliedRecordVersion===version.id?' · 적용 중':''}`});
+}
 
+function loreKey(item) { return JSON.stringify([item.book,String(item.uid)]); }
 function renderEditorLore(message='') {
     const node=deps.document.getElementById('sr-character-lore-status');
     const books=[...new Set(availableEditorLore.map(item=>item.book))];
-    const selected=new Set(editorLore.map(item=>item.book));
+    const selected=new Set(editorLore.map(loreKey));
     const count=deps.document.getElementById('sr-character-lore-count');
-    if(count)count.textContent=`${selected.size}개 선택됨`;
+    if(count)count.textContent=`${selected.size}개 엔트리 선택됨`;
     const options=deps.document.getElementById('sr-character-lore-options');
-    if(options?.replaceChildren && deps.document.createElement){options.replaceChildren();for(const book of books){const label=deps.document.createElement('label');const box=deps.document.createElement('input');box.type='checkbox';box.value=book;box.checked=selected.has(book);const span=deps.document.createElement('span');span.textContent=`${book} · 원문 ${availableEditorLore.filter(item=>item.book===book).length}개 항목`;label.append(box,span);options.append(label);}}
-    if(node)node.textContent=message || (books.length ? `연결 로어북 ${books.length}개 · 필요한 책만 선택하세요.` : '연결된 로어북 없음');
+    if(options?.replaceChildren && deps.document.createElement){
+        options.replaceChildren();
+        for(const book of books){
+            const entries=availableEditorLore.filter(item=>item.book===book);
+            const group=deps.document.createElement('details');group.className='sr-character-lore-book';
+            const summary=deps.document.createElement('summary');summary.textContent=`${book} · ${entries.filter(item=>selected.has(loreKey(item))).length}/${entries.length}개 선택`;group.append(summary);
+            for(const item of entries){
+                const label=deps.document.createElement('label');const box=deps.document.createElement('input');
+                box.type='checkbox';box.value=loreKey(item);box.checked=selected.has(box.value);
+                const span=deps.document.createElement('span');span.textContent=item.title || `엔트리 ${item.uid}`;
+                label.append(box,span);group.append(label);
+            }
+            options.append(group);
+        }
+    }
+    if(node)node.textContent=message || (books.length ? `연결 로어북 ${books.length}개 · 책을 펼쳐 필요한 엔트리만 고르세요.` : '연결된 로어북 없음');
 }
 async function refreshEditorLore() {
     const revision=characterEditorRevision, kind=deps.characterEditorKind;
     const world=deps.worldInfoModule, context=deps.getContext();
+    const personaModule=kind==='persona'||kind==='npc'?await import('/scripts/personas.js').catch(()=>null):null;
+    if(revision!==characterEditorRevision || kind!==deps.characterEditorKind)throw new deps.StaleRunError();
     const personas=context.powerUserSettings?.persona_descriptions||{};
-    const activePersona=personas[context.user_avatar]||Object.values(personas).find(item=>item?.name===context.name1);
-    const names=kind==='persona'
-        ? [...new Set([context.powerUserSettings?.persona_description_lorebook,activePersona?.lorebook].filter(Boolean))]
-        : [...new Set(deps.linkedCharacterBooks(context,world?.world_info))];
+    const avatar=personaModule?.user_avatar || context.user_avatar;
+    const activePersona=personas[avatar]||Object.values(personas).find(item=>item?.name===context.name1);
+    const personaNames=[context.powerUserSettings?.persona_description_lorebook,activePersona?.lorebook].filter(Boolean);
+    const characterNames=deps.linkedCharacterBooks(context,world?.world_info);
+    const names=[...new Set(kind==='persona'?personaNames:kind==='npc'?[...characterNames,...personaNames]:characterNames)];
     if(!names.length){availableEditorLore=[];editorLore=[];renderEditorLore('연결된 로어북 없음');return;}
     if(!world?.loadWorldInfo)throw new Error('연결 로어북을 읽을 수 없습니다.');
     renderEditorLore('연결 로어북을 읽는 중…');
@@ -259,10 +298,13 @@ async function refreshEditorLore() {
             .map(([uid,entry])=>({book,uid,title:entry.comment||(entry.key||[]).join(', ')||uid,content:entry.content}));
     }));
     if(revision!==characterEditorRevision || kind!==deps.characterEditorKind)throw new deps.StaleRunError();
+    const previous=editorLore;
     availableEditorLore=loaded.flat();
-    const chosen=initialEditorLoreBooks ?? new Set(kind==='npc'?[]:names);
-    editorLore=availableEditorLore.filter(item=>chosen.has(item.book));
-    renderEditorLore();
+    const chosen=initialEditorLoreKeys || new Set();
+    editorLore=availableEditorLore.filter(item=>chosen.has(loreKey(item)));
+    const missing=[...chosen].filter(key=>!availableEditorLore.some(item=>loreKey(item)===key));
+    const changed=previous.filter(item=>chosen.has(loreKey(item)) && availableEditorLore.some(next=>loreKey(next)===loreKey(item) && next.content!==item.content));
+    renderEditorLore(missing.length?`이전에 선택한 엔트리 ${missing.length}개를 찾지 못했습니다. 새로 선택한 뒤 분석 명령문을 복사하세요.`:changed.length?`선택한 엔트리 ${changed.length}개의 원문이 달라졌습니다. 확인한 뒤 분석 명령문을 복사하세요.`:'');
 }
 function beginLoreRefresh() {
     loreLoadingPromise=refreshEditorLore().catch(error=>{renderEditorLore('로어북 읽기 실패 · '+error.message);throw error;});
@@ -487,8 +529,8 @@ async function endActiveEvent() {
 }
 
 function bindForm() {
-    bindCharacterTransfer(deps,{characterForm,invalidatePreparedJudgment,downloadJson,ensureLoreLoaded,captureCharacterError,showVersionEditor});
-    deps.document.getElementById('sr-character-read-sheet')?.addEventListener('click',()=>deps.runUiTask((async()=>{
+    bindCharacterTransfer(deps,{characterForm,invalidatePreparedJudgment,downloadJson,ensureLoreLoaded,captureCharacterError,showVersionEditor,showVersionPreview});
+    const importCurrentSheet=async()=>{
         const kind=deps.characterEditorKind, context=deps.getContext();
         let name='', source='';
         if(kind==='character') {
@@ -507,9 +549,16 @@ function bindForm() {
         const input=deps.document.getElementById('sr-character-source');
         if(input.value.trim() && !deps.window.confirm('입력 중인 원문을 현재 시트로 바꿀까요?'))return;
         input.value=source;deps.document.getElementById('sr-character-name').value=name;
+        updateSheetButton();
         deps.document.getElementById('sr-character-sheet-summary').textContent=`${name} · 시트 ${source.length}자 가져옴`;
         characterEditorRevision++;await beginLoreRefresh();taskStatus('현재 시트와 연결 로어북을 가져왔습니다. 분석 명령문을 복사하세요.');
-    })(),'현재 시트를 가져오지 못했습니다.'));
+    };
+    deps.document.getElementById('sr-character-read-sheet')?.addEventListener('click',()=>{
+        const source=deps.document.getElementById('sr-character-source').value.trim();
+        if(source)openPersonPreview(deps.document,deps.escapeHtml,{entry:{name:deps.document.getElementById('sr-character-name').value,source},sourceOnly:true});
+        else deps.runUiTask(importCurrentSheet(),'현재 시트를 가져오지 못했습니다.');
+    });
+    deps.document.getElementById('sr-character-sheet-refresh')?.addEventListener('click',()=>deps.runUiTask(importCurrentSheet(),'현재 시트를 가져오지 못했습니다.'));
     deps.document.getElementById('sr-debug-open')?.addEventListener('click', () => {
         const judgment = deps.record()?.lastJudgment;
         if (!judgment) { deps.window.toastr?.warning?.('검토할 판정이 없습니다.', '씬판독기'); return; }
@@ -938,21 +987,29 @@ function bindForm() {
         await deps.clearInjection(); await deps.persistChat(); deps.renderAll();
     })(), '인물 판정 설정을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-user-impersonation')?.addEventListener('change', event => deps.runUiTask(savePreference('allowUserImpersonation', event.target.checked), '사칭 허용 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-character-volume')?.addEventListener('change', event => deps.runUiTask(savePreference('characterVolume', event.target.value), '인물 주입량 설정을 저장하지 못했습니다.'));
     for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) deps.document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));
     deps.document.getElementById('sr-character-lore-options')?.addEventListener('change',()=>{
         const checked=new Set([...deps.document.querySelectorAll('#sr-character-lore-options input:checked')].map(input=>input.value));
-        editorLore=availableEditorLore.filter(item=>checked.has(item.book));
-        initialEditorLoreBooks=checked;
-        renderEditorLore();
+        editorLore=availableEditorLore.filter(item=>checked.has(loreKey(item)));
+        initialEditorLoreKeys=checked;
+        deps.document.getElementById('sr-character-lore-count').textContent=`${checked.size}개 엔트리 선택됨`;
+        for(const group of deps.document.querySelectorAll('#sr-character-lore-options .sr-character-lore-book')) {
+            const boxes=[...group.querySelectorAll('input')];
+            group.querySelector('summary').textContent=`${availableEditorLore.find(item=>loreKey(item)===boxes[0]?.value)?.book || ''} · ${boxes.filter(box=>box.checked).length}/${boxes.length}개 선택`;
+        }
     });
     deps.document.querySelectorAll('[data-record-kind]').forEach(button=>button.addEventListener('click',()=>{
         deps.document.getElementById('sr-character-versions').dataset.kind=button.dataset.recordKind;
         deps.renderCharacterStore();
-        deps.document.getElementById('sr-character-record-preview').hidden=true;
-        deps.document.getElementById('sr-character-version-preview').hidden=true;
+        deps.document.getElementById('sr-character-preview').hidden=true;
     }));
-    deps.document.getElementById('sr-character-record-close')?.addEventListener('click',()=>{deps.document.getElementById('sr-character-record-preview').hidden=true;});
-    deps.document.getElementById('sr-character-version-preview-close')?.addEventListener('click',()=>{deps.document.getElementById('sr-character-version-preview').hidden=true;});
+    deps.document.getElementById('sr-character-record-close')?.addEventListener('click',()=>{deps.document.getElementById('sr-character-preview').hidden=true;});
+    for(const [tab,panel,other] of [['source','sr-character-preview-source','sr-character-analysis-result'],['record','sr-character-analysis-result','sr-character-preview-source']])deps.document.getElementById(`sr-character-preview-${tab}-tab`)?.addEventListener('click',()=>{
+        deps.document.getElementById(panel).hidden=false;deps.document.getElementById(other).hidden=true;
+        deps.document.getElementById('sr-character-preview-source-tab').classList.toggle('active',tab==='source');
+        deps.document.getElementById('sr-character-preview-record-tab').classList.toggle('active',tab==='record');
+    });
     deps.document.getElementById('sr-character-editor-cancel')?.addEventListener('click', closeCharacterEditor);
     deps.document.getElementById('sr-character-lore-refresh')?.addEventListener('click',()=>deps.runUiTask(beginLoreRefresh().catch(error=>{captureCharacterError(error,'lorebook');throw error;}),'연결 로어북을 읽지 못했습니다.'));
     deps.document.getElementById('sr-character-error-copy')?.addEventListener('click',()=>deps.runUiTask((async()=>{
@@ -966,9 +1023,7 @@ function bindForm() {
     deps.dialog.addEventListener('click', (event) => {
         const view = event.target.closest('[data-character-view-id]');
         if (view) {
-            deps.characterAnalysisSelection = { kind: view.dataset.characterViewKind, id: view.dataset.characterViewId };
-            deps.renderCharacterAnalysisBrowser();
-            deps.document.getElementById('sr-character-record-preview').hidden=false;
+            showSavedPerson(view.dataset.characterViewKind,view.dataset.characterViewId);
             return;
         }
         const backupButton = event.target.closest('[data-backup-action]');

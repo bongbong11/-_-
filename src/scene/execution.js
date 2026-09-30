@@ -385,7 +385,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
-        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true,
+        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true, volume:prefs.characterVolume,
     }) : [];
     if (deps.characterStore.characters.length === 1) {
         const primary = liveCharacters.find((person) => person.id === deps.characterStore.characters[0].id);
@@ -539,7 +539,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             .filter((candidate) => candidate && candidate.id !== 'direct' && !finalCandidateIds.has(candidate.id))
             .map((candidate) => ({ id: candidate.id, kind: candidate.kind, label: candidate.label, reason: '확률 추첨 미통과 또는 실행 프로필 준비 실패' }));
         const excludedById = new Map([...provisionalPlan.excluded, ...failedPrepared, ...finalPlan.excluded].map((item) => [item.id, item]));
-        for (const selectedCandidate of [finalPlan.primary, finalPlan.secondary]) if (selectedCandidate) excludedById.delete(selectedCandidate.id);
+        for (const selectedCandidate of [finalPlan.primary, finalPlan.secondary,...(finalPlan.overlays||[])]) if (selectedCandidate) excludedById.delete(selectedCandidate.id);
         finalPlan.excluded = [...excludedById.values()];
         rec.deferredRoutes = deps.nextDeferredRoutes(rec.deferredRoutes, provisionalPlan);
         decisions.action_plan = deps.actionPlanSummary(finalPlan);
@@ -563,8 +563,21 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             decisions.npc_autonomy = details.npc_autonomy.effective;
         }
         const resolvedCharacters = deps.characterStore.enabled ? deps.resolveLiveCharacterPlan(liveCharacters, decisions) : [];
-        const characterExecution = deps.buildCharacterInjection(resolvedCharacters, { conflictActive: ['tension', 'active'].includes(decisions.conflict_state) || decisions.fight_sustain === 'yes' });
+        const characterExecution = deps.buildCharacterInjection(resolvedCharacters, { conflictActive: ['tension', 'active'].includes(decisions.conflict_state) || decisions.fight_sustain === 'yes', volume:prefs.characterVolume });
         const characterTrace = characterExecution.traces;
+        for(const item of characterTrace) {
+            if(item.profileIds.length || !item.candidateCount)continue;
+            const prefix=`character_${item.index}_`;
+            const presenceDetail=details[`${prefix}presence`];
+            if(item.presence!=='active') {
+                item.zeroReason=presenceDetail?.selected==='active' ? `참여 판정 후처리: ${presenceDetail.rule || item.presence}` : `참여 판정: ${item.presence}`;
+                continue;
+            }
+            const slots=Object.keys(questions).filter(key=>key.startsWith(`${prefix}profile_slot_`));
+            const invalid=slots.filter(key=>!Object.hasOwn(questions[key].criteria,data.answers?.[key]?.choice));
+            const selected=slots.filter(key=>data.answers?.[key]?.choice && data.answers[key].choice!=='none' && Object.hasOwn(questions[key].criteria,data.answers[key].choice));
+            item.zeroReason=invalid.length ? `Jev 선택 응답 누락·형식 오류 ${invalid.length}개` : selected.length ? 'Jev 선택이 판정 기준 또는 코드 후처리에서 제외됨' : 'Jev가 관련 기록을 선택하지 않음';
+        }
         const characterBlock = characterExecution.text;
         const continuityBlock = deps.settings.continuityEnabled
             ? deps.buildContinuityInjection(deps.selectContinuityContext(deps.continuityView(rec), transcript, { opportunity: rec.sceneOpportunity }), chosenContinuity)
@@ -577,7 +590,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
         const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities }]));
-        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
+        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, characterInjectionChars:characterExecution.charCount, characterInjectionLimit:characterExecution.charLimit, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
             rec.pendingPlan = {

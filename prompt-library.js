@@ -597,7 +597,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     }[preferences.relationshipPace] || 'Allow a proportionate relationship change when the current exchange contains concrete reciprocal causes.';
     questions.relationship_pacing = {
         type: 'choice',
-        instructions: `Choose the direction and maximum amount of relationship movement permitted in the NEXT response. This is a plan, not proof that the movement has occurred. Base it on actual RP conduct, the established relationship, relevant counterevidence, and the selected relationship pace. The fixed relationship direction remains active. Do not create love, trust, consent, reconciliation, or rupture merely to satisfy a pace setting. Commit a change to stored state only after the following CHARACTER output actually enacts it and verification confirms it. ${relationshipDirectionRule} ${relationshipRule}`,
+        instructions: `Choose the direction and maximum amount of relationship movement permitted in the NEXT response. This is a plan, not proof that the movement has occurred. Base it on actual RP conduct, the established relationship, relevant counterevidence, and the selected relationship pace. When an event or NPC also moves, any relationship change must arise within that same interaction, not from a second invented exchange. The fixed relationship direction remains active. Do not create love, trust, consent, reconciliation, or rupture merely to satisfy a pace setting. Commit a change to stored state only after the following CHARACTER output actually enacts it and verification confirms it. ${relationshipDirectionRule} ${relationshipRule}`,
         criteria: {
             hold: 'Keep the current relationship state; this exchange adds no sufficient cause for change at the selected pace.',
             closer_incremental: 'One small increase in openness, trust, intimacy, cooperation, or favorable regard is supported.',
@@ -608,7 +608,7 @@ export function buildQuestions({ preferences, hasVillain, hasNpc, hasEvent = fal
     };
     questions.relationship_beat = {
         type: 'choice',
-        instructions: 'Choose at most one concrete relationship or romance beat for the next response. This is an expression route, not permission to invent a feeling. It must agree with the fixed relationship direction, the selected pace, established characterization, and actual evidence. Prefer none over a repetitive or unsupported beat.',
+        instructions: 'Choose at most one concrete relationship or romance beat for the next response. This is an expression route, not permission to invent a feeling. It may color an ongoing event or NPC exchange only when it belongs to that same interaction; do not add a separate scene. It must agree with the fixed relationship direction, the selected pace, established characterization, and actual evidence. Prefer none over a repetitive or unsupported beat.',
         criteria: {
             none: 'No distinct relationship beat is supported or the active interaction should continue without adding one.',
             avoidance: 'An active relationship question, feeling, demand, or decision can be meaningfully avoided, delayed, concealed, or deflected.',
@@ -825,7 +825,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     if (castNames.size && (['create','replace','reuse'].includes(decisions.npc_route) || settings.npcToUser || decisions.npc_autonomy === 'yes')) blocks.push('<NPC_CAST_SCOPE>Registered Sheet Cast retain their established identity, knowledge, and relationships even when their optional analysis is off or selects no rule. Generated Cast defaults and generic NPC execution apply only to other people; do not recreate an existing person.</NPC_CAST_SCOPE>');
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
-Continue the active exchange through one concrete, character-consistent response, decision, refusal, action, or immediate consequence. Do not recap the input, stop at intention or warning when a supported step can be executed, or end on a question merely to hand back the turn. Leave {{user}}'s response and any outcome that depends on it open.
+Within the selected scene or event, answer the current interaction through a concrete, character-consistent response, decision, refusal, action, or immediate consequence. Do not recap the input, stop at intention when a supported step can be executed, or end on a question merely to hand back the turn. Do not add a separate event merely to answer. Leave {{user}}'s response and any outcome that depends on it open.
 </DIRECT_SCENE_EXECUTION>`);
 
     const relationshipMoves = {

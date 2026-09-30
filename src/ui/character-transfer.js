@@ -26,7 +26,7 @@ export function renderRecordVersions(document, store, esc) {
     root.innerHTML=rows.join('')||'<p class="sr-help">저장된 인물이 없습니다.</p>';
 }
 
-export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJudgment, downloadJson, ensureLoreLoaded, captureCharacterError, showVersionEditor}) {
+export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJudgment, downloadJson, ensureLoreLoaded, captureCharacterError, showVersionEditor, showVersionPreview}) {
     const el=id=>deps.document.getElementById(id);
     const status=text=>{if(el('sr-character-import-status'))el('sr-character-import-status').textContent=text;};
     let busy=false;
@@ -105,11 +105,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
             const output=bankOutput(version.bank);
             if(action==='copy'){await deps.copyText(JSON.stringify(output,null,2));status('판독시트를 복사했습니다.');}
             if(action==='download')downloadJson(`${group.name.replace(/[<>:"/\\|?*]/g,'_')}.json`,output);
-            if(action==='view'){
-                el('sr-character-version-preview').hidden=false;
-                el('sr-character-version-preview-title').textContent=`${group.name} · ${version.entityName} · ${new Date(version.savedAt).toLocaleString('ko-KR')}`;
-                el('sr-character-version-preview-text').textContent=JSON.stringify(output,null,2);
-            }
+            if(action==='view')showVersionPreview(group,version);
             if(action==='apply'){const result=applyRecordVersion(deps.characterStore,groupId,versionId);await persist(result.store,result.entry);status('선택한 버전을 적용했습니다. 다음 판독부터 사용합니다.');deps.window.toastr?.success?.('선택한 날짜의 판독시트를 적용했습니다.','씬판독기');}
             if(action==='edit'){
                 const entry=entriesForVersion(deps.characterStore,version,group.kind);
@@ -118,7 +114,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
             if(action==='delete'){
                 if(!deps.window.confirm('이 날짜의 판독시트를 삭제할까요? 적용 중인 버전이면 이번 인물의 기록 적용도 해제됩니다.'))return;
                 await persist(deleteRecordVersion(deps.characterStore,groupId,versionId));
-                el('sr-character-version-preview').hidden=true;status('해당 버전을 삭제했습니다.');
+                el('sr-character-preview').hidden=true;status('해당 버전을 삭제했습니다.');
                 deps.window.toastr?.success?.('해당 날짜의 판독시트를 삭제했습니다.','씬판독기');
             }
         });

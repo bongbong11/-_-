@@ -77,6 +77,7 @@ const CHAT_DEFAULTS = {
     negativePriority: false,
     settingsContract: 3,
     progressIntensity: 1,
+    characterVolume: 'generous',
     developmentStyle: 'balanced',
     progressionMode: 'natural',
     judgmentStyle: 'balanced',
@@ -303,6 +304,8 @@ function record(create = false) {
         const migratedDevelopment = normalizeDevelopmentPreferences(saved);
         value.preferences = normalizeDevelopmentPreferences({...value.preferences, developmentStyle:migratedDevelopment.developmentStyle});
         value.preferences.advancedStyle = validValue(value.preferences.advancedStyle, ADVANCED_STYLES, CHAT_DEFAULTS.advancedStyle);
+        value.preferences.characterVolume = ['basic','generous','detailed'].includes(value.preferences.characterVolume) ? value.preferences.characterVolume : CHAT_DEFAULTS.characterVolume;
+        if (!Object.hasOwn(saved,'characterVolume')) { value.lastJudgment=null; if (!value.pendingPlan?.outputText) value.pendingPlan=null; }
         for (const key of ['relationshipPace', 'resolutionPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
         for (const key of ['injectionMode', 'worldInjectionMode']) value.preferences[key] = ['depth', 'macro'].includes(value.preferences[key]) ? value.preferences[key] : CHAT_DEFAULTS[key];
         value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;

@@ -12,7 +12,7 @@ import { buildInjection } from '../../prompt-library.js';
 import { suggestNpcAliases } from '../../src/characters/npc-sheet.js';
 import { debugReportText } from '../../src/ui/debug-report.js';
 
-assert.match(CHARACTER_LIVE_SYSTEM, /Choose up to four distinct rule IDs/);
+assert.match(CHARACTER_LIVE_SYSTEM, /up to the number of available slots/);
 assert.ok(ACCESS_CHOICES.inferred);
 
 const source = 'Name: Wade\nRole: Family patriarch.\nHe controls his son on family decisions.';
@@ -143,8 +143,8 @@ assert.doesNotMatch(debugText,/me@example.com|010-1234-5678|sk-abcdefghijk12345|
 const longPeople = Array.from({length:4},(_,index)=>({index,id:`p${index}`,name:`Person${index}`,kind:'npc',presence:'active',sourceVisibleToMain:true,
     core:{excerpts:[]},coreEnglish:'',antagonist:false,denied:[],profileIds:[`p${index}a`,`p${index}b`],contextIds:[],contextItems:[],direction:'none',
     profileItems:[{id:`p${index}a`,rule:'A'.repeat(350)},{id:`p${index}b`,rule:'B'.repeat(350)}]}));
-const bounded = buildCharacterInjection(longPeople);
-assert.ok(bounded.text.length<=2200);
+const bounded = buildCharacterInjection(longPeople,{volume:'basic'});
+assert.ok(bounded.text.length<=3000);
 assert.ok(bounded.traces.some(item=>item.omittedRuleIds.length>0));
 assert.ok(!bounded.text.includes('B'.repeat(175)) || bounded.text.includes('B'.repeat(350)), 'long rules are included or omitted whole');
 

@@ -66,7 +66,7 @@ const entry={id:'lucas',kind:'npc',npcRole:'mixed',name:'Lucas',source:'Lucas su
 const atom={type:'knowledge',target:'Anna',when:['before confirmation'],rule:'Lucas suspects Anna is hiding the password.',modality:'possibility',basis:'explicit',source_ids:['S001'],knowledge_domain:'secret',knowledge_state:'suspects'};
 entry.recordBank=createRecordBank({entity_type:'npc',entity_name:'Lucas',records:Array.from({length:35},(_,i)=>({...atom,rule:i===0?atom.rule:`Lucas suspects an unrelated person about case ${i}.`}))},entry,'test');
 const plan=buildLiveCharacterPlan([entry],{canonicalOnly:true,transcript:'Lucas asks Anna about the password.',selected:[{is_user:true,name:'Anna',mes:'I may know it.'}],persona:{source:'Secret private user thoughts'}});
-assert.ok(plan[0].profileCandidates.length<=12);assert.ok(plan[0].profileCandidates.length<35);assert.equal(plan[0].sourceExcerpt,'');assert.equal(plan[0].personaReference,'');
+assert.ok(plan[0].profileCandidates.length<=20);assert.ok(plan[0].profileCandidates.length<35);assert.equal(plan[0].sourceExcerpt,'');assert.equal(plan[0].personaReference,'');
 const questions=buildCharacterTurnQuestions(plan);assert.ok(!questions.character_0_response_direction);assert.ok(!questions.character_0_response_basis);
 const id=plan[0].profileCandidates.find(r=>r.rule===atom.rule).id, contextId=plan[0].contextCandidates[0].id;
 const resolved=resolveLiveCharacterPlan(plan,{character_0_presence:'active',character_0_profile_slot_1:id,character_0_profile_slot_2:id,character_0_context_slot_1:contextId,character_0_context_access_0:'none'});

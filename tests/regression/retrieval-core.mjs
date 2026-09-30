@@ -12,6 +12,7 @@ const output={entity_type:'npc',entity_name:'Lucas',records:[record]};
 const bank=createRecordBank(output,entry,'analysis');
 const saved={...entry,recordBank:bank};
 assert.deepEqual(currentRecords(saved),[record]);
+assert.equal(recordBankIsCurrent({...saved,recordBank:{...bank,coreFingerprint:'188587338d3f4cad54d8e6f217418d13b437b18b0ddaaa3ca6d60ee724685783'}}),true,'NPC guidance edits preserve existing saved banks');
 assert.deepEqual(currentProfileItems(saved),[],'records must not enter legacy Jev');
 assert.equal(buildLiveCharacterPlan([saved])[0].profileCandidates.length,1);
 assert.equal(normalizeCharacterStore({npcs:[saved]}).npcs[0].recordBank.records[0].knowledge_state,'suspects');

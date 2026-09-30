@@ -38,7 +38,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.21.2');
+assert.equal(manifest.version, '0.22.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -261,9 +261,16 @@ const eventFirstPlan = selectActionPlan({
     hasNpcProfile: true,
 });
 assert.equal(eventFirstPlan.primary.kind, 'event');
-assert.equal(eventFirstPlan.secondary.kind, 'relationship');
-assert.equal(eventFirstPlan.allowedCandidateIds.length, 2, 'one primary and at most one secondary action survive');
-assert.ok(eventFirstPlan.excluded.some((item) => item.kind === 'npc' && item.reason), 'excluded executable candidates explain why they lost');
+assert.equal(eventFirstPlan.secondary.kind, 'npc');
+assert.ok(eventFirstPlan.overlays.some(item=>item.kind==='relationship'),'relationship expression can accompany the same event and NPC exchange');
+assert.ok(eventFirstPlan.overlays.some(item=>item.kind==='direct'),'answering the user stays inside the event rather than being excluded');
+assert.ok(!eventFirstPlan.excluded.some((item) => item.kind === 'direct' || item.kind === 'relationship'));
+const combinedDecisions={primary_focus:'event',event_state:'active',event_route:'continue',progression_move:'advance',npc_route:'reuse',npc_role:'witness',npc_weight:'supporting',relationship_pacing:'closer_incremental',relationship_beat:'vulnerability'};
+const combinedRecord={preferences:actionSettings,progressionState:{turnsSinceMeaningfulProgress:0},eventProfile:{},npcProfile:{}};
+coordinateActionBudget(combinedRecord,{},combinedDecisions,combinedRecord);
+assert.equal(combinedDecisions.direct_execution,'yes','current input receives an answer inside the event');
+assert.equal(combinedDecisions.relationship_pacing,'closer_incremental','supported relationship movement remains available in the same interaction');
+assert.equal(combinedDecisions.npc_route,'reuse','existing NPC can act within the event');
 const failedNewEventPlan = selectActionPlan({
     decisions: { primary_focus: 'new_event', event_route: 'waiting', progression_move: 'hold', relationship_pacing: 'closer_incremental', relationship_beat: 'vulnerability' },
     settings: actionSettings,

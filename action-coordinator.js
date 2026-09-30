@@ -201,10 +201,18 @@ export function selectActionPlan({
         .sort((a, b) => primaryFallbackScore(b, decisions, settings) - primaryFallbackScore(a, decisions, settings))[0]
         || candidates.find((candidate) => candidate.id === 'direct');
     const compatible = candidates
+        .filter((candidate) => candidate.kind!=='relationship' || !['event','npc','villain','conflict'].includes(primary?.kind))
         .filter((candidate) => secondaryCompatible(primary, candidate, decisions, settings))
         .sort((a, b) => secondaryScore(b, decisions, settings) - secondaryScore(a, decisions, settings));
     const secondary = compatible[0] || null;
-    const kept = new Set([primary?.id, secondary?.id].filter(Boolean));
+    // The direct response is part of the selected scene, not an extra plot beat.
+    // A supported relationship expression can color that same event/NPC exchange
+    // without consuming the single independent secondary route.
+    const relationship=candidates.find(candidate=>candidate.kind==='relationship');
+    const sharedInteraction=['event','npc','villain','conflict'].includes(primary?.kind)
+        || ['event','npc','villain','conflict'].includes(secondary?.kind);
+    const overlays=[candidates.find(candidate=>candidate.kind==='direct'),...(relationship && sharedInteraction?[relationship]:[])].filter(candidate=>candidate && candidate.id!==primary?.id && candidate.id!==secondary?.id);
+    const kept = new Set([primary?.id, secondary?.id,...overlays.map(candidate=>candidate.id)].filter(Boolean));
     const excluded = candidates.filter((candidate) => !kept.has(candidate.id)).map((candidate) => ({
         id: candidate.id,
         kind: candidate.kind,
@@ -212,15 +220,18 @@ export function selectActionPlan({
         reason: candidate.transition && primary?.id !== candidate.id
             ? '장면 전환은 보조 진행으로 사용하지 않음'
             : secondaryCompatible(primary, candidate, decisions, settings)
-                ? '더 높은 우선순위의 보조 진행이 선택됨'
-                : '주요 진행과 독립적이거나 action budget을 초과함',
+                ? '다른 진행 우선'
+                : candidate.kind==='event' && candidate.isNew ? '별도 사건 과다'
+                : candidate.external ? '조건 미충족'
+                : '현재 장면과 별도 진행',
     }));
     return {
         primary,
         secondary,
+        overlays,
         candidates,
         excluded,
-        allowedCandidateIds: [primary?.id, secondary?.id].filter(Boolean),
+        allowedCandidateIds: [primary?.id, secondary?.id,...overlays.map(candidate=>candidate.id)].filter(Boolean),
     };
 }
 
@@ -228,13 +239,14 @@ export function actionPlanSummary(plan) {
     return {
         primary: plan?.primary ? { id: plan.primary.id, kind: plan.primary.kind, focus: plan.primary.focus, label: plan.primary.label } : null,
         secondary: plan?.secondary ? { id: plan.secondary.id, kind: plan.secondary.kind, focus: plan.secondary.focus, label: plan.secondary.label } : null,
+        overlays: Array.isArray(plan?.overlays)?plan.overlays.map(item=>({id:item.id,kind:item.kind,label:item.label})):[],
         excluded: Array.isArray(plan?.excluded) ? plan.excluded.map((item) => ({ ...item })) : [],
     };
 }
 
 export function nextDeferredRoutes(previous = {}, plan = {}) {
     const eligible = new Set((plan.candidates || []).map((candidate) => candidate.id));
-    const selected = new Set([plan.primary?.id, plan.secondary?.id].filter(Boolean));
+    const selected = new Set([plan.primary?.id, plan.secondary?.id,...(plan.overlays||[]).map(item=>item.id)].filter(Boolean));
     return Object.fromEntries(['event', 'advanced_event', 'advanced_scene', 'npc', 'villain']
         .filter((id) => eligible.has(id) && !selected.has(id))
         .map((id) => [id, Math.min(3, (Number(previous[id]) || 0) + 1)]));

@@ -43,7 +43,7 @@ function renderCharacterTurnResults() {
     const judgment = record()?.lastJudgment;
     const trace = judgment?.characterTrace || [];
     if (!trace.length) { root.innerHTML = '<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
-    root.innerHTML = trace.map((person) => {
+    root.innerHTML = `<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
         const prefix = 'character_' + person.index + '_';
         const presence = judgment.details?.[prefix + 'presence'];
         const direction = judgment.details?.[prefix + 'response_direction'];
@@ -54,7 +54,8 @@ function renderCharacterTurnResults() {
         const profileNames = (person.injectedRuleIds || []).map((id) => (person.recordMode ? person.recordSelections || [] : currentProfileItems(entry)).find((item) => item.id === id)?.rule).filter(Boolean);
         const rows = [
             ['이번 역할', characterTurnLabel('presence',person.presence)],
-            ...(person.recordMode ? [['판독 기록 상태', ({ current:'새 인물 기록 사용', stale:'기록이 오래됨 · 다시 추출 필요', legacy:'이전 방식만 저장됨 · 새 기록 추출 필요', missing:'저장된 인물 기록 없음' })[person.recordStatus] || '기록 상태 확인 필요'], ['Jev에 전달한 기록', `${person.candidateCount || 0}개 후보 · 선택 ${person.profileIds.length}개`]] : []),
+            ...(person.recordMode ? [['판독 기록 상태', ({ current:'새 인물 기록 사용', stale:'기록이 오래됨 · 다시 추출 필요', legacy:'이전 방식만 저장됨 · 새 기록 추출 필요', missing:'저장된 인물 기록 없음' })[person.recordStatus] || '기록 상태 확인 필요'], ['저장 → 후보 → Jev 선택 → 실제 주입', `${person.storedRecordCount || 0} → ${person.candidateCount || 0} → ${person.profileIds.length} → ${(person.injectedRuleIds || []).length}개`],['인물별 주입 길이',`${person.blockChars || 0}자`],...(person.zeroReason?[['선택 0개 이유',person.zeroReason]]:[])] : []),
+            ...((person.prefilterStats?.excludedByChars || person.prefilterStats?.excludedByLimit) ? [['후보에서 제외',`개수 한도 ${person.prefilterStats.excludedByLimit || 0}개 · 후보 길이 한도 ${person.prefilterStats.excludedByChars || 0}개`]]:[]),
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
             ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
@@ -120,6 +121,7 @@ function renderJudgment() {
     summary.innerHTML = [
         ['중심 전개', actionPlan.primary?.label || resultLabel('primary_focus', d.primary_focus)],
         ['함께 넣는 변화', actionPlan.secondary?.label || '없음'],
+        ['같은 장면 안의 반응', (actionPlan.overlays || []).map(item=>item.label).join(' · ') || '중심 전개에 포함'],
         ['이번에 넣지 않은 내용', excludedRoutes || '없음'],
         ['관계', `${resultLabel('relationship_pacing', d.relationship_pacing)}${d.relationship_beat && d.relationship_beat !== 'none' ? ` · ${resultLabel('relationship_beat', d.relationship_beat)}` : ''}`],
         ['사건', `${resultLabel('progression_move', d.progression_move)} · ${resultLabel('resolution_pacing', d.resolution_pacing)} · ${resultLabel('event_valence', d.event_valence)}`],
@@ -195,6 +197,7 @@ function renderCharacterStore() {
 }
 
 function renderCharacterAnalysisBrowser() {
+    if (document.getElementById('sr-character-preview')?.hidden === false) return;
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
     const list = document.getElementById('sr-character-analysis-list');
     const result = document.getElementById('sr-character-analysis-result');
@@ -223,7 +226,7 @@ function renderCharacterAnalysisBrowser() {
                 }).join('')+'</details></article>').join('')+'</details>';
         }).join('');
         const reference=String(bank.intimacy_reference?.text||'').trim();
-        result.innerHTML='<div class="sr-character-analysis-head"><strong>'+esc(selected.name)+'</strong></div><p class="sr-help">'+esc(profileStatus(selected))+'</p><p class="sr-help">이번 장면에 필요한 기록을 최대 네 개 선택합니다. 필요 없으면 선택하지 않습니다.</p>'+(reference?'<details class="sr-record-group"><summary>추가 인물 참고 정보</summary><p>'+esc(reference)+'</p></details>':'')+ (groups || '<p class="sr-help">'+(recordBankIsCurrent(selected)?'저장된 기록 0개':'원문 변경으로 이전 기록은 적용되지 않습니다. 다시 추출하세요.')+'</p>')+'<details class="sr-trace"><summary>저장·검증 정보</summary><pre>'+esc(JSON.stringify({savedAt:bank.analyzedAt,apiVersion:bank.apiVersion,recordVersion:bank.recordVersion,compilerVersion:bank.compilerVersion,importLog:bank.import_log},null,2))+'</pre></details>';
+        result.innerHTML='<div class="sr-character-analysis-head"><strong>'+esc(selected.name)+'</strong></div><p class="sr-help">'+esc(profileStatus(selected))+'</p><p class="sr-help">이번 장면에 필요한 기록을 선택합니다. 필요 없으면 선택하지 않습니다.</p>'+(reference?'<details class="sr-record-group"><summary>추가 인물 참고 정보</summary><p>'+esc(reference)+'</p></details>':'')+ (groups || '<p class="sr-help">'+(recordBankIsCurrent(selected)?'저장된 기록 0개':'원문 변경으로 이전 기록은 적용되지 않습니다. 다시 추출하세요.')+'</p>')+'<details class="sr-trace"><summary>저장·검증 정보</summary><pre>'+esc(JSON.stringify({savedAt:bank.analyzedAt,apiVersion:bank.apiVersion,recordVersion:bank.recordVersion,compilerVersion:bank.compilerVersion,importLog:bank.import_log},null,2))+'</pre></details>';
         return;
     }
     const items = currentProfileItems(selected);

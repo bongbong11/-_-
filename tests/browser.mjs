@@ -24,8 +24,8 @@ let gateScenario=null;
 let worldChoice='no';
 const host=`<!doctype html><html><meta charset="utf-8"><style>:root{--SmartThemeBodyColor:#eee;--SmartThemeBlurTintColor:#25252b;--SmartThemeBorderColor:#666;--SmartThemeQuoteColor:#9cbfff}body{margin:0;background:#202025;color:var(--SmartThemeBodyColor);font:16px Arial}button,input,select,textarea{box-sizing:border-box;font:inherit}button{cursor:pointer}select,input,textarea{color:inherit;background:var(--SmartThemeBlurTintColor)}.menu_button{border:1px solid var(--SmartThemeBorderColor);border-radius:5px;padding:7px}.text_pole{width:100%;border:1px solid #666;padding:6px}.checkbox_label{display:flex;align-items:center;gap:6px}.checkbox_label input{width:auto}</style><link rel="stylesheet" href="${prefix}style.css"><div id="extensions_settings"></div><div id="extensionsMenu"></div><div id="leftSendForm"><button id="extensionsMenuButton">wand</button></div><textarea id="send_textarea"></textarea><script>
 const listeners=new Map(), prompts={},macros={};
-window.mock={chat:[],prompts,macros,errors:[],worldBooks:{'Hunter Lore':{entries:{1:{uid:1,key:['door'],content:'The council meets tomorrow.'},2:{uid:2,key:['unrelated'],content:'Not relevant.'}}},'Hunter Extra':{entries:{3:{uid:3,constant:true,content:'Hunter owns the house.'}}}},async emit(name,...args){for(const fn of listeners.get(name)||[])await fn(...args)}};
-window.ctx={characterId:1,characters:[null,{avatar:'Hunter.png',data:{description:'Sawyer Valentine is Hunter’s colleague.',personality:'Hunter speaks carefully under pressure.',extensions:{world:'Hunter Lore'}}}],chatId:'test-room',name1:'User',name2:'Hunter',chat:mock.chat,extensionPrompts:prompts,saveMetadata:async()=>{},macros:{register(name,value){macros[name]=value.handler},category:{MISC:'misc'}}};
+window.mock={chat:[],prompts,macros,errors:[],worldBooks:{'Hunter Lore':{entries:{1:{uid:1,key:['door'],content:'The council meets tomorrow.'},2:{uid:2,key:['unrelated'],content:'Not relevant.'}}},'Hunter Extra':{entries:{3:{uid:3,constant:true,content:'Hunter owns the house.'}}},'Persona Lore':{entries:{4:{uid:4,key:['friend'],content:'Rosa is a friend of the user persona.'}}},'Persona Specific':{entries:{5:{uid:5,key:['neighbor'],content:'Rosa knows the user persona as a neighbor.'}}}},async emit(name,...args){for(const fn of listeners.get(name)||[])await fn(...args)}};
+window.ctx={characterId:1,characters:[null,{avatar:'Hunter.png',data:{description:'Sawyer Valentine is Hunter’s colleague.',personality:'Hunter speaks carefully under pressure.',extensions:{world:'Hunter Lore'}}}],powerUserSettings:{persona_description_lorebook:'Persona Lore',persona_descriptions:{'User.png':{lorebook:'Persona Specific'}}},chatId:'test-room',name1:'User',name2:'Hunter',chat:mock.chat,extensionPrompts:prompts,saveMetadata:async()=>{},macros:{register(name,value){macros[name]=value.handler},category:{MISC:'misc'}}};
 window.SillyTavern={getContext:()=>ctx};window.jQuery=fn=>fn();
 window.toastr=Object.fromEntries(['info','success','error','warning'].map(name=>[name,(message)=>{if(name==='error')mock.errors.push(message);let container=document.getElementById('toast-container');if(!container){container=document.createElement('div');container.id='toast-container';document.body.append(container)}const item={find(){return {text(){}}},toggleClass(){},remove(){},fadeOut(_ms,callback){callback?.call(item)}};return item}]));
 window.eventSource={on(name,fn){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn)}};
@@ -36,6 +36,7 @@ const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}}`);return;}
     if(req.url==='/scripts/extensions.js'){res.setHeader('Content-Type','application/javascript');res.end('export const extension_settings={};');return;}
     if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){if(window.mock.loreReady)await window.mock.loreReady;return window.mock.worldBooks[name]||null}");return;}
+    if(req.url==='/scripts/personas.js'){res.setHeader('Content-Type','application/javascript');res.end("export const user_avatar='User.png'");return;}
     if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('You are a source-grounded character retrieval compiler.')) { const name=prompt.split('ENTITY_NAME: ')[1].split('\\n')[0]; return {content:JSON.stringify({entity_type:'npc',entity_name:name,records:[{type:'knowledge',target:'',when:['office procedure'],rule:name+' knows office procedures.',modality:'fact',basis:'explicit',source_ids:['S001'],knowledge_domain:'professional',knowledge_state:'knows'},{type:'relationship',target:'Hunter',when:['interests change'],rule:name+' may help or oppose Hunter when her own interests change.',modality:'conditional',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]})}; } if(prompt.startsWith('Read the supplied world prompt as source data.'))return {content:JSON.stringify({short_description:'A quiet garden world with ordinary physical limits.'})};if(prompt.startsWith('You are compiling a roleplay world prompt'))return {content:JSON.stringify({format:'scene-reader-world',version:1,name:'Moonlit Garden',short_description:'A garden whose gate responds to moonlight.',fixed_rules:'The garden remains an ordinary place except for its moonlit gate.',franchise:false,calendar_topics:[],records:[{id:'W001',category:'mechanism',when:'When moonlight reaches the gate.',keywords:['moonlight','gate'],rule:'Moonlight opens the garden gate.',source_quote:'Moonlight opens the garden gate.'}]})};if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
     if(req.url.startsWith('/api/plugins/scene-reader-jev/')){
         let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):{};requests.push({url:req.url,body});
@@ -103,15 +104,22 @@ try{
     await page.setViewportSize({width:390,height:850});await page.locator('[data-sr-tab="characters"]').click();
     await page.locator('#sr-character-new').click();
     await page.waitForFunction(()=>document.getElementById('sr-character-lore-status').textContent.includes('연결 로어북'));
-    assert.equal(await page.locator('#sr-character-lore-options input').count(),2,'connected character lorebooks are available');
+    assert.equal(await page.locator('#sr-character-lore-options input').count(),3,'connected character lorebook entries are available');
     await page.locator('#sr-character-editor-cancel').click();
+    assert.equal(await page.locator('#sr-character-volume').inputValue(),'generous','new chats begin with the generous character budget');
+    for(const choice of ['basic','detailed','generous']){
+        await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-character-volume').selectOption(choice)]);
+        assert.equal(store.chat.preferences.characterVolume,choice,'chat-specific volume persists');
+    }
     await page.locator('[data-record-kind="npc"]').click();
     await page.locator('[data-character-view-id="wade"]').click();
     await page.locator('#sr-character-analysis-result').getByText('Wade tends to control his son on family matters.').waitFor();
     await page.locator('#sr-character-record-close').click();
     await page.locator('#sr-npc-sheet-new').click();
     assert.equal(await page.locator('#sr-character-npc-role').inputValue(),'mixed');
+    await page.waitForFunction(()=>document.querySelectorAll('#sr-character-lore-options input').length===5);
     assert.equal(await page.locator('#sr-character-lore-options input:checked').count(),0,'NPC lorebooks start unselected');
+    assert.equal(await page.locator('#sr-character-lore-options input').count(),5,'NPC lists character and persona lorebook entries');
     assert.match(await page.locator('#sr-character-npc-lore-note').textContent(),/NPC 한 명/);
     await page.locator('#sr-character-npc-template').click();
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/NPC 시트/);
@@ -120,10 +128,15 @@ try{
     await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('복사했습니다'));
     assert.doesNotMatch(await page.evaluate(()=>navigator.clipboard.readText()),/The council meets tomorrow/);
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/Completed NPC sheet supplied alongside/);
-    await page.locator('.sr-character-lore-picker summary').click();
+    await page.locator('.sr-character-lore-picker > summary').click();
+    await page.locator('.sr-character-lore-book').first().locator('summary').click();
     await page.locator('#sr-character-lore-options input').first().check();
+    await page.locator('.sr-character-lore-book').last().locator('summary').click();
+    await page.locator('#sr-character-lore-options input').last().check();
     await page.locator('#sr-character-copy-prompt').click();
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/The council meets tomorrow/,'selected NPC lorebook joins the instruction');
+    assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/Rosa knows the user persona as a neighbor/,'NPC can use the active persona-linked lore');
+    assert.doesNotMatch(await page.evaluate(()=>navigator.clipboard.readText()),/Not relevant|Rosa is a friend of the user persona/,'unselected entries from those books are omitted');
     assert.doesNotMatch(await page.evaluate(()=>navigator.clipboard.readText()),/Completed NPC sheet supplied alongside/);
     const rosaJson={entity_type:'npc',entity_name:'Rosa Valentine',records:[{type:'relationship',target:'Hunter',when:['interests change'],rule:'Rosa may help or oppose Hunter when her own interests change.',modality:'conditional',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]};
     await page.locator('#sr-character-import-file').setInputFiles({name:'rosa.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(rosaJson))});
@@ -157,6 +170,7 @@ try{
     await page.setViewportSize({width:390,height:850});
     await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();
     await page.screenshot({path:path.join(root,'artifacts','retrieval-mobile.png')});
+    await page.locator('#sr-character-record-close').click();
     assert.equal(await page.locator('#sr-npc-read-names').count(),0,'NPC name-reading button was removed');
     await page.locator('[data-sr-tab="flow"]').click();
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door.'});await mock.emit('MESSAGE_SENT',0);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
@@ -213,8 +227,9 @@ try{
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'They finish and turn to a different conversation.'});await mock.emit('MESSAGE_SENT',7);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.ok(requests.slice(beforeResume).filter(r=>r.url.endsWith('/systemone')).length>1,'normal Jev judgment resumes after a confirmed end');
     gateScenario=null;
-    await mkdir(path.join(root,'artifacts'),{recursive:true});await page.locator('[data-sr-tab="characters"]').click();await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(root,'artifacts','mobile-characters.png')});
+    await mkdir(path.join(root,'artifacts'),{recursive:true});await page.locator('[data-sr-tab="characters"]').click();await page.locator('[data-record-kind="npc"]').click();await page.locator('[data-character-view-id="'+rosa.id+'"]').click();await page.locator('#sr-character-analysis-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(root,'artifacts','mobile-characters.png')});
     await page.evaluate(()=>{document.documentElement.style.setProperty('--SmartThemeBodyColor','#202020');document.documentElement.style.setProperty('--SmartThemeBlurTintColor','#f5f5f7');});await page.screenshot({path:path.join(root,'artifacts','mobile-light.png')});
+    await page.locator('#sr-character-record-close').click();
     await page.locator('#sr-npc-sheet-new').click();
     assert.match(await page.locator('#sr-character-npc-lore-note').textContent(),/NPC 한 명/);
     await page.locator('#sr-character-editor-cancel').click();
@@ -271,6 +286,13 @@ try{
     assert.equal(await page.locator('#sr-character-name').inputValue(),'Hunter');
     assert.match(await page.locator('#sr-character-source').inputValue(),/Sawyer Valentine/);
     assert.match(await page.locator('#sr-character-source').inputValue(),/Hunter speaks carefully under pressure/);
+    assert.equal(await page.locator('#sr-character-read-sheet').textContent(),'시트 확인하기');
+    await page.locator('#sr-character-read-sheet').click();
+    assert.match(await page.locator('#sr-character-preview-source').textContent(),/Hunter speaks carefully under pressure/);
+    await page.locator('#sr-character-record-close').click();
+    await page.locator('.sr-character-lore-picker > summary').click();
+    await page.locator('.sr-character-lore-book').first().locator('summary').click();
+    await page.locator('#sr-character-lore-options input').first().check();
     await page.evaluate(()=>{
         mock.worldBooks['Hunter Lore'].entries[1].content='The council meeting is now on Friday.';
         mock.loreReady=new Promise(resolve=>{mock.releaseLore=resolve;});
@@ -321,13 +343,16 @@ try{
     await page.locator('[data-record-version="'+firstVersion+'"][data-record-action="apply"]').click();
     await page.waitForFunction(()=>document.getElementById('sr-character-import-status').textContent.includes('선택한 버전을 적용'));
     await page.locator('[data-record-version="'+firstVersion+'"][data-record-action="view"]').click();
-    assert.match(await page.locator('#sr-character-version-preview-text').textContent(),/suspects the invitation is a trap/);
+    assert.match(await page.locator('#sr-character-analysis-result').textContent(),/suspects the invitation is a trap/);
+    await page.locator('#sr-character-preview-source-tab').click();
+    assert.match(await page.locator('#sr-character-preview-source').textContent(),/Hunter speaks carefully under pressure/);
     for(const width of [320,390,768,1280]) {
         await page.setViewportSize({width,height:850});
         assert.equal(await page.locator('#scene-reader-dialog').evaluate(e=>e.scrollWidth>e.clientWidth+2),false,'version UI overflow at '+width);
     }
     await page.screenshot({path:path.join(root,'artifacts','character-versions-desktop.png')});
     await page.setViewportSize({width:390,height:850});
+    await page.locator('#sr-character-record-close').click();
     await page.locator('[data-record-version="'+firstVersion+'"][data-record-action="edit"]').click();
     await page.screenshot({path:path.join(root,'artifacts','character-import-mobile.png')});
     await page.locator('#sr-character-editor-cancel').click();
@@ -336,6 +361,10 @@ try{
     await page.locator('#sr-run').click();
     await page.waitForFunction(()=>(mock.macros['scene-reader']?.() || '').includes('Hunter suspects the invitation is a trap.'));
     assert.ok(!Object.keys(requests.filter(r=>r.url.endsWith('/systemone')).at(-1).body.questions).some(key=>/response_direction|response_basis/.test(key)));
+    assert.ok(store.chat.lastJudgment?.characterInjectionChars<=5000,'character budget is tracked separately from other prompt blocks');
+    await page.locator('[data-sr-tab="characters"]').click();
+    await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-character-volume').selectOption('basic')]);
+    assert.equal(store.chat.lastJudgment,null,'changing the volume discards the old judgment');
     await page.locator('#sr-close').click();
     await page.reload();
     await page.locator('#sr-extension-open').evaluate(e=>e.closest('details').open=true);
