@@ -34,11 +34,11 @@ const decisionEngineSource = await readFile(new URL('./decision-engine.js', impo
 const stateEngineSource = await readFile(new URL('./state-engine.js', import.meta.url), 'utf8');
 const runtimeSource = await readFile(new URL('./runtime-utils.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
-await access(new URL('./downloads/scene-reader-jev-plugin-v0.6.0.zip', import.meta.url));
+await access(new URL('./downloads/scene-reader-jev-plugin-v0.7.0.zip', import.meta.url));
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.22.2');
+assert.equal(manifest.version, '0.23.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -48,7 +48,7 @@ assert.match(library, /If a new-event route fails, an existing event, relationsh
 assert.match(library, /A registered person being active does not prohibit another suitable NPC from entering/);
 assert.equal(pkg.main, 'server-plugin/index.cjs');
 assert.equal(pluginPkg.main, 'index.cjs');
-assert.equal(pluginPkg.version, '0.6.0');
+assert.equal(pluginPkg.version, '0.7.0');
 assert.match(source, /GENERATION_AFTER_COMMANDS/);
 assert.match(source, /extensionsMenu/);
 assert.match(source, /id = 'scene-reader-quick-button'/);

@@ -12,10 +12,10 @@ function actor(kind,name) {
     return entry;
 }
 let count=0;
-for(const style of ['static','dynamic']) for(const focus of ['event','npc','conflict']) for(const advanced of [false,true]) for(const worldChoice of ['yes','no','invalid']) {
+for(const style of ['static','dynamic']) for(const focus of ['event','npc','conflict']) for(const advanced of [false,true]) for(const worldChoice of ['yes','no','invalid','partial']) {
     const f=fixture(),requests=[];
     f.ctx.chat=[{is_user:true,name:'User',mes:'Hunter and Lucas discuss their pending delivery, their mutual trust and the invitation near the token gate.'}];
-    f.sandbox.auditWorld=world;
+    f.sandbox.auditWorld=worldChoice==='partial'?{...world,advanced:{...world.advanced,records:[...world.advanced.records,{...world.advanced.records[0],id:'W2',rule:'UNCONFIRMED_WORLD_RULE'}]}}:world;
     f.sandbox.actors=[actor('character','Hunter'),actor('npc','Lucas')];
     f.sandbox.config={style,focus,advanced};
     f.run(`record(true); selectedWorld=()=>auditWorld;
@@ -26,7 +26,8 @@ for(const style of ['static','dynamic']) for(const focus of ['event','npc','conf
         requests.push(request);
         const selected={scene_level:'0',scene_phase:'normal',primary_focus:focus,event_state:'active',progression_move:'advance',event_route:'continue',npc_route:'reuse',npc_presence:'present',npc_target:'sheet_0',npc_role:'witness',npc_weight:'supporting',npc_knowledge:'reported',npc_disclosure:'selective',relationship_pacing:'closer_incremental',relationship_motion:'closer',relationship_beat:'vulnerability',counterevidence:'none',conflict_state:focus==='conflict'?'active':'none',advanced_route:advanced?'continue':'none',advanced_entry:'open',advanced_cause:'existing',advanced_element:'objective',advanced_move:'advance',basic_move:'dialogue',progress_need:'flowing'};
         return {answers:Object.fromEntries(Object.entries(request.questions).map(([key,q])=>{
-            let choice=key.startsWith('world_record_')?worldChoice:key.startsWith('scene_participant_')?'yes':/^character_\d+_presence$/.test(key)?'active':/_profile_slot_/.test(key)?Object.keys(q.criteria).find(id=>id!=='none'):selected[key]??FALLBACKS[key];
+            if(q.type==='noul')return [key,{type:'noul',noul:0.9}];
+            let choice=key.startsWith('world_record_')?(worldChoice==='partial'?(key==='world_record_0'?'yes':'invalid'):worldChoice):key.startsWith('scene_participant_')?'yes':/^character_\d+_presence$/.test(key)?'active':/_profile_slot_/.test(key)?Object.keys(q.criteria).find(id=>id!=='none'):selected[key]??FALLBACKS[key];
             if(!key.startsWith('world_record_')&&!Object.hasOwn(q.criteria,choice))choice=Object.keys(q.criteria)[0];
             return [key,{choice,confidence:1}];
         }))};
@@ -50,10 +51,11 @@ for(const style of ['static','dynamic']) for(const focus of ['event','npc','conf
     assert.doesNotMatch(result.payload,/WORLD_FIXED_SENTINEL|WORLD_SELECTED_SENTINEL|RAW_SHEET_NOT_FOR_JEV|undefined|\[object Object\]/);
     assert.doesNotMatch(JSON.stringify(requests),/RAW_SHEET_NOT_FOR_JEV|SOURCE_QUOTE_NOT_FOR_JEV/);
     assert.match(result.worldPayload,/WORLD_FIXED_SENTINEL/);
-    assert.equal(result.worldPayload.includes('WORLD_SELECTED_SENTINEL'),worldChoice!=='no');
-    assert.equal(main.state.applicable_world_rules.length,worldChoice==='no'?0:1);
-    assert.equal(main.state.world_rule_selection.status,worldChoice==='invalid'?'fallback':'selected');
-    assert.equal(result.worldSelection.appliedIds.length,worldChoice==='no'?0:1);
+    assert.equal(result.worldPayload.includes('WORLD_SELECTED_SENTINEL'),['yes','partial'].includes(worldChoice));
+    assert.doesNotMatch(result.worldPayload,/UNCONFIRMED_WORLD_RULE/);
+    assert.equal(main.state.applicable_world_rules.length,['yes','partial'].includes(worldChoice)?1:0);
+    assert.equal(main.state.world_rule_selection.status,worldChoice==='invalid'?'fallback':worldChoice==='partial'?'partial':'selected');
+    assert.equal(result.worldSelection.appliedIds.length,['yes','partial'].includes(worldChoice)?1:0);
     assert.equal(result.payload.includes('<ADVANCED_PROGRESSION'),advanced&&result.decisions.advanced_route==='continue');
     assert.equal(f.run('record().pendingPlan.status'),'awaiting_output');
     const calls=requests.length;
@@ -64,5 +66,28 @@ for(const style of ['static','dynamic']) for(const focus of ['event','npc','conf
     assert.ok(requests.length>calls,'an old assembly contract is never reused');
     assert.doesNotMatch(f.run('record().lastJudgment.payload'),/STALE_ASSEMBLY/);
     count++;
+}
+{
+    const f=fixture();let started;
+    const waiting=new Promise(resolve=>started=resolve);
+    f.ctx.chat=[{is_user:true,name:'User',mes:'Hunter waits near the token gate.'}];
+    f.sandbox.auditWorld=world;
+    f.sandbox.blockSearch=({signal})=>new Promise((_resolve,reject)=>{signal.addEventListener('abort',()=>reject(signal.reason),{once:true});started();});
+    f.run('record(true); selectedWorld=()=>auditWorld; vectorRetrieval.search=blockSearch; globalThis.clearCount=0; clearInjection=async()=>{clearCount++;};');
+    const stale=f.run('runJudge({force:true})');
+    await waiting;
+    f.run('jobs.invalidate(); activeInjectionPayload="NEWER_VALID_INJECTION";');
+    assert.equal(await stale,null);
+    assert.equal(f.run('clearCount'),0,'a cancelled retrieval cannot clear a newer turn injection');
+    assert.equal(f.run('activeInjectionPayload'),'NEWER_VALID_INJECTION');
+}
+{
+    const f=fixture();
+    f.ctx.characters=[null,{avatar:'Hunter.png'}];
+    const owner=f.run('stateChatKey()');
+    f.ctx.characters=[{avatar:'Hunter.png'}];f.ctx.characterId=0;
+    assert.equal(f.run('stateChatKey()'),owner,'reordering the SillyTavern character list cannot switch stored ownership');
+    f.sandbox.fetch=async()=>({ok:true,json:async()=>({storageVersion:2})});
+    await assert.rejects(f.run('hydrateServerState()'),/0.7.0/,'old plugins must not load an empty new identity or overwrite legacy data');
 }
 console.log(`Release integration passed: ${count} scene/style/advanced/world-selection combinations, same-scene responses, scoped character records, matching world injection, and cache refresh.`);

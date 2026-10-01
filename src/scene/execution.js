@@ -2,7 +2,7 @@ import { makeAppearanceOffer, addAppearanceQuestions, applyAppearanceOffer } fro
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
 import { sceneGateRequest, resolveSceneGate } from './intimacy-gate.js';
-import { recordBankIsCurrent } from '../characters/records.js';
+import { currentRecords, recordBankIsCurrent } from '../characters/records.js';
 import { addWorldQuestions, selectedWorldRecords, worldPayload as buildWorldPayload } from '../world/advanced.js';
 import { seasonalWorldNote } from '../world/seasonal.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
@@ -12,8 +12,9 @@ function sourceRevisionKey(rec, world) {
     return deps.stableFingerprint({
         world: { id: world?.id || '', name: world?.name || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise), calendarTopics: world?.calendarTopics || [], advanced: world?.advanced || null },
         reasoner: deps.settings.reasonerProfileId || '',
+        retrieval: [deps.settings.retrievalProvider, deps.settings.retrievalModel, deps.settings.retrievalVertexAuth, deps.settings.retrievalVertexRegion, deps.settings.retrievalVertexProject],
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
-        characterSelectorContract: 2,
+        characterSelectorContract: 3,
         injectionAssemblyContract: 2,
         sceneGateContract: 2,
         characterCore: CORE_SHA256,
@@ -210,7 +211,7 @@ async function runJudge(options = {}) {
     const run = deps.jobs.begin('judge');
     try { return await executeJudge(run, options); }
     catch (error) {
-        if (error instanceof deps.StaleRunError) return null;
+        if (error instanceof deps.StaleRunError || !run.valid()) return null;
         if (!error.activityReported) {
             await deps.clearInjection();
             deps.updateActivity(`판독 실패 · ${error.message}`, {error:true});
@@ -285,10 +286,17 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const carriedGateIds = [...new Set([...previousParticipantIds,...(rec.lastJudgment?.characterTrace || []).filter(item=>(item?.presence||item?.final?.presence)==='active').map(item=>item.id)])];
     const gatePeople = deps.characterStore.enabled ? deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedGateIds, {allowUserImpersonation:prefs.allowUserImpersonation}).slice(0,6) : [];
     const gateRequest = sceneGateRequest({model:deps.JEV_MODEL,transcript,previous:previousSceneRoute,people:gatePeople,previousParticipantIds});
-    const worldRecordCandidates = addWorldQuestions(gateRequest, world, transcript);
+    const worldRecords = world?.advanced?.records || [];
+    const worldRetrieval = world?.advanced && worldRecords.length
+        ? await deps.vectorRetrieval.search({kind:'world',bankId:world.id,items:worldRecords,transcript,limit:10,signal:run.controller.signal})
+        : {indices:[],status:'plain'};
+    run.assert();
+    const worldRecordCandidates = addWorldQuestions(gateRequest, world, transcript, worldRetrieval.indices);
+    if (deps.characterStore.enabled) deps.addCharacterNeedsQuestions(gateRequest, gatePeople);
     let sceneGate;
     let worldRecordAnswers = {};
     let worldSelectionFailed = false;
+    let worldInvalidCount = 0;
     deps.judgeInFlight = true;
     deps.judgeCompletionPromise = new Promise(resolve=>{deps.resolveJudgeCompletion=resolve;});
     deps.setBusy(true);
@@ -298,7 +306,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         run.assert();
         if(deps.currentInputKey(pendingUserText,cycleSalt)!==inputKey || deps.recentContext(pendingUserText).contextKey!==context.contextKey || sourceRevisionKey(deps.record(),deps.selectedWorld())!==sourceKey)throw new deps.StaleRunError();
         worldRecordAnswers = gateData.answers || {};
-        worldSelectionFailed = worldRecordCandidates.some((_, index) => !['yes', 'no'].includes(worldRecordAnswers[`world_record_${index}`]?.choice));
+        worldInvalidCount = worldRecordCandidates.filter((_, index) => !['yes', 'no'].includes(worldRecordAnswers[`world_record_${index}`]?.choice)).length;
+        worldSelectionFailed = worldRecordCandidates.length > 0 && worldInvalidCount === worldRecordCandidates.length;
         sceneGate=resolveSceneGate(gateData.answers,gateRequest,previousSceneRoute);
     } catch(error) {
         if(error instanceof deps.StaleRunError || !run.valid())throw error;
@@ -315,8 +324,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const seasonalContext = seasonalWorldNote(prefs, transcript, world);
     const appliedWorldRecords = selectedWorldRecords(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed);
     const selectedWorldPayload = [buildWorldPayload(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed), seasonalContext].filter(Boolean).join('\n\n');
-    const worldSelection = { status: !world?.advanced ? 'plain' : worldSelectionFailed ? 'fallback' : 'selected', candidateIds: worldRecordCandidates.map(record=>record.id), selectedIds: worldRecordCandidates.filter((_,index)=>worldRecordAnswers[`world_record_${index}`]?.choice==='yes').map(record=>record.id), appliedIds: appliedWorldRecords.map(record=>record.id) };
-    if (world?.advanced && worldSelectionFailed) deps.window.toastr?.warning?.('세계관 선택 응답을 확인하지 못해 이번 턴은 전체 세계 규칙을 조건과 함께 적용합니다.', '씬판독기');
+    const worldSelection = { status: !world?.advanced ? 'plain' : worldSelectionFailed ? 'fallback' : worldInvalidCount ? 'partial' : 'selected', invalidCount:worldInvalidCount, retrievalStatus: worldRetrieval.status, retrievalError:worldRetrieval.error || '', candidateIds: worldRecordCandidates.map(record=>record.id), selectedIds: worldRecordCandidates.filter((_,index)=>worldRecordAnswers[`world_record_${index}`]?.choice==='yes').map(record=>record.id), appliedIds: appliedWorldRecords.map(record=>record.id) };
+    if (world?.advanced && worldSelectionFailed) deps.window.toastr?.warning?.('세계관 판정 응답을 확인하지 못해 이번 턴은 고정 규칙만 적용합니다.', '씬판독기');
     const worldGateFrame = { request: gateRequest, answers: worldRecordAnswers };
     deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: gateRequest, answers: worldRecordAnswers, worldGate: worldGateFrame, model: deps.JEV_MODEL };
     if(sceneGate.route==='paused') {
@@ -385,9 +394,14 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         .map((item) => item.id)])];
     const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds, { allowUserImpersonation: prefs.allowUserImpersonation });
     const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
+    const categoryHints = deps.characterCategoryHints(worldRecordAnswers);
+    const retrievalResults = new Map(await Promise.all((deps.characterStore.enabled ? activeCharacters.filter(recordBankIsCurrent) : []).map(async entry => [entry.id,
+        await deps.vectorRetrieval.search({kind:'character',bankId:`${run.identity}:${entry.id}`,items:currentRecords(entry),transcript,limit:12,signal:run.controller.signal})
+    ])));
+    run.assert();
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
-        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true, volume:prefs.characterVolume,
+        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true, volume:prefs.characterVolume, retrievalResults, categoryHints,
     }) : [];
     if (deps.characterStore.characters.length === 1) {
         const primary = liveCharacters.find((person) => person.id === deps.characterStore.characters[0].id);
@@ -416,7 +430,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         // Only compiled records and live context may cross the Jev boundary.
         // Keep local sheet, lorebook, bank provenance, and legacy excerpts out.
         people: liveCharacters.map(({ index, id, name, kind, npcRole, recordStatus, recordMode, profileCandidates, contextCandidates }) =>
-            ({ index, id, name, kind, npcRole, recordStatus, recordMode, profileCandidates, contextCandidates })),
+            ({ index, id, name, kind, npcRole, recordStatus, recordMode,
+                profileCandidates: profileCandidates.map(item => ({id:item.id,type:item.type||item.kind,target:item.target})), contextCandidates })),
     } : null;
 
     deps.judgeInFlight = true;
@@ -440,7 +455,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 controls: { ...prefs, progressIntensity: undefined, world: { id: world?.id, name: world?.name, hint: world?.hint } },
                 seasonal_context: seasonalContext || null,
                 applicable_world_rules: appliedWorldRecords.map(({ id, category, when, rule }) => ({ id, category, when, rule })),
-                world_rule_selection: { status: worldSelection.status, scope: 'Rules constrain only scenes meeting their stated conditions. Fallback includes unfiltered rules, not confirmed current states. No rule alone establishes an event or character knowledge.' },
+                world_rule_selection: { status: worldSelection.status, scope: 'Rules constrain only scenes meeting their stated conditions. If world selection fails, only fixed rules remain; conditional rules are not presumed active. No rule alone establishes an event or character knowledge.' },
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
@@ -462,7 +477,9 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const details = {};
         for (const key of Object.keys(questions)) {
             const choices = Object.keys(questions[key]?.criteria || {});
-            details[key] = key.startsWith('character_') || key === 'npc_identity_route'
+            details[key] = questions[key]?.type === 'noul' && /^character_\d+_record_\d+$/.test(key)
+                ? deps.applyRecordRelevance(data.answers[key])
+                : key.startsWith('character_') || key === 'npc_identity_route'
                 ? deps.applyCharacterPolicy(key, data.answers[key], prefs.judgmentStyle, choices)
                 : deps.applyPolicy(key, data.answers[key], prefs.judgmentStyle, choices, prefs.progressIntensity);
         }
@@ -568,10 +585,14 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             details.npc_autonomy = { selected: npcActive ? 'yes' : 'no', effective: npcActive ? 'yes' : 'no', certainty: 1, threshold: 1, adjusted: false, conditional: true };
             decisions.npc_autonomy = details.npc_autonomy.effective;
         }
-        const resolvedCharacters = deps.characterStore.enabled ? deps.resolveLiveCharacterPlan(liveCharacters, decisions) : [];
+        const resolvedCharacters = deps.characterStore.enabled ? deps.resolveLiveCharacterPlan(liveCharacters, decisions, details) : [];
         const characterExecution = deps.buildCharacterInjection(resolvedCharacters, { conflictActive: ['tension', 'active'].includes(decisions.conflict_state) || decisions.fight_sustain === 'yes', volume:prefs.characterVolume });
         const characterTrace = characterExecution.traces;
         for(const item of characterTrace) {
+            if(item.recordMode) {
+                const prefix=`character_${item.index}_record_`;
+                item.relevance = (liveCharacters[item.index]?.profileCandidates || []).map((record,index)=>({id:record.id,type:record.type,score:details[`${prefix}${index}`]?.certainty ?? 0,selected:details[`${prefix}${index}`]?.effective==='yes',valid:!details[`${prefix}${index}`]?.fallbackApplied}));
+            }
             if(item.profileIds.length || !item.candidateCount)continue;
             const prefix=`character_${item.index}_`;
             const presenceDetail=details[`${prefix}presence`];
@@ -579,9 +600,9 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 item.zeroReason=presenceDetail?.selected==='active' ? `참여 판정 후처리: ${presenceDetail.rule || item.presence}` : `참여 판정: ${item.presence}`;
                 continue;
             }
-            const slots=Object.keys(questions).filter(key=>key.startsWith(`${prefix}profile_slot_`));
-            const invalid=slots.filter(key=>!Object.hasOwn(questions[key].criteria,data.answers?.[key]?.choice));
-            const selected=slots.filter(key=>data.answers?.[key]?.choice && data.answers[key].choice!=='none' && Object.hasOwn(questions[key].criteria,data.answers[key].choice));
+            const slots=Object.keys(questions).filter(key=>key.startsWith(`${prefix}${item.recordMode?'record_':'profile_slot_'}`));
+            const invalid=slots.filter(key=>item.recordMode ? details[key]?.fallbackApplied : !Object.hasOwn(questions[key].criteria,data.answers?.[key]?.choice));
+            const selected=slots.filter(key=>item.recordMode ? details[key]?.effective==='yes' : data.answers?.[key]?.choice && data.answers[key].choice!=='none' && Object.hasOwn(questions[key].criteria,data.answers[key].choice));
             item.zeroReason=invalid.length ? `Jev 선택 응답 누락·형식 오류 ${invalid.length}개` : selected.length ? 'Jev 선택이 판정 기준 또는 코드 후처리에서 제외됨' : 'Jev가 관련 기록을 선택하지 않음';
         }
         const characterBlock = characterExecution.text;
@@ -595,7 +616,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const finalContinuityCacheKey = deps.settings.continuityEnabled
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
-        const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities }]));
+        const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities, noul: answer?.noul }]));
         rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, characterInjectionChars:characterExecution.charCount, characterInjectionLimit:characterExecution.charLimit, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
@@ -637,7 +658,6 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         error.activityReported = true;
         throw error;
     } finally {
-        run.finish();
         deps.judgeInFlight = false;
         deps.resolveJudgeCompletion?.();
         deps.resolveJudgeCompletion = null;

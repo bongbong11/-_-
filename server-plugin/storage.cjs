@@ -3,6 +3,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const MAX_STORAGE_BYTES = 20_000_000;
 const locks = new Map();
+const BACKUP_PATH = /^(?:settings\.json|secrets\.json|reasoner-(?:profiles|secrets)\.json|(?:chats|characters|history|sessions)\/[a-f0-9]{64}\.json)$/;
+const isBackupPath = value => BACKUP_PATH.test(value);
 
 function serialize(root, work) {
     const pending = (locks.get(root) || Promise.resolve()).catch(() => {}).then(work);
@@ -29,7 +31,7 @@ function validateSnapshot(snapshot) {
     for (const entry of snapshot.files) {
         if (!entry || typeof entry.path !== 'string' || typeof entry.text !== 'string') throw new Error('Invalid backup entry.');
         // Only extension-owned JSON records. Reject both Windows and POSIX traversal, duplicates and file/directory collisions.
-        if (!/^(?:settings\.json|secrets\.json|reasoner-(?:profiles|secrets)\.json|(?:chats|characters|history|sessions)\/[a-f0-9]{64}\.json)$/.test(entry.path) || seen.has(entry.path)) throw new Error('Unsafe or duplicate Scene Reader backup path.');
+        if (!isBackupPath(entry.path) || seen.has(entry.path)) throw new Error('Unsafe or duplicate Scene Reader backup path.');
         seen.add(entry.path);
         try { JSON.parse(entry.text); } catch { throw new Error(`Invalid backup JSON: ${entry.path}`); }
     }
@@ -88,4 +90,15 @@ async function restoreFiles(root, snapshot) {
         if (installed && moved) await fs.rm(previous, { recursive: true, force: true });
     }
 }
-module.exports = { readJson, writeJsonAtomic, validateSnapshot, portableSnapshot, restoreFiles, serialize };
+async function cleanupStaleTemps(root, current = root) {
+    const rows = await fs.readdir(current, { withFileTypes: true }).catch(error => { if(error.code==='ENOENT')return [];throw error; });
+    for(const row of rows) {
+        const file=path.join(current,row.name);
+        if(row.isDirectory() && current===root && /^(chats|characters|history|sessions|backups)$/.test(row.name)) await cleanupStaleTemps(root,file);
+        if(!row.isFile() || !/\.json\.[a-f0-9-]{36}\.tmp$/.test(row.name))continue;
+        const relative=path.relative(root,file).replaceAll('\\','/').replace(/\.[a-f0-9-]{36}\.tmp$/,'');
+        if(!isBackupPath(relative) && !/^backups\/[\dT.Z-]+\.json$/.test(relative) && relative!=='retrieval-cleanup.json')continue;
+        if(Date.now()-(await fs.stat(file)).mtimeMs > 86400000)await fs.unlink(file);
+    }
+}
+module.exports = { readJson, writeJsonAtomic, validateSnapshot, portableSnapshot, restoreFiles, serialize, isBackupPath, cleanupStaleTemps };

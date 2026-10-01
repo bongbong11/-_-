@@ -54,7 +54,7 @@ async function saveServerChat(chatKey = deps.stateChatKey(), value = deps.record
 async function saveSession(chatKey, chat, history) {
     const snapshot = structuredClone(chat);
     const limited = structuredClone(history.slice(-deps.STATE_HISTORY_LIMIT));
-    if (deps.storageVersion < 2) throw new Error('서버 플러그인을 v0.6.0으로 업데이트한 뒤 다시 시작하세요.');
+    if (deps.storageVersion < 2) throw new Error('서버 플러그인을 0.7.0으로 업데이트한 뒤 다시 시작하세요.');
     await deps.queueWrite(`session:${chatKey}`, () => storagePost('transaction', {chatKey, chat:snapshot, history:limited}));
     deps.chatRecords.set(chatKey, snapshot);
     deps.stateHistoryCache.set(chatKey, limited);
@@ -71,8 +71,9 @@ async function hydrateServerState({ migrate = true } = {}) {
     const chatKey = deps.stateChatKey();
     const sequence = ++deps.hydrateSequence;
     const current = () => sequence === deps.hydrateSequence && chatKey === deps.stateChatKey();
-    const data = await storagePost('bootstrap', { chatKey }, { allowFailure: true });
+    const data = await storagePost('bootstrap', { chatKey, legacyChatKey:deps.legacyStateChatKey?.() }, { allowFailure: true });
     if (!data || !current()) return false;
+    if(Number(data.storageVersion)>0 && Number(data.storageVersion)<3) throw new Error('서버 플러그인을 0.7.0으로 교체하고 SillyTavern을 다시 시작하세요. 저장한 인물과 설정은 그대로 보관됩니다.');
     if (!migrate) {
         deps.jobs.invalidate();
         deps.stateHistoryCache.clear();

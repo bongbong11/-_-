@@ -1,4 +1,5 @@
-const { readJson, writeJsonAtomic, validateSnapshot, portableSnapshot, restoreFiles, serialize } = require('./storage.cjs');
+const { readJson, writeJsonAtomic, validateSnapshot, portableSnapshot, restoreFiles, serialize, isBackupPath, cleanupStaleTemps } = require('./storage.cjs');
+const { changedCharacterCollections, changedWorldCollections, retrievalConfigChanged, retryCleanup, scheduleCleanup } = require('./retrieval-cache.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -49,8 +50,11 @@ async function walkFiles(root, current = root) {
     for (const entry of entries) {
         if (current === root && entry.name === 'backups') continue;
         const absolute = path.join(current, entry.name);
-        if (entry.isDirectory()) files.push(...await walkFiles(root, absolute));
-        else if (entry.isFile()) files.push({ path: path.relative(root, absolute).replaceAll('\\', '/'), text: await fs.readFile(absolute, 'utf8') });
+        if (entry.isDirectory() && current===root && /^(chats|characters|history|sessions)$/.test(entry.name)) files.push(...await walkFiles(root, absolute));
+        else if (entry.isFile()) {
+            const relative=path.relative(root, absolute).replaceAll('\\', '/');
+            if(isBackupPath(relative))files.push({ path: relative, text: await fs.readFile(absolute, 'utf8') });
+        }
     }
     return files;
 }
@@ -59,9 +63,13 @@ async function createSnapshot(request, reason = 'manual') {
     const { root, backups } = pathsFor(request);
     await fs.mkdir(backups, { recursive: true });
     const createdAt = new Date().toISOString();
-    const id = createdAt.replaceAll(':', '-').replace('.', '-');
+    const id = createdAt.replaceAll(':', '-').replace('.', '-').replace('Z', `-${crypto.randomInt(1_000_000_000)}Z`);
     const snapshot = { schemaVersion: 1, id, createdAt, reason, files: await walkFiles(root) };
     await writeJsonAtomic(path.join(backups, `${id}.json`), snapshot);
+    if(reason==='before_restore') {
+        const automatic=(await listBackups(request)).filter(item=>item.reason==='before_restore');
+        for(const item of automatic.slice(5))await removeFile(path.join(backups, `${item.id}.json`));
+    }
     return snapshot;
 }
 
@@ -83,6 +91,7 @@ async function restoreSnapshot(request, snapshot) {
     const { root } = pathsFor(request);
     await createSnapshot(request, 'before_restore');
     await restoreFiles(root, snapshot);
+    await scheduleCleanup(root, request.user.directories, {all:true});
 }
 
 function storageHandler(handler) {
@@ -96,25 +105,48 @@ async function readSession(files) {
     return await readJson(files.session, null) || { chat: await readJson(files.chat, null), history: await readJson(files.history, []) };
 }
 async function writeSession(files, session) {
-    await writeJsonAtomic(files.session, session);
+    await writeJsonAtomic(files.session, {...session,history:Array.isArray(session.history)?session.history.slice(-12):[]});
     // Remove legacy duplicates only after the combined replacement is durable.
     await removeFile(files.chat); await removeFile(files.history);
+}
+async function migrateChatIdentity(request, chatKey, legacyChatKey) {
+    if(typeof legacyChatKey!=='string' || chatKey===legacyChatKey || !chatKey.startsWith('character-avatar:') || !legacyChatKey.startsWith('character:') || chatKey.slice(chatKey.indexOf('|chat:'))!==legacyChatKey.slice(legacyChatKey.indexOf('|chat:')))return;
+    const files=pathsFor(request,chatKey),old=pathsFor(request,legacyChatKey);
+    const previousSession=await readSession(old),previousCharacters=await readJson(old.characters,null);
+    if(!previousSession.chat && !previousSession.history?.length && !previousCharacters)return;
+    const currentSession=await readSession(files);
+    const currentCharacters=await readJson(files.characters,null);
+    if((currentSession.chat || currentSession.history?.length) && currentSession.migrationSource!==legacyChatKey)return;
+    if(currentCharacters && JSON.stringify(currentCharacters)!==JSON.stringify(previousCharacters))return;
+    if(!currentSession.chat && !currentSession.history?.length && (previousSession.chat || previousSession.history?.length))await writeSession(files,{...previousSession,migrationSource:legacyChatKey});
+    if(previousCharacters && !currentCharacters)await writeJsonAtomic(files.characters,previousCharacters);
+    // New files are durable before any old duplicate is removed. A failed write
+    // leaves the old files intact, so the next bootstrap can retry the migration.
+    for(const file of [old.session,old.chat,old.history,old.characters])await removeFile(file);
+    await scheduleCleanup(files.root,request.user.directories,{collections:changedCharacterCollections(legacyChatKey,previousCharacters,null)});
 }
 async function init(router) {
     router.get('/health', (_request, response) => response.json({ ok: true, service: 'scene-reader-jev', model: MODEL, storage: true }));
 
     router.post('/storage/bootstrap', storageHandler(async (request, response) => {
         const chatKey = String(request.body?.chatKey || 'unsaved');
+        await migrateChatIdentity(request,chatKey,request.body?.legacyChatKey);
         const files = pathsFor(request, chatKey);
+        await cleanupStaleTemps(files.root);
+        await retryCleanup(files.root, request.user.directories).catch(error=>console.warn('[Scene Reader] Search cache cleanup will retry:',error.code || error.name));
         const session = await readSession(files);
         const [settings, chat, history, characters, secret, backups] = await Promise.all([
             readJson(files.settings, {}), session.chat, session.history, readJson(files.characters, null), readJson(files.secret, {}), listBackups(request),
         ]);
-        response.json({ ok: true, storageVersion: 2, migrated: Boolean(await readJson(files.session, null)), settings, chat, history: Array.isArray(history) ? history : [], characters, keyStatus: secret.jevKey ? `저장됨 ····${String(secret.jevKey).slice(-4)}` : '저장된 키 없음', backups });
+        response.json({ ok: true, storageVersion: 3, migrated: Boolean(await readJson(files.session, null)), settings, chat, history: Array.isArray(history) ? history : [], characters, keyStatus: secret.jevKey ? `저장됨 ····${String(secret.jevKey).slice(-4)}` : '저장된 키 없음', backups });
     }));
 
     router.post('/storage/settings', storageHandler(async (request, response) => {
-        await writeJsonAtomic(pathsFor(request).settings, request.body?.settings && typeof request.body.settings === 'object' ? request.body.settings : {});
+        const files=pathsFor(request);
+        const previous=await readJson(files.settings, {});
+        const next=request.body?.settings && typeof request.body.settings === 'object' ? request.body.settings : {};
+        await writeJsonAtomic(files.settings, next);
+        await scheduleCleanup(files.root, request.user.directories, {all:retrievalConfigChanged(previous,next),collections:changedWorldCollections(previous,next)});
         response.json({ ok: true });
     }));
 
@@ -128,7 +160,11 @@ async function init(router) {
                 const session = await readSession(files);
                 session[field] = value === null ? (field === 'history' ? [] : null) : value;
                 await writeSession(files, session);
-            } else if (value === null) await removeFile(file); else await writeJsonAtomic(file, value);
+            } else {
+                const previous=await readJson(file,null);
+                if(value===null)await removeFile(file);else await writeJsonAtomic(file,value);
+                await scheduleCleanup(files.root, request.user.directories, {collections:changedCharacterCollections(chatKey,previous,value)});
+            }
             response.json({ ok: true });
         }));
     }

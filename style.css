@@ -79,6 +79,11 @@
 #scene-reader-dialog .sr-connection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 #scene-reader-dialog .sr-connection-pane { display: grid; align-content: start; gap: 7px; min-width: 0; padding: 9px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; }
 #scene-reader-dialog .sr-connection-pane h4 { margin: 0; font-size: .94rem; }
+#scene-reader-dialog .sr-retrieval-panel { margin-top: 10px; }
+#scene-reader-dialog .sr-retrieval-panel[open] { display: grid; gap: 7px; }
+#scene-reader-dialog .sr-retrieval-panel label { display: block; margin-top: 3px; }
+#scene-reader-dialog .sr-retrieval-panel input,
+#scene-reader-dialog .sr-retrieval-panel select { width: 100%; min-width: 0; }
 #scene-reader-dialog .sr-connection-pane .sr-help { margin: 0; }
 #scene-reader-dialog .sr-connection-pane .sr-action-row .menu_button { flex: 1 1 calc(50% - 4px); min-width: 0; padding-inline: 5px; }
 #scene-reader-dialog [hidden] { display: none !important; }

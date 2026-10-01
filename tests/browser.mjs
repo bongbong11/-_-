@@ -18,6 +18,7 @@ const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,p
 const wadeEntry={...store.characters.npcs[0],kind:'npc',npcRole:'mixed'};
 store.characters.npcs[0]={...wadeEntry,recordBank:createRecordBank({entity_type:'npc',entity_name:'Wade',intimacy_reference:{text:'Wade keeps intimate wishes private unless he chooses to disclose them.',source_ids:['S001']},records:[{type:'relationship',target:'son',when:['family matters'],rule:'Wade tends to control his son on family matters.',modality:'tendency',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]},wadeEntry,'browser-records')};
 const requests=[];
+const vectorCollections=new Map(), retrievalSecrets={};
 let failCharacterWrite=false;
 let failWorldWrite=false;
 let gateScenario=null;
@@ -38,16 +39,34 @@ const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){if(window.mock.loreReady)await window.mock.loreReady;return window.mock.worldBooks[name]||null}");return;}
     if(req.url==='/scripts/personas.js'){res.setHeader('Content-Type','application/javascript');res.end("export const user_avatar='User.png'");return;}
     if(req.url==='/scripts/extensions/shared.js'){res.setHeader('Content-Type','application/javascript');res.end(`export class ConnectionManagerRequestService {static getSupportedProfiles(){return [{id:'test-profile',name:'테스트 연결',model:'mock-model'}]} static getProfile(){return this.getSupportedProfiles()[0]} static validateProfile(){} static async sendRequest(_id,messages){const prompt=messages?.[0]?.content||'';if(prompt.startsWith('You are a source-grounded character retrieval compiler.')) { const name=prompt.split('ENTITY_NAME: ')[1].split('\\n')[0]; return {content:JSON.stringify({entity_type:'npc',entity_name:name,records:[{type:'knowledge',target:'',when:['office procedure'],rule:name+' knows office procedures.',modality:'fact',basis:'explicit',source_ids:['S001'],knowledge_domain:'professional',knowledge_state:'knows'},{type:'relationship',target:'Hunter',when:['interests change'],rule:name+' may help or oppose Hunter when her own interests change.',modality:'conditional',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]})}; } if(prompt.startsWith('Read the supplied world prompt as source data.'))return {content:JSON.stringify({short_description:'A quiet garden world with ordinary physical limits.'})};if(prompt.startsWith('You are compiling a roleplay world prompt'))return {content:JSON.stringify({format:'scene-reader-world',version:1,name:'Moonlit Garden',short_description:'A garden whose gate responds to moonlight.',fixed_rules:'The garden remains an ordinary place except for its moonlit gate.',franchise:false,calendar_topics:[],records:[{id:'W001',category:'mechanism',when:'When moonlight reaches the gate.',keywords:['moonlight','gate'],rule:'Moonlight opens the garden gate.',source_quote:'Moonlight opens the garden gate.'}]})};if(prompt.startsWith('Find named individual NPCs'))return {content:'\`\`\`json\\n'+JSON.stringify({npcs:[{name:'Sawyer Valentine',aliases:['Sawyer'],hint:'Hunter colleague'}]})+'\\n\`\`\`'};if(prompt.startsWith('Extract only the confirmed minimum identity'))return {content:JSON.stringify({core:'An established colleague of Hunter.'})};return {content:JSON.stringify({ok:true,anchors:[],new_items:[],affected:[],knowledge_updates:[],possible_followups:[]})}}}`);return;}
+    if(req.url.startsWith('/api/vector/')||req.url.startsWith('/api/secrets/')){
+        let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):{};
+        res.setHeader('Content-Type','application/json');
+        if(req.url==='/api/secrets/read'){res.end(JSON.stringify(Object.fromEntries(Object.keys(retrievalSecrets).map(key=>[key,[{active:true,label:'test',value:'••••'}]]))));return;}
+        if(req.url==='/api/secrets/write'){retrievalSecrets[body.key]=body.value;res.end(JSON.stringify({id:'test-secret'}));return;}
+        const route=req.url.split('/').at(-1),collection=JSON.stringify([body.source,body.model||'',body.collectionId]);
+        requests.push({url:req.url,body:{...body,items:body.items?.map(({hash,index})=>({hash,index}))}});
+        if(!vectorCollections.has(collection))vectorCollections.set(collection,new Map());
+        const items=vectorCollections.get(collection);
+        if(route==='list'){res.end(JSON.stringify([...items.keys()]));return;}
+        if(route==='insert'){body.items.forEach(item=>items.set(item.hash,item));res.end('{}');return;}
+        if(route==='delete'){body.hashes.forEach(hash=>items.delete(hash));res.end('{}');return;}
+        if(route==='query'){
+            const terms=new Set(String(body.searchText||'').toLowerCase().match(/[a-z]{4,}/g)||[]);
+            const ranked=[...items.values()].map(item=>({item,score:(String(item.text).toLowerCase().match(/[a-z]{4,}/g)||[]).filter(term=>terms.has(term)).length})).sort((a,b)=>b.score-a.score||a.item.index-b.item.index).slice(0,body.topK);
+            res.end(JSON.stringify({metadata:ranked.map(({item})=>({hash:item.hash,index:item.index,text:item.text})),hashes:ranked.map(({item})=>item.hash)}));return;
+        }
+    }
     if(req.url.startsWith('/api/plugins/scene-reader-jev/')){
         let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):{};requests.push({url:req.url,body});
         res.setHeader('Content-Type','application/json');let result={ok:true};
-        if(req.url.endsWith('/bootstrap'))result={...store,ok:true,storageVersion:2,migrated:true,keyStatus:'저장됨 ····mock',backups:[]};
+        if(req.url.endsWith('/bootstrap'))result={...store,ok:true,storageVersion:3,migrated:true,keyStatus:'저장됨 ····mock',backups:[]};
         else if(req.url.endsWith('/transaction')){store.chat=body.chat;store.history=body.history;}
         else if(req.url.endsWith('/settings')){if(failWorldWrite){failWorldWrite=false;res.statusCode=500;res.end(JSON.stringify({error:'Simulated world save failure'}));return;}store.settings=body.settings;}
         else if(req.url.endsWith('/characters')) { if(failCharacterWrite){failCharacterWrite=false;res.statusCode=500;res.end(JSON.stringify({error:'Simulated failed save'}));return;} store.characters=body.value; }
         else if(req.url.endsWith('/chat'))store.chat=body.value;
         else if(req.url.endsWith('/history'))store.history=body.value;
-        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
+        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,q.type==='noul'?{type:'noul',noul:0.9}:{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
         res.end(JSON.stringify(result));return;
     }
     if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'application/javascript');res.end(await readFile(file));return;}
@@ -462,11 +481,11 @@ try{
     worldChoice='invalid';
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Hunter returns to the garden.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.equal(store.chat.lastJudgment.worldSelection.status,'fallback');
-    assert.match(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),/Scope: When moonlight reaches the gate\.\nMoonlight opens the garden gate/,'invalid selector response falls back with conditions intact');
+    assert.doesNotMatch(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),/Moonlight opens the garden gate/,'invalid selector response retains fixed rules without unverified conditional rules');
     const fallbackRequest=requests.findLast(request=>request.body.state?.character_profiles!==undefined).body;
     assert.equal(fallbackRequest.state.world_rule_selection.status,'fallback');
-    assert.equal(fallbackRequest.state.applicable_world_rules[0].rule,'Moonlight opens the garden gate.','progression judge and final injection use the same fallback rules');
-    assert.deepEqual(store.chat.lastJudgment.worldSelection.appliedIds,['W001']);
+    assert.equal(fallbackRequest.state.applicable_world_rules.length,0,'progression judge and final injection use the same fallback rules');
+    assert.deepEqual(store.chat.lastJudgment.worldSelection.appliedIds,[]);
     worldChoice='no';
     gateScenario=null;
     await page.locator('#sr-world-profile').selectOption('current');
@@ -493,9 +512,35 @@ try{
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Current date: 2026-10-31. They continue across campus.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.match(await page.evaluate(()=>JSON.stringify(mock.prompts)),/Halloween week/,'seasonal world reaches depth injection');
     assert.equal(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),'','depth mode leaves no duplicate world macro');
+    await page.locator('.sr-retrieval-panel > summary').click();
+    await page.locator('#sr-retrieval-provider').selectOption('nanogpt');
+    await page.waitForFunction(()=>document.getElementById('sr-retrieval-model').value==='Qwen/Qwen3-Embedding-0.6B');
+    assert.equal(store.settings.global.retrievalProvider,'nanogpt');
+    assert.equal(store.settings.global.retrievalModel,'Qwen/Qwen3-Embedding-0.6B','provider and model save together');
+    await page.locator('#sr-retrieval-key').fill('nano-test-secret');
+    await page.locator('#sr-retrieval-key-save').click();
+    await page.waitForFunction(()=>document.getElementById('sr-retrieval-key-status').textContent.includes('저장됨'));
+    assert.equal(retrievalSecrets.api_key_nanogpt,'nano-test-secret');
+    assert.doesNotMatch(JSON.stringify(store.settings),/nano-test-secret/,'the extension never persists the embedding key');
+    await page.locator('#sr-retrieval-test').click();
+    await page.waitForFunction(()=>document.getElementById('sr-retrieval-key-status').textContent.includes('연결 성공'));
+    await page.locator('#sr-retrieval-provider').selectOption('transformers');
+    await page.waitForFunction(()=>document.getElementById('sr-retrieval-key-status').textContent.includes('키 불필요'));
+    const jevBefore=requests.filter(request=>request.url.endsWith('/systemone')).length;
+    await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Hunter and Wade speak about family matters.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.equal(requests.filter(request=>request.url.endsWith('/systemone')).length-jevBefore,2,'normal scene still uses only the gate and main Jev calls');
+    assert.ok(requests.some(request=>request.url==='/api/vector/query'),'native vector search is used from the existing runtime');
+    assert.ok(store.chat.lastJudgment.characterTrace.some(person=>person.prefilterStats?.retrievalStatus==='ready'));
+    for(const width of [320,390]) {
+        await page.setViewportSize({width,height:850});
+        assert.equal(await page.locator('#scene-reader-dialog').evaluate(e=>e.scrollWidth>e.clientWidth+2),false,'search settings overflow at '+width);
+    }
+    await page.setViewportSize({width:390,height:850});
+    await page.locator('#sr-retrieval-test').scrollIntoViewIfNeeded();
+    await page.screenshot({path:path.join(root,'artifacts','retrieval-settings-mobile.png')});
     await page.locator('#sr-enabled').uncheck();
     await page.waitForFunction(()=>!JSON.stringify(mock.prompts).includes('Halloween week'));
     assert.equal(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),'','disabled extension removes world macro');
     assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>mock.errors),[]);
-    console.log('Browser passed: 4 viewport sizes × 4 tabs, character and world compile/save, seasonal context, live world selection, NSFW pause/resume injection, OOC, delete, clipboard.');
+    console.log('Browser passed: 4 viewport sizes × 4 tabs, character/world save, native vector retrieval, integrated key settings, two Jev calls, seasonal context, NSFW pause/resume, OOC, delete, clipboard.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

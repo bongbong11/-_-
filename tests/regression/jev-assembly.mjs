@@ -68,8 +68,8 @@ entry.recordBank=createRecordBank({entity_type:'npc',entity_name:'Lucas',records
 const plan=buildLiveCharacterPlan([entry],{canonicalOnly:true,transcript:'Lucas asks Anna about the password.',selected:[{is_user:true,name:'Anna',mes:'I may know it.'}],persona:{source:'Secret private user thoughts'}});
 assert.ok(plan[0].profileCandidates.length<=20);assert.ok(plan[0].profileCandidates.length<35);assert.equal(plan[0].sourceExcerpt,'');assert.equal(plan[0].personaReference,'');
 const questions=buildCharacterTurnQuestions(plan);assert.ok(!questions.character_0_response_direction);assert.ok(!questions.character_0_response_basis);
-const id=plan[0].profileCandidates.find(r=>r.rule===atom.rule).id, contextId=plan[0].contextCandidates[0].id;
-const resolved=resolveLiveCharacterPlan(plan,{character_0_presence:'active',character_0_profile_slot_1:id,character_0_profile_slot_2:id,character_0_context_slot_1:contextId,character_0_context_access_0:'none'});
+const recordIndex=plan[0].profileCandidates.findIndex(r=>r.rule===atom.rule), contextId=plan[0].contextCandidates[0].id;
+const resolved=resolveLiveCharacterPlan(plan,{character_0_presence:'active',[`character_0_record_${recordIndex}`]:'yes',character_0_context_slot_1:contextId,character_0_context_access_0:'none'});
 const injection=buildCharacterInjection(resolved);
 assert.match(injection.text,/knowledge=suspects/);assert.match(injection.text,/before confirmation/);assert.match(injection.text,/Do not treat unshared/);assert.doesNotMatch(injection.text,/Direction:/);assert.equal(resolved[0].profileIds.length,1);
 assert.equal(buildLiveCharacterPlan([{...entry,source:'changed'}],{canonicalOnly:true})[0].profileCandidates.length,0);
@@ -108,12 +108,12 @@ assert.match(buildInjection({settings:record({}).preferences,decisions:FALLBACKS
         seen.push(body);
         const answers={};
         for(const [key,q] of Object.entries(body.questions)) {
+            if(q.type==='noul'){answers[key]={type:'noul',noul:key==='character_0_record_0'||key.startsWith('character_need_')?0.9:0.1};continue;}
             let choice=Object.hasOwn(q.criteria,FALLBACKS[key])?FALLBACKS[key]:Object.keys(q.criteria)[0];
             if(key==='arrival_mode')choice='visit';
             if(key==='progress_need')choice='stalled';
             if(key==='basic_move')choice='dialogue';
             if(key==='character_0_presence')choice='active';
-            if(key==='character_0_profile_slot_1')choice=body.state.character_profiles.people[0].profileCandidates[0].id;
             if(key.startsWith('verification_'))choice='fulfilled';
             answers[key]={choice,confidence:0.95};
         }

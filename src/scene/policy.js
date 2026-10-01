@@ -143,3 +143,12 @@ export function applyCharacterPolicy(key, answer, judgmentStyle, allowedChoices)
     result.coordinatorFinal = result.effective;
     return result;
 }
+
+export function applyRecordRelevance(answer) {
+    const value = Number(answer?.noul);
+    const valid = answer?.type === 'noul' && Number.isFinite(value) && value >= 0 && value <= 1;
+    const selected = valid && value >= 0.5 ? 'yes' : 'no';
+    return { selected, effective: selected, policyEffective: selected, coordinatorFinal: selected,
+        certainty: valid ? value : 0, threshold: 0.5, adjusted: false,
+        policy: 'record_relevance', fallbackApplied: !valid, rule: valid ? '' : 'Jev 관련성 판정 누락·형식 오류' };
+}

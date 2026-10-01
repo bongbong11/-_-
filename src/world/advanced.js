@@ -45,7 +45,7 @@ export function storedWorldToJson(world) {
     return { format: 'scene-reader-world', version: world.advanced?.version ?? WORLD_BANK_VERSION, name: world.name, short_description: world.hint, fixed_rules: world.prompt, franchise: Boolean(world.franchise), calendar_topics: world.advanced?.calendar_topics || [], records: world.advanced?.records || [] };
 }
 
-export function worldCandidates(world, transcript, limit = 12) {
+export function worldCandidates(world, transcript, limit = 12, semanticIndices = []) {
     const records = world?.advanced?.version === WORLD_BANK_VERSION ? world.advanced.records || [] : [];
     const query = String(transcript || '').toLocaleLowerCase();
     const terms = new Set(query.match(/[\p{L}\p{N}]{3,}/gu) || []);
@@ -59,12 +59,17 @@ export function worldCandidates(world, transcript, limit = 12) {
         }
         return points;
     };
-    return records.map((record, index) => ({ record, index, score: score(record) }))
-        .sort((a, b) => b.score - a.score || a.index - b.index).slice(0, limit).map(item => item.record);
+    const ranked = records.map((record, index) => ({ record, index, score: score(record) }))
+        .sort((a, b) => b.score - a.score || a.index - b.index);
+    if (!semanticIndices.length) return ranked.slice(0, limit).map(item => item.record);
+    const selected = [], seen = new Set();
+    for (const index of semanticIndices.slice(0, Math.max(1, limit - 2))) if (records[index] && !seen.has(index)) { selected.push(records[index]); seen.add(index); }
+    for (const item of ranked) if (item.score > 0 && !seen.has(item.index) && selected.length < limit) { selected.push(item.record); seen.add(item.index); }
+    return selected;
 }
 
-export function addWorldQuestions(request, world, transcript) {
-    const candidates = worldCandidates(world, transcript);
+export function addWorldQuestions(request, world, transcript, semanticIndices = []) {
+    const candidates = worldCandidates(world, transcript, 12, semanticIndices);
     if (!candidates.length) return candidates;
     request.state.world_context = { name: String(world.name || ''), short_description: String(world.hint || '') };
     request.state.world_record_candidates = candidates.map(({ id, category, when, rule }) => ({ id, category, when, rule }));
@@ -79,7 +84,7 @@ export function addWorldQuestions(request, world, transcript) {
 
 export function selectedWorldRecords(world, candidates = [], answers = {}, failed = false) {
     if (!world?.advanced) return [];
-    return failed ? (world.advanced.records || []) : candidates.filter((_, index) => answers[`world_record_${index}`]?.choice === 'yes');
+    return failed ? [] : candidates.filter((_, index) => answers[`world_record_${index}`]?.choice === 'yes');
 }
 
 export function worldPayload(world, candidates = [], answers = {}, failed = false) {

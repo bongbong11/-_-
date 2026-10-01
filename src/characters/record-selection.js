@@ -2,9 +2,11 @@ import { currentRecords, recordBankIsCurrent } from './records.js';
 
 const words = text => new Set(String(text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) || []);
 const generic = value => /^(?:none|self|all|any|general|others|everyone|always|unconditional|n\/a|)$/i.test(String(value || '').trim());
-export function selectRecordCandidates(entry, transcript, {limit=20,maxChars=16000,stats=null}={}) {
+export function selectRecordCandidates(entry, transcript, {limit=20,maxChars=16000,stats=null,semanticIndices=[],categoryHints=[]}={}) {
     if (!recordBankIsCurrent(entry)) return [];
     const query=words(transcript), own=words([entry.name,...(entry.aliases || [])].join(' '));
+    const semanticRank=new Map(semanticIndices.map((index,rank)=>[index,rank]));
+    const hinted=new Set(categoryHints);
     const rank=currentRecords(entry).map((record,index)=>{
         const terms=words([record.target,record.when,record.rule,record.knowledge_domain,record.type].join(' '));
         let overlap=0;
@@ -13,14 +15,22 @@ export function selectRecordCandidates(entry, transcript, {limit=20,maxChars=160
         const ownTarget=generic(record.target) || String(record.target).toLowerCase()===entry.name.toLowerCase();
         const targetMatch=[...words(record.target)].some(term=>query.has(term) && !own.has(term));
         const conditionMatch=[...words(record.when)].some(term=>query.has(term) && !own.has(term));
-        return {record,index,score:overlap*3+(targetMatch?4:0)+(conditionMatch?3:0)+(broad?2:0)+(ownTarget?1:0)};
+        const lexical=overlap*3+(targetMatch?4:0)+(conditionMatch?3:0)+(broad?2:0)+(ownTarget?1:0);
+        const semantic=semanticRank.has(index) ? 16-Math.min(12,semanticRank.get(index)) : 0;
+        return {record,index,score:lexical+semantic+(hinted.has(record.type)?3:0),lexical,semantic};
     });
-    // Reserve variety instead of sending the whole bank or only one repeated topic.
     const sorted=rank.sort((a,b)=>b.score-a.score || a.index-b.index);
+    // Semantic hits lead, while a few lexical and broad anchors prevent one topic
+    // from hiding a relationship, role or boundary that the scene also needs.
     const diverse=[], types=new Set();
-    for(const item of sorted) if(!types.has(item.record.type)){types.add(item.record.type);diverse.push(item);}
+    for(const item of sorted) if((item.semantic || item.lexical) && !types.has(item.record.type) && diverse.length<4){types.add(item.record.type);diverse.push(item);}
+    const primary=semanticRank.size ? [
+        ...sorted.filter(item=>item.semantic).slice(0,Math.max(1,limit-4)),
+        ...sorted.filter(item=>item.lexical && !item.semantic).slice(0,3),
+        ...sorted.filter(item=>item.record.type==='core' && generic(item.record.when)).slice(0,1),
+    ] : sorted;
     const selected=[], seen=new Set();let used=0, excludedByChars=0;
-    for(const item of [...diverse,...sorted]) {
+    for(const item of [...primary,...diverse]) {
         if(seen.has(item.index) || selected.length>=limit) continue;
         seen.add(item.index);
         const size=JSON.stringify(item.record).length;
@@ -28,7 +38,7 @@ export function selectRecordCandidates(entry, transcript, {limit=20,maxChars=160
         used+=size;
         selected.push({...item.record,id:`record:${entry.id}:${item.index}`,kind:item.record.type,topic:item.record.knowledge_domain || 'none'});
     }
-    if(stats)Object.assign(stats,{storedCount:rank.length,candidateCount:selected.length,candidateChars:used,excludedByChars,excludedByLimit:Math.max(0,rank.length-selected.length-excludedByChars),limit,maxChars});
+    if(stats)Object.assign(stats,{storedCount:rank.length,candidateCount:selected.length,candidateChars:used,excludedByChars,excludedByLimit:Math.max(0,rank.length-selected.length-excludedByChars),semanticHits:semanticRank.size,limit,maxChars});
     return selected;
 }
 export function scopedRecordLine(name, record) {

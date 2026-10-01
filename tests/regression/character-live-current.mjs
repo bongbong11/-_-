@@ -23,11 +23,11 @@ function setup({style='balanced',advanced=false,impersonate=false}={}) {
         if(Object.hasOwn(body.state,'character_profiles'))seen.push(body);
         const answers={};
         for(const [key,q] of Object.entries(body.questions)) {
+            if(q.type==='noul') { answers[key]={type:'noul',noul:f.sandbox.replyMode==='none'?0.1:f.sandbox.replyMode==='unknown'?'invalid':0.85};continue; }
             let choice=Object.hasOwn(q.criteria,FALLBACKS[key])?FALLBACKS[key]:Object.keys(q.criteria)[0];
             if(key==='progress_need')choice='stalled';
             if(key==='basic_move')choice=style==='dynamic'?'action':'emotion';
             if(/^character_\d+_presence$/.test(key))choice=f.sandbox.replyMode==='absent'?'absent':'active';
-            if(/_profile_slot_/.test(key))choice=f.sandbox.replyMode==='none'?'none':f.sandbox.replyMode==='unknown'?'record:forged':Object.keys(q.criteria).find(id=>id!=='none');
             answers[key]={choice,confidence:0.95};
         }
         return {answers};
@@ -53,6 +53,7 @@ for(const style of ['static','balanced','dynamic']) for(const advanced of [false
     const judgment=JSON.parse(f.run('JSON.stringify(record().lastJudgment)'));
     assert.match(judgment.payload,/BASIC_DEVELOPMENT/);
     assert.match(judgment.payload,/CHARACTER_EXECUTION/);
+    assert.ok(req.questions.character_0_record_0?.instructions.includes('invitation is a trap'));
     for(const p of people) {
         assert.ok(judgment.payload.includes(`${p.name} suspects the invitation is a trap.`));
         const trace=judgment.characterTrace.find(t=>t.id===p.id);

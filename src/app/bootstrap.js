@@ -5,7 +5,8 @@ import { createSceneExecution } from '../scene/execution.js';
 import { createUiController } from '../ui/controller.js';
 import { migrateKnowledge, continuityView, assignContinuity } from '../storage/knowledge.js';
 import { readCharm, readCharacterLorebooks, mergeMemory, linkedCharacterBooks, memoryStatusText } from '../memory/context.js';
-import { FALLBACKS, applyPolicy, fixedDecision, applyCharacterPolicy } from '../scene/policy.js';
+import { FALLBACKS, applyPolicy, fixedDecision, applyCharacterPolicy, applyRecordRelevance } from '../scene/policy.js';
+import { createVectorRetrieval, RETRIEVAL_PROVIDERS } from '../retrieval/vectors.js';
 import { effectiveMap, overrideDecision, deriveDependentDecisions, coordinateDecisions, coordinateActionBudget, coordinateCharacterDecisions } from '../scene/coordinator.js';
 import { createDraws } from '../scene/draws.js';
 import { createResults } from '../ui/results.js';
@@ -27,7 +28,7 @@ import { activePendingCandidates, buildPendingCandidateQuestions, verifiedSecond
 import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, normalizeContinuity, selectContinuityContext, validateReasonerResult } from '../../continuity-engine.js';
 import { listConnectionProfiles, requestWithConnectionProfile } from '../../st-profile-reasoner.js';
 import { sha256Hex } from '../../security-utils.js';
-import { profileStatus, normalizeCharacterStore, selectActiveEntries, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
+import { profileStatus, normalizeCharacterStore, selectActiveEntries, addCharacterNeedsQuestions, characterCategoryHints, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
 
 import { createJobScope, createWriteQueue, StaleRunError } from '../app/jobs.js';
 import { messageSnapshot, firstChangedMessage, attachSelectedOutput } from '../input/message-identity.js';
@@ -68,6 +69,11 @@ const DEFAULTS = {
     ownerUnlocked: false,
     continuityEnabled: false,
     reasonerProfileId: '',
+    retrievalProvider: 'transformers',
+    retrievalModel: '',
+    retrievalVertexAuth: 'express',
+    retrievalVertexRegion: 'us-central1',
+    retrievalVertexProject: '',
 };
 
 const CHAT_DEFAULTS = {
@@ -102,6 +108,7 @@ const CHAT_DEFAULTS = {
 };
 
 let settings;
+const vectorRetrieval = createVectorRetrieval({ fetch: (...args) => fetch(...args), getRequestHeaders, getSettings: () => settings || DEFAULTS });
 let dialog;
 let judgeInFlight = false;
 let judgeCompletionPromise = Promise.resolve();
@@ -151,11 +158,18 @@ function getContext() {
 
 function stateChatKey() {
     const context = getContext();
-    const owner = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? 'unknown'}`;
+    const avatar = context.characters?.[context.characterId]?.avatar;
+    const owner = context.groupId ? `group:${context.groupId}` : avatar ? `character-avatar:${avatar}` : `character:${context.characterId ?? context.name2 ?? 'unknown'}`;
+    return `${owner}|chat:${context.chatId || 'unsaved'}`;
+}
+function legacyStateChatKey() {
+    const context=getContext();
+    const owner=context.groupId?`group:${context.groupId}`:`character:${context.characterId ?? context.name2 ?? 'unknown'}`;
     return `${owner}|chat:${context.chatId || 'unsaved'}`;
 }
 
 let {storagePost, loadReasonerProfiles, settingsSnapshot, saveServerSettings, saveServerChat, saveSession, saveCharacterStore, hydrateServerState, openStateDb, loadStateHistory, saveStateHistory, clearStateHistory} = createRepository({
+    get legacyStateChatKey() { return legacyStateChatKey; },
     get DEFAULTS() { return DEFAULTS; },
     get JEV_KEY_STORAGE() { return JEV_KEY_STORAGE; },
     get MODULE() { return MODULE; },
@@ -528,6 +542,10 @@ let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAss
 });
 
 let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalCandidates, sourceUserRpForOutput, postVerifiedCharacterOutput, registerSceneOpportunity, commitPriorVerification, commitContinuityCandidates, runJudge, executeJudge} = createSceneExecution({
+    get vectorRetrieval() { return vectorRetrieval; },
+    get addCharacterNeedsQuestions() { return addCharacterNeedsQuestions; },
+    get characterCategoryHints() { return characterCategoryHints; },
+    get applyRecordRelevance() { return applyRecordRelevance; },
     get CHARACTER_LIVE_SYSTEM() { return CHARACTER_LIVE_SYSTEM; },
     get FALLBACKS() { return FALLBACKS; },
     get JEV_MODEL() { return JEV_MODEL; },
@@ -676,6 +694,10 @@ async function testConnection() {
 }
 
 let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, saveCharacterEntry, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm} = createUiController({
+    get vectorRetrieval() { return vectorRetrieval; },
+    get RETRIEVAL_PROVIDERS() { return RETRIEVAL_PROVIDERS; },
+    get getRequestHeaders() { return getRequestHeaders; },
+    get fetch() { return (...args) => fetch(...args); },
     get NPC_CORE_SYSTEM() { return NPC_CORE_SYSTEM; },
     get suggestNpcAliases() { return suggestNpcAliases; },
     get parseNpcCore() { return parseNpcCore; },

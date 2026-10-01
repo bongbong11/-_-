@@ -12,7 +12,7 @@ out.mkdir(parents=True, exist_ok=True)
 runtime = sorted(root.glob('*.js')) + sorted((root/'src').rglob('*.js'))
 runtime += sorted((root/'src/vendor').rglob('sync.json'))
 runtime += [root/p for p in ['manifest.json','package.json','style.css','README.md','CHANGELOG.md']]
-plugin = [root/'server-plugin'/p for p in ['index.cjs','storage.cjs','package.json']]
+plugin = [root/'server-plugin'/p for p in ['index.cjs','storage.cjs','retrieval-cache.cjs','package.json']]
 for name, prefix, paths in [(f'scene-reader-sillytavern-v{version}.zip','scene-reader',runtime+plugin), (f'scene-reader-jev-plugin-v{plugin_version}.zip','scene-reader-jev',plugin)]:
     target=out/name
     with ZipFile(target,'w',ZIP_DEFLATED,compresslevel=9) as archive:
@@ -26,6 +26,12 @@ for name, prefix, paths in [(f'scene-reader-sillytavern-v{version}.zip','scene-r
         for file in paths:
             relative=file.relative_to(root/'server-plugin' if prefix.endswith('-jev') else root)
             assert archive.read((Path(prefix)/relative).as_posix())==file.read_bytes()
+        for file in plugin:
+            if file.suffix!='.cjs':continue
+            for spec in re.findall(r"require\(['\"](\.[^'\"]+)['\"]\)",file.read_text(encoding='utf-8')):
+                dependency=(file.parent/spec).resolve()
+                relative=dependency.relative_to(root/'server-plugin' if prefix.endswith('-jev') else root)
+                assert (Path(prefix)/relative).as_posix() in names, spec
         if prefix=='scene-reader':
             for file in runtime:
                 if file.suffix!='.js':continue

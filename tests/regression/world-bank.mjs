@@ -17,9 +17,11 @@ assert.deepEqual(request.state.world_context,{name:world.name,short_description:
 assert.ok(!JSON.stringify(request.state).includes('Physical limits apply.'),'the gate receives the short description, not the full world source');
 assert.equal(worldPayload(world,candidates,{world_record_0:{choice:'no'}}),'Physical limits apply.');
 assert.match(worldPayload(world,candidates,{world_record_0:{choice:'yes'}}),/Scope: Moonlight reaches the gate\.\nThe gate opens\./);
-assert.match(worldPayload(world,[],{},true),/Scope: Moonlight reaches the gate/,'failure retains conditions');
+assert.equal(worldPayload(world,[],{},true),'Physical limits apply.','failed selection applies fixed world rules only');
 const many={advanced:{version:1,records:Array.from({length:30},(_,i)=>({...raw.records[0],id:`W${i}`,keywords:[i===29?'needle':'other']}))}};
 assert.equal(worldCandidates(many,'needle').length,12);assert.equal(worldCandidates(many,'needle')[0].id,'W29');
+assert.equal(worldCandidates(many,'unrelated scene',12,[29])[0].id,'W29','embedding hit reaches world applicability check even without matching words');
+assert.equal(worldCandidates(many,'unrelated scene',12,[29]).length,1,'semantic retrieval does not fill a quota with unrelated rules');
 const worlds=allWorlds(BUILTIN_WORLDS,INITIAL_CUSTOM_WORLDS);
 for (const source of [...INITIAL_CUSTOM_WORLDS,...BUILTIN_WORLDS]) {
     const bank=worlds.find(w=>w.id===source.id);

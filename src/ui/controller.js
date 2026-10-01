@@ -48,6 +48,18 @@ function setFormValues() {
     const prefs = deps.preferences();
     const setValue = (id, value) => { const element = deps.document.getElementById(id); if (element) element.value = value; };
     const setChecked = (id, value) => { const element = deps.document.getElementById(id); if (element) element.checked = Boolean(value); };
+    const provider = deps.RETRIEVAL_PROVIDERS[deps.settings.retrievalProvider] ? deps.settings.retrievalProvider : 'transformers';
+    setValue('sr-retrieval-provider', provider);
+    setValue('sr-retrieval-model', deps.settings.retrievalModel || deps.RETRIEVAL_PROVIDERS[provider].model);
+    setValue('sr-retrieval-vertex-auth', deps.settings.retrievalVertexAuth || 'express');
+    setValue('sr-retrieval-vertex-region', deps.settings.retrievalVertexRegion || 'us-central1');
+    setValue('sr-retrieval-vertex-project', deps.settings.retrievalVertexProject || '');
+    const modelRow=deps.document.getElementById('sr-retrieval-model-row');
+    const vertexRow=deps.document.getElementById('sr-retrieval-vertex-row');
+    const keyRow=deps.document.getElementById('sr-retrieval-key-row');
+    if(modelRow)modelRow.hidden=provider==='transformers';
+    if(vertexRow)vertexRow.hidden=provider!=='vertexai';
+    if(keyRow)keyRow.hidden=provider==='transformers'||(provider==='vertexai'&&deps.settings.retrievalVertexAuth==='full');
     setValue('sr-world-direction', prefs.worldDirection);
     setValue('sr-relationship-direction', prefs.relationshipDirection);
     setChecked('sr-negative-priority', prefs.negativePriority);
@@ -474,6 +486,43 @@ async function saveGlobal(key, value) {
     catch (error) { if (deps.settings[key] === value) deps.settings[key] = previous; setFormValues(); throw error; }
 }
 
+async function saveRetrievalSettings(patch) {
+    deps.invalidateReasonerJobs();
+    const previous=Object.fromEntries(Object.keys(patch).map(key=>[key,deps.settings[key]]));
+    Object.assign(deps.settings,patch);
+    try { await deps.saveServerSettings(); deps.saveSettingsDebounced(); }
+    catch(error) {
+        for(const [key,value] of Object.entries(patch))if(deps.settings[key]===value)deps.settings[key]=previous[key];
+        setFormValues();
+        throw error;
+    }
+    deps.vectorRetrieval.clear();
+    const rec=deps.record(true);
+    rec.lastJudgment=null;
+    if(!rec.pendingPlan?.outputText)rec.pendingPlan=null;
+    await deps.persistChat();
+    await deps.clearInjection();
+    setFormValues();
+    deps.renderAll();
+}
+async function saveRetrievalSetting(key,value) { return saveRetrievalSettings({[key]:value}); }
+
+async function retrievalSecretState() {
+    const provider=deps.settings.retrievalProvider;
+    const secret=provider==='vertexai'&&deps.settings.retrievalVertexAuth==='full'?'vertexai_service_account_json':deps.RETRIEVAL_PROVIDERS[provider]?.secret;
+    const node=deps.document.getElementById('sr-retrieval-key-status');
+    if(!node)return;
+    if(!secret){node.textContent='로컬 검색 · 키 불필요';return;}
+    try {
+        const response=await deps.fetch('/api/secrets/read',{method:'POST',headers:deps.getRequestHeaders()});
+        if(!response.ok)throw new Error(`키 상태 확인 오류 (${response.status})`);
+        const state=await response.json();
+        node.textContent=state?.[secret]?.some?.(entry=>entry.active) ? 'SillyTavern 키 저장됨' :
+            provider==='vertexai'&&deps.settings.retrievalVertexAuth==='full' ? '서비스 계정 없음 · SillyTavern API 연결에서 등록하세요.' :
+                '키 없음 · 위에서 저장하거나 SillyTavern API 연결에서 설정하세요.';
+    } catch(error) {node.textContent=error.message;}
+}
+
 async function savePreference(key, value) {
     const rec = deps.record(true);
     deps.invalidateReasonerJobs();
@@ -529,6 +578,35 @@ async function endActiveEvent() {
 }
 
 function bindForm() {
+    deps.document.querySelector('.sr-retrieval-panel')?.addEventListener('toggle',event=>{if(event.target.open)void retrievalSecretState();});
+    deps.document.getElementById('sr-retrieval-provider')?.addEventListener('change',event=>deps.runUiTask((async()=>{
+        const provider=event.target.value;
+        if(!deps.RETRIEVAL_PROVIDERS[provider])throw new Error('검색 방식을 선택하세요.');
+        await saveRetrievalSettings({retrievalProvider:provider,retrievalModel:deps.RETRIEVAL_PROVIDERS[provider].model});
+        await retrievalSecretState();
+    })(),'검색 방식을 바꾸지 못했습니다.'));
+    deps.document.getElementById('sr-retrieval-model')?.addEventListener('change',event=>deps.runUiTask(saveRetrievalSetting('retrievalModel',event.target.value.trim()),'검색 모델을 저장하지 못했습니다.'));
+    for(const [id,key] of [['sr-retrieval-vertex-auth','retrievalVertexAuth'],['sr-retrieval-vertex-region','retrievalVertexRegion'],['sr-retrieval-vertex-project','retrievalVertexProject']])
+        deps.document.getElementById(id)?.addEventListener('change',event=>deps.runUiTask(saveRetrievalSetting(key,event.target.value.trim()).then(retrievalSecretState),'Vertex 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-retrieval-key-refresh')?.addEventListener('click',()=>deps.runUiTask(retrievalSecretState(),'키 상태를 확인하지 못했습니다.'));
+    deps.document.getElementById('sr-retrieval-key-save')?.addEventListener('click',()=>deps.runUiTask((async()=>{
+        const secret=deps.RETRIEVAL_PROVIDERS[deps.settings.retrievalProvider]?.secret;
+        const input=deps.document.getElementById('sr-retrieval-key');
+        const value=input?.value.trim();
+        if(!secret||!value)throw new Error('선택한 검색 서비스의 새 키를 입력하세요.');
+        const response=await deps.fetch('/api/secrets/write',{method:'POST',headers:deps.getRequestHeaders(),body:JSON.stringify({key:secret,value,label:'Scene Reader retrieval'})});
+        if(!response.ok)throw new Error(`SillyTavern 키 저장 오류 (${response.status})`);
+        input.value='';
+        deps.vectorRetrieval.clear();
+        await retrievalSecretState();
+        deps.window.toastr?.success?.('SillyTavern 키 저장소에 저장했습니다.','씬판독기');
+    })(),'검색 키를 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-retrieval-test')?.addEventListener('click',()=>deps.runUiTask((async()=>{
+        const node=deps.document.getElementById('sr-retrieval-key-status');
+        if(node)node.textContent='검색 연결 확인 중…';
+        try { const result=await deps.vectorRetrieval.test();if(node)node.textContent=result;deps.window.toastr?.success?.(result,'씬판독기'); }
+        catch(error){if(node)node.textContent=`연결 실패 · ${error.message}`;throw error;}
+    })(),'검색 연결 확인에 실패했습니다.'));
     bindCharacterTransfer(deps,{characterForm,invalidatePreparedJudgment,downloadJson,ensureLoreLoaded,captureCharacterError,showVersionEditor,showVersionPreview});
     const importCurrentSheet=async()=>{
         const kind=deps.characterEditorKind, context=deps.getContext();

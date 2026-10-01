@@ -17,7 +17,7 @@ for(const kind of ['character','persona','npc']) {
     const applied=applyRecordVersion(normalizeCharacterStore(JSON.parse(JSON.stringify(second.store))),group.id,older.id);
     assert.equal(applied.entry.appliedRecordVersion,older.id);
     const plan=buildLiveCharacterPlan([applied.entry],{canonicalOnly:true,transcript:'Lucas studies the invitation.'});
-    const resolved=resolveLiveCharacterPlan(plan,{character_0_presence:'active',character_0_profile_slot_1:plan[0].profileCandidates[0].id});
+    const resolved=resolveLiveCharacterPlan(plan,{character_0_presence:'active',character_0_record_0:'yes'});
     assert.match(buildCharacterInjection(resolved).text,/suspects the invitation is a trap/);
     assert.doesNotMatch(buildCharacterInjection(resolved).text,/doubts the invitation is genuine/);
     const deleted=deleteRecordVersion(applied.store,group.id,older.id);
