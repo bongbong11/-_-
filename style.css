@@ -337,3 +337,13 @@
     #scene-reader-dialog #sr-tab-flow.active { grid-template-columns: minmax(0, 1fr); }
     #scene-reader-dialog .sr-help { font-size: .8rem; line-height: 1.4; }
 }
+
+#scene-reader-dialog .sr-character-turn-card > .sr-character-card-heading { display:flex; align-items:baseline; gap:7px; cursor:pointer; list-style:none; font-weight:700; }
+#scene-reader-dialog .sr-character-card-heading::-webkit-details-marker { display:none; }
+#scene-reader-dialog .sr-character-card-heading::before { content:'▸'; flex:none; }
+#scene-reader-dialog .sr-character-turn-card[open] > .sr-character-card-heading::before { content:'▾'; }
+#scene-reader-dialog .sr-character-card-heading small { color:var(--SmartThemeEmColor); font-size:.76em; font-weight:500; }
+
+#scene-reader-dialog .sr-emotion-controls { display:flex; align-items:center; flex-wrap:wrap; gap:5px 8px; }
+#scene-reader-dialog .sr-emotion-controls .checkbox_label { flex:1 1 210px; margin:0; }
+#scene-reader-dialog #sr-emotion-now { flex:none; width:auto; margin:0; padding:4px 8px; min-height:30px; font-size:.8rem; }

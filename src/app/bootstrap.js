@@ -17,7 +17,7 @@ import { NPC_CORE_SYSTEM, parseNpcCore, deriveEnglishCore, suggestNpcAliases } f
 import { stateCollectorMode, stateRoster } from '../characters/state-collector.js';
 import { mainOutputStatePrompt, collectMainOutputState } from '../characters/state-main-output.js';
 import { collectProfileOutputState } from '../characters/state-profile-output.js';
-import { latestStateForChat, storeStateEvent, dropStateEventsFrom } from '../characters/state-contract.js';
+import { latestStateForChat, latestStateEventForChat, selectedStateSwipe, storeStateEvent, dropStateEventsFrom } from '../characters/state-contract.js';
 import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders, isStreamingEnabled } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
 import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, normalizeDevelopmentPreferences, PACE_OPTIONS, buildQuestions, buildInjection, buildPausedInjection } from '../../prompt-library.js';
@@ -149,48 +149,84 @@ let connectionRequestService = null;
 const reasonerJobs = new Map();
 let reasonerGeneration = 0;
 let pendingProfileStateCollection = Promise.resolve();
-let pendingProfileStateContext = null;
+const pendingProfileStateRequests = new Map();
+let profileStateSequence = 0;
 
 async function waitForProfileState() {
-    const pending = pendingProfileStateContext;
-    if (stateCollectorMode(record()?.preferences) === 'profile-output' && pending?.chatKey === stateChatKey() && pending.owner === record() && pending.owner.characterStateCapture === pending.capture) await pendingProfileStateCollection;
+    if (stateCollectorMode(record()?.preferences) !== 'profile-output') return;
+    const event = latestStateEventForChat(record(),getContext().chat,stableFingerprint);
+    const task = pendingProfileStateRequests.get(event?.capture?.requestId);
+    if (task) await task;
 }
 
 function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) {
     if (stateCollectorMode(record()?.preferences) !== 'profile-output' || !settings.enabled || !characterStore.enabled || !roster?.length || !text.trim()) return;
     const owner = record();
     const fingerprint = stableFingerprint(text);
+    const swipeId = selectedStateSwipe(getContext().chat?.[outputIndex]);
+    const existing = owner.characterStateEvents?.find(event => event.outputIndex===outputIndex && event.swipeId===swipeId && event.fingerprint===fingerprint);
+    const pending = pendingProfileStateRequests.get(existing?.capture?.requestId);
+    if (pending) return pending;
     const profileId = settings.reasonerProfileId;
-    const capture = { outputIndex, status:'collecting', count:0, source:'profile-output' };
+    const requestId = `${Date.now()}:${++profileStateSequence}`;
+    const capture = { outputIndex, swipeId, fingerprint, requestId, participantIds:roster.map(person=>person.id), status:'collecting', count:0, source:'profile-output' };
     owner.characterStateCapture = capture;
-    renderCharacterTurnResults();
+    storeStateEvent(owner,{outputIndex,swipeId,fingerprint,states:[],source:'profile-output',capture},STATE_HISTORY_LIMIT);
     const task = (async () => {
         if (!connectionRequestService) await loadReasonerProfiles();
         const result = await collectProfileOutputState({
             request: requestWithConnectionProfile, service: connectionRequestService,
             profileId, output: text, roster,
         });
-        if (chatKey !== stateChatKey() || record() !== owner || owner.characterStateCapture !== capture || !settings.enabled || !characterStore.enabled || stateCollectorMode(record()?.preferences) !== 'profile-output' || settings.reasonerProfileId !== profileId) return;
+        await waitForOutputChanges();
+        if (!pendingProfileStateRequests.has(requestId) || chatKey !== stateChatKey() || !settings.enabled || !characterStore.enabled || stateCollectorMode(record()?.preferences) !== 'profile-output' || settings.reasonerProfileId !== profileId) return;
+        const rec = record();
+        if (!rec?.characterStateEvents?.some(event=>event.capture?.requestId===requestId)) return;
         const message = getContext().chat?.[outputIndex];
-        if (!message || stableFingerprint(message.mes || '') !== fingerprint) return;
-        const rec = record(true);
-        rec.characterStateCapture = { outputIndex, status: result.error || (result.diagnostics?.rejected ? 'partial' : result.states.length ? 'collected' : 'empty'), count: result.states.length, source: 'profile-output', diagnostics: result.diagnostics || null };
-        if (result.states.length) storeStateEvent(rec, { outputIndex, fingerprint, states: result.states, source: 'profile-output' }, STATE_HISTORY_LIMIT, latestStateForChat(rec, getContext().chat.slice(0, outputIndex), stableFingerprint));
+        const selected = message && selectedStateSwipe(message) === swipeId;
+        const reply = selected ? message.mes : message?.swipes?.[swipeId];
+        if (typeof reply !== 'string' || stableFingerprint(reply) !== fingerprint) return;
+        const completed = {outputIndex,swipeId,fingerprint,participantIds:roster.map(person=>person.id),status:result.error || (result.diagnostics?.rejected ? 'partial' : result.states.length ? 'collected' : 'empty'),count:result.states.length,source:'profile-output',diagnostics:result.diagnostics || null};
+        if (selected) rec.characterStateCapture = completed;
+        storeStateEvent(rec,{outputIndex,swipeId,fingerprint,states:result.states,source:'profile-output',capture:completed},STATE_HISTORY_LIMIT,latestStateForChat(rec,getContext().chat.slice(0,outputIndex),stableFingerprint));
         await persistChat();
         if (chatKey === stateChatKey()) renderAll();
-    })().catch(error => console.warn('[씬판독기] 출력 상태 판독 실패', error?.message || error));
+    })().catch(error => console.warn('[씬판독기] 출력 상태 판독 실패', error?.message || error)).finally(()=>{ pendingProfileStateRequests.delete(requestId); if (chatKey===stateChatKey()) renderCharacterTurnResults(); });
     pendingProfileStateCollection = task;
-    pendingProfileStateContext = { chatKey, owner, capture };
+    pendingProfileStateRequests.set(requestId,task);
+    renderCharacterTurnResults();
+    return task;
+}
+
+async function collectCurrentEmotion() {
+    await waitForOutputChanges();
+    const rec=record();
+    if (!settings.enabled || !characterStore.enabled) throw new Error('씬판독기와 인물 판정을 먼저 켜 주세요.');
+    if (stateCollectorMode(rec?.preferences)!=='profile-output' || !settings.reasonerProfileId) throw new Error('확장 연결모델을 선택하고 감정 판정을 켜 주세요.');
+    if (rec?.lastJudgment?.sceneIntimacy?.route==='paused' || rec?.sceneIntimacy?.route==='paused') throw new Error('현재 장면에서는 감정 수집을 쉬고 있습니다.');
+    const chat=getContext().chat || [];
+    const outputIndex=chat.findLastIndex((message,index)=>!message.is_user && !message.is_system && !(rec.nonRpOutputIndices||[]).includes(index));
+    const text=String(chat[outputIndex]?.mes || '');
+    if (!text.trim()) throw new Error('감정을 읽을 롤플 답변이 없습니다.');
+    const entries=[...(characterStore.characters||[]),...(characterStore.npcs||[]),...(rec.preferences?.allowUserImpersonation && characterStore.persona?[characterStore.persona]:[])];
+    const judgment=rec.lastJudgment?.characterTrace?.length ? rec.lastJudgment : {characterTrace:entries.map(entry=>({id:entry.id,presence:'background'}))};
+    const roster=stateRoster(characterStore,rec.preferences,judgment);
+    if (!roster.length) throw new Error('감정을 읽을 참여 인물이 없습니다. 인물 기록과 판독 결과를 확인하세요.');
+    // Explicit refresh also invalidates any prepared judgment made with older values.
+    rec.characterStateRevision=(Number(rec.characterStateRevision)||0)+1;
+    await scheduleProfileStateCollection({chatKey:stateChatKey(),outputIndex,text,roster});
 }
 
 const {prepareProfiles, prepareStandardProfiles, prepareConflictProfiles} = createDraws(selectedWorld);
 let {decisionTitle, resultLabel, characterTurnLabel, renderCharacterTurnResults, renderJudgment, renderProfiles, renderStoredState, renderCharacterStore, renderCharacterAnalysisBrowser, renderBackups, renderReasonerProfiles, renderContinuity, renderAll} = createResults({document, getContext, record, ownerPrompt, escapeHtml,
     stableFingerprint,
+    isStateCapturePending: requestId => pendingProfileStateRequests.has(requestId),
     readState: () => ({settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload}),
     selectCharacter: value => {characterAnalysisSelection = value;},
 });
 
-function invalidateReasonerJobs() {
+function invalidateReasonerJobs({preserveProfileStates=false} = {}) {
+    if (!preserveProfileStates) pendingProfileStateRequests.clear();
     jobs.invalidate();
     reasonerGeneration += 1;
     reasonerJobs.delete(stateChatKey());
@@ -555,7 +591,7 @@ function restoreReversibleState(rec, snapshot) {
     rec.characterStateCapture = snapshot.characterStateCapture ? structuredClone(snapshot.characterStateCapture) : null;
 }
 
-let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection} = createOutputLifecycle({
+let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection, waitForOutputChanges} = createOutputLifecycle({
     get STATE_CAPTURE_KEY() { return STATE_CAPTURE_KEY; },
     get STATE_COLLECTOR_MODE() { return stateCollectorMode(record()?.preferences); },
     get stateRoster() { return stateRoster; },
@@ -762,6 +798,7 @@ async function testConnection() {
 }
 
 let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, characterEntries, showCharacterEditor, closeCharacterEditor, saveCharacterEntry, analyzeAndSaveCharacter, deleteCharacterEntry, downloadJson, saveGlobal, savePreference, saveInjectionMode, saveWorldInjectionMode, endActiveEvent, bindForm} = createUiController({
+    collectCurrentEmotion,
     get vectorRetrieval() { return vectorRetrieval; },
     get RETRIEVAL_PROVIDERS() { return RETRIEVAL_PROVIDERS; },
     get getRequestHeaders() { return getRequestHeaders; },

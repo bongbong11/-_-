@@ -1,5 +1,8 @@
+import { selectedStateSwipe } from '../characters/state-contract.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createOutputLifecycle(deps) {
+let outputChangePromise = Promise.resolve();
+async function waitForOutputChanges() { await outputChangePromise; }
 async function onCharacterMessageReceived(messageId) {
     const rec = deps.record();
     const cycleMode = deps.activeGenerationCycle?.mode || deps.generationMode || 'rp';
@@ -11,7 +14,12 @@ async function onCharacterMessageReceived(messageId) {
     // Remove recognizable metadata even if a generation was stopped or its roster
     // was cleared while the completed response was arriving.
     const collected = output && !output.is_user && !output.is_system ? deps.collectMainOutputState(output.mes, roster) : null;
-    if (collected?.found) output.mes = collected.text;
+    if (collected?.found) {
+        const raw = output.mes;
+        output.mes = collected.text;
+        const swipeId = selectedStateSwipe(output);
+        if (output.swipes?.[swipeId] === raw) output.swipes[swipeId] = collected.text;
+    }
     let captureChanged = false;
     if (rec && cycleMode === 'rp' && (!deps.activeGenerationCycle?.chatKey || deps.activeGenerationCycle.chatKey === deps.stateChatKey()) && output && !output.is_user && !output.is_system && stateCollectionPaused) {
         rec.characterStateCapture = { outputIndex, status:'paused', count:0, source:collectorMode };
@@ -22,13 +30,16 @@ async function onCharacterMessageReceived(messageId) {
             if (!String(output.mes || '').trim()) { result.states = []; result.error = 'empty_output'; }
             rec.characterStateCapture = { outputIndex, status: result.error || (result.diagnostics?.rejected ? 'partial' : result.states.length ? 'collected' : 'empty'), count: result.states.length, source: 'main-output', diagnostics: result.diagnostics || null };
             captureChanged = true;
-            if (!result.error && result.states.length) {
-                const fingerprint = deps.stableFingerprint(output.mes || '');
-                deps.storeStateEvent(rec, { outputIndex, fingerprint, states: result.states, source: 'main-output' }, 12, deps.latestStateForChat(rec, deps.getContext().chat.slice(0, outputIndex), deps.stableFingerprint));
-            }
         } else if (collectorMode === 'profile-output') {
             deps.scheduleProfileStateCollection({ chatKey: deps.stateChatKey(), outputIndex, text: String(output.mes || ''), roster });
         }
+    }
+    if (captureChanged) {
+        const fingerprint = deps.stableFingerprint(output.mes || '');
+        const swipeId = selectedStateSwipe(output);
+        Object.assign(rec.characterStateCapture, {fingerprint,swipeId});
+        deps.storeStateEvent(rec, {outputIndex,fingerprint,swipeId,states:stateCollectionPaused || collected?.error ? [] : collected?.states || [],source:collectorMode,capture:rec.characterStateCapture},12,deps.latestStateForChat(rec,deps.getContext().chat.slice(0,outputIndex),deps.stableFingerprint));
+        deps.renderAll();
     }
     deps.messageSnapshots.set(deps.stateChatKey(), deps.messageSnapshot(deps.getContext().chat));
     if (!deps.settings.enabled || cycleMode === 'disabled') { deps.pendingGenerationType = ''; if (captureChanged) await deps.persistChat(); return; }
@@ -81,7 +92,7 @@ async function onUserMessageSent(messageId) {
 }
 
 async function rollbackChangedOutput(messageId, kind = 'changed') {
-    deps.invalidateReasonerJobs();
+    deps.invalidateReasonerJobs({preserveProfileStates:kind === 'swiped'});
     const currentRecord = deps.record();
     const rec = currentRecord ? structuredClone(currentRecord) : null;
     if (!rec) return;
@@ -96,8 +107,8 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     deps.messageSnapshots.set(chatKey, currentMessages);
     if (!Number.isInteger(index)) return;
     const previousStateCount = rec.characterStateEvents?.length || 0;
-    const preservedSwipeStates = ['swiped', 'regenerated'].includes(kind) ? (rec.characterStateEvents || []).filter(item => item.outputIndex === index) : [];
-    if (!['swiped', 'regenerated'].includes(kind)) deps.dropStateEventsFrom(rec, index);
+    if (!['swiped', 'regenerated'].includes(kind)) deps.dropStateEventsFrom(rec, index, kind === 'edited' ? selectedStateSwipe(deps.getContext().chat?.[index]) : null);
+    const preservedSwipeStates = ['swiped', 'regenerated', 'edited'].includes(kind) ? (rec.characterStateEvents || []).filter(item => item.outputIndex === index) : [];
     if (rec.characterStateCapture?.outputIndex >= index) rec.characterStateCapture = null;
     const stateEventsChanged = (rec.characterStateEvents?.length || 0) !== previousStateCount;
     if ((rec.nonRpOutputIndices || []).includes(index)) {
@@ -131,6 +142,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     if (affected < 0) {
         const pendingAffected = rec.pendingPlan && Number(rec.pendingPlan.outputIndex ?? rec.pendingPlan.chatCount) >= index;
         if (!pendingAffected) {
+            if (kind === 'swiped') { await deps.saveSession(chatKey, rec, history); deps.renderAll(); return; }
             if (kind === 'edited' || sceneGateAffected || stateEventsChanged) { rec.lastJudgment = null; await clearInjection(); await deps.saveSession(chatKey, rec, history); deps.renderAll(); }
             return;
         }
@@ -195,8 +207,9 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
 }
 
 async function onAssistantOutputChanged(messageId, kind) {
-    const index = Number(messageId);
-    await rollbackChangedOutput(messageId, kind);
+    const task = outputChangePromise.then(() => rollbackChangedOutput(messageId, kind));
+    outputChangePromise = task.catch(() => {});
+    await task;
 }
 
 async function applyStoredInjection({ exactSnapshot = false } = {}) {
@@ -237,5 +250,5 @@ async function clearInjection() {
 }
 
 
-return {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection};
+return {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection, waitForOutputChanges};
 }

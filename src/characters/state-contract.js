@@ -120,14 +120,21 @@ export function normalizeProfileStates(value, roster) {
     return parseProfileStates(value,roster).states;
 }
 
-export function latestStateForChat(record, chat, fingerprint = null) {
+export const selectedStateSwipe = message => Number.isInteger(message?.swipe_id) ? message.swipe_id : 0;
+
+export function latestStateEventForChat(record, chat, fingerprint = null) {
     const messages = Array.isArray(chat) ? chat : [];
     let latestIndex = -1;
     for (let index = messages.length - 1; index >= 0; index--) {
         if (!messages[index]?.is_user && !messages[index]?.is_system && !(record?.nonRpOutputIndices || []).includes(index)) { latestIndex = index; break; }
     }
-    const event = (record?.characterStateEvents || []).findLast(item => item.outputIndex === latestIndex && (!fingerprint || item.fingerprint === fingerprint(messages[latestIndex]?.mes || '')));
-    return event?.states || [];
+    const message = messages[latestIndex];
+    const matches = (record?.characterStateEvents || []).filter(item => item.outputIndex === latestIndex && (!fingerprint || item.fingerprint === fingerprint(message?.mes || '')));
+    return matches.findLast(item => item.swipeId === selectedStateSwipe(message)) || matches.findLast(item => item.swipeId == null) || null;
+}
+
+export function latestStateForChat(record, chat, fingerprint = null) {
+    return latestStateEventForChat(record, chat, fingerprint)?.states || [];
 }
 
 export function stateForEntry(state, entry) {
@@ -152,10 +159,14 @@ export function storeStateEvent(record, event, limit = 12, previousStates = null
         }
         return { ...state, changes: previousStates === null && state.changes ? state.changes : changes };
     });
-    record.characterStateEvents = [...prior.filter(item => item.outputIndex !== event.outputIndex || item.fingerprint !== event.fingerprint), { ...event, states }].slice(-limit);
+    const events = [...prior.filter(item => item.outputIndex !== event.outputIndex || (event.swipeId == null ? item.fingerprint !== event.fingerprint : item.swipeId !== event.swipeId)), { ...event, states }];
+    // Bound the recovery window by message positions, not by alternative replies.
+    // Rerolling one message must not evict its other selectable swipes.
+    const retained = new Set([...new Set(events.map(item => item.outputIndex))].sort((a,b)=>b-a).slice(0,limit));
+    record.characterStateEvents = events.filter(item => retained.has(item.outputIndex));
 }
 
-export function dropStateEventsFrom(record, index) {
+export function dropStateEventsFrom(record, index, editedSwipe = null) {
     if (!record || !Array.isArray(record.characterStateEvents)) return;
-    record.characterStateEvents = record.characterStateEvents.filter(item => item.outputIndex < index);
+    record.characterStateEvents = record.characterStateEvents.filter(item => item.outputIndex < index || (editedSwipe !== null && item.outputIndex === index && item.swipeId != null && item.swipeId !== editedSwipe));
 }

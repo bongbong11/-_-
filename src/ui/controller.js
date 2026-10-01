@@ -1,3 +1,4 @@
+import { latestStateEventForChat } from '../characters/state-contract.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 // User actions and form state; dependencies are explicit and supplied by the application.
 import { debugReportText } from './debug-report.js';
@@ -9,6 +10,7 @@ import { openPersonPreview } from './person-preview.js';
 import { WORLD_COMPILER_PROMPT, parseAdvancedWorld, advancedWorldToStored, storedWorldToJson } from '../world/advanced.js';
 import { SEASONAL_OPTIONS } from '../world/seasonal.js';
 export function createUiController(deps) {
+const selectedStateCapture = () => latestStateEventForChat(deps.record(),deps.getContext().chat || [],deps.stableFingerprint)?.capture || null;
 let characterEditorRevision = 0;
 let editorLore = [];
 let availableEditorLore = [];
@@ -93,6 +95,8 @@ function setFormValues() {
     setChecked('sr-auto', deps.settings.autoJudge);
     setChecked('sr-user-impersonation', prefs.allowUserImpersonation);
     setChecked('sr-profile-emotion', prefs.profileEmotionJudgment);
+    const emotionNow=deps.document.getElementById('sr-emotion-now');
+    if(emotionNow) emotionNow.hidden=!prefs.profileEmotionJudgment;
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) { setChecked(id, MEMORY_REFERENCE_ENABLED && prefs[key]); const input = deps.document.getElementById(id); if (input) input.disabled = !MEMORY_REFERENCE_ENABLED; }
     setChecked('sr-continuity-enabled', deps.settings.continuityEnabled);
     deps.renderReasonerProfiles();
@@ -650,7 +654,7 @@ function bindForm() {
             rawJevAnswers: frame?.answers || judgment.rawChoices,
             worldSelection: judgment.worldSelection, worldGate: frame?.worldGate,
             decisions: judgment.details, actionPlan: judgment.actionPlan, rolls: judgment.rolls,
-            verification: judgment.priorVerification, characterStateCapture: deps.record()?.characterStateCapture || null,
+            verification: judgment.priorVerification, characterStateCapture: selectedStateCapture(),
             finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
         }, deps.ownerPrompt());
         preview.hidden = false;
@@ -678,7 +682,7 @@ function bindForm() {
         const report = { tab, judgedAt: judgment.judgedAt, model: judgment.model,
             jevOriginalChoices: Object.fromEntries(Object.entries(judgment.rawChoices || {}).filter(([key]) => related(key))), decisions: details,
             actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification,
-            ...(tab==='characters'?{characterStateCapture:deps.record()?.characterStateCapture||null}:{}), };
+            ...(tab==='characters'?{characterStateCapture:selectedStateCapture()}:{}), };
         await deps.copyText(JSON.stringify(report, null, 2));
         deps.window.toastr?.success?.('판정 원선택과 최종 조정 결과를 복사했습니다.', '씬판독기');
     })()));
@@ -1051,12 +1055,22 @@ function bindForm() {
         await deps.clearInjection(); await deps.persistChat(); deps.renderAll();
     })(), '인물 판정 설정을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-user-impersonation')?.addEventListener('change', event => deps.runUiTask(savePreference('allowUserImpersonation', event.target.checked), '사칭 허용 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-emotion-now')?.addEventListener('click', event => {
+        const button=event.currentTarget;
+        if(button.disabled)return;
+        button.disabled=true; button.textContent='판독 중…';
+        deps.runUiTask((async()=>{
+            try { await deps.collectCurrentEmotion(); }
+            finally { button.disabled=false; button.textContent='지금 감정 판독'; }
+        })(),'감정을 판독하지 못했습니다.');
+    });
     deps.document.getElementById('sr-profile-emotion')?.addEventListener('change', event => deps.runUiTask((async () => {
         if (event.target.checked && !deps.settings.reasonerProfileId) {
             event.target.checked = false;
             throw new Error('설정 → 모델 연결에서 연결 프로필을 먼저 선택하세요.');
         }
         await savePreference('profileEmotionJudgment', event.target.checked);
+        setFormValues();
     })(), '감정 판정 방식을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-character-volume')?.addEventListener('change', event => deps.runUiTask(savePreference('characterVolume', event.target.value), '인물 주입량 설정을 저장하지 못했습니다.'));
     for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) deps.document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));

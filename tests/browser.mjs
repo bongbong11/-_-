@@ -230,7 +230,9 @@ try{
     await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter opens the door.\n[[SR_STATE]]\nc0 | a:38% | c=60 | anger25\n[[/SR_STATE]]\n<Scene_Info>Time: 14:08</Scene_Info>'});await mock.emit('MESSAGE_RECEIVED',1);mock.chat.push({is_user:true,mes:'(oOc: Explain.)',extra:{ooc_chat:true,ooc_instruction:'fixed wrapper'}});await mock.emit('MESSAGE_SENT',2);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.equal(await page.evaluate(()=>mock.chat[1].mes),'Hunter opens the door.\n<Scene_Info>Time: 14:08</Scene_Info>','state notation is normalized and metadata removed while preset info remains intact');
     assert.equal(store.chat.characterStateEvents?.[0]?.states?.[0]?.values?.a,38,'state stored outside the chat message');
+    assert.equal(await page.locator('.sr-character-turn-card').first().evaluate(card=>card.open),false,'person results start collapsed');
     await page.locator('[data-sr-tab="characters"]').click();
+    if (!(await page.locator('.sr-character-turn-card').first().evaluate(card=>card.open))) await page.locator('.sr-character-turn-card > summary').first().click();
     await page.locator('.sr-character-card-tabs [data-character-card-view="emotion"]').first().click();
     assert.match(await page.locator('.sr-character-card-body:visible').first().textContent(),/충동\s*38%/,'current output emotion is visible without another Jev judgment');
     await page.locator('.sr-character-turn-card').first().screenshot({path:path.join(root,'artifacts','character-emotion-mobile.png')});
@@ -578,6 +580,7 @@ try{
     await page.screenshot({path:path.join(root,'artifacts','retrieval-settings-mobile.png')});
     await page.locator('[data-sr-tab="characters"]').click();
     await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter pauses.\n[[SR_STATE]]C0|a38[[/SR_STATE]]\n<Scene_Info>Time: 14:09</Scene_Info>'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
+    if (!(await page.locator('.sr-character-turn-card').first().evaluate(card=>card.open))) await page.locator('.sr-character-turn-card > summary').first().click();
     await page.locator('.sr-character-card-tabs [data-character-card-view="emotion"]').first().click();
     assert.match(await page.locator('.sr-character-card-body:visible').first().textContent(),/필수 수치 누락/,'failed metadata explains the cause on the emotion tab');
     assert.deepEqual(store.chat.characterStateCapture.diagnostics.reasons,['missing_fields']);
@@ -585,6 +588,8 @@ try{
     // Exercise the actual background collector through UI, output hooks and storage.
     await page.locator('[data-sr-tab="characters"]').click();
     await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-profile-emotion').check()]);
+    assert.equal(await page.locator('#sr-emotion-now').isVisible(),true,'manual emotion button is shown only in profile mode');
+    assert.match(await page.locator('.sr-emotion-controls').textContent(),/확장 연결모델/);
     await page.evaluate(async()=>{mock.streamingEnabled=true;await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','profile mode never asks the RP model for metadata, including streaming');
     await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter closes the door, angry about the delay.'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
@@ -600,22 +605,46 @@ try{
     await page.waitForFunction(()=>document.querySelector('#sr-character-turn-results')?.textContent.includes('45%'));
     assert.equal(store.chat.characterStateCapture.status,'collected');
     assert.ok(store.chat.characterStateEvents.some(event=>event.outputIndex===profileOutputIndex&&event.states[0].values.anger===45));
+    // The manual button reuses a pending request and replaces this reply's values.
+    const jevBeforeEmotion=requests.filter(request=>request.url.endsWith('/systemone')).length;
+    await page.locator('#sr-emotion-now').click();
+    await page.waitForFunction(()=>mock.profileStateRequests.length===2);
+    assert.equal(await page.locator('#sr-emotion-now').isDisabled(),true);
+    const manualRequest=await page.evaluate(()=>JSON.parse(mock.profileStateRequests[1].messages[1].content));
+    assert.equal(manualRequest.output,'Hunter closes the door, angry about the delay.');
+    await page.locator('#sr-emotion-now').evaluate(button=>button.click());
+    assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),2,'double clicks never duplicate collection');
+    await page.evaluate(()=>{const people=JSON.parse(mock.profileStateRequests[1].messages[1].content).people;const npc=people.find(person=>!person.trackArousal);mock.profileStateRequests[1].resolve({content:JSON.stringify({states:[{code:'C0',a:20,c:80,anger:35},...(npc?[{code:npc.code}]:[])]})});});
+    await page.waitForFunction(()=>!document.querySelector('#sr-emotion-now').disabled);
+    assert.match(await page.locator('#sr-character-turn-results').textContent(),/35%/);
+    assert.equal(requests.filter(request=>request.url.endsWith('/systemone')).length,jevBeforeEmotion,'manual emotion collection makes no Jev call');
+    assert.equal(store.chat.characterStateEvents.filter(event=>event.outputIndex===profileOutputIndex).length,1,'manual recheck replaces rather than appends');
+    const neutralNpc=manualRequest.people.find(person=>!person.trackArousal);
+    assert.ok(neutralNpc,'browser scenario includes a moods-only NPC');
+    const neutralCard=page.locator('.sr-character-turn-card').filter({has:page.locator('summary', {hasText:neutralNpc.name})}).first();
+    if(!(await neutralCard.evaluate(card=>card.open)))await neutralCard.locator(':scope > summary').click();
+    await neutralCard.locator('[data-character-card-view=emotion]').click();
+    assert.equal(await neutralCard.locator('.sr-emotion-row').count(),4,'neutral NPC displays all four zero mood bars');
+    assert.ok((await neutralCard.locator('.sr-emotion-row strong').allTextContents()).every(text=>text==='0%'));
+    await neutralCard.locator(':scope > summary').click();
+    await page.locator('.sr-emotion-controls').screenshot({path:path.join(root,'artifacts','emotion-manual-mobile.png')});
     // A later request must not revive state after a reply is edited or reset.
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Hunter considers the next step.'});await mock.emit('MESSAGE_SENT',mock.chat.length-1);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);mock.chat.push({is_user:false,mes:'Hunter waits quietly.'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
-    assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),2);
+    assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),3);
     const editedIndex=await page.evaluate(()=>mock.chat.length-1);
-    await page.evaluate(async()=>{mock.chat.at(-1).mes='Hunter leaves calmly.';await mock.emit('MESSAGE_EDITED',mock.chat.length-1);mock.profileStateRequests[1].resolve({content:JSON.stringify({states:[{code:'C0',a:20,c:80,anger:90}]})});});
+    await page.evaluate(async()=>{mock.chat.at(-1).mes='Hunter leaves calmly.';await mock.emit('MESSAGE_EDITED',mock.chat.length-1);mock.profileStateRequests[2].resolve({content:JSON.stringify({states:[{code:'C0',a:20,c:80,anger:90}]})});});
     await page.evaluate(async()=>{await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.ok(!store.chat.characterStateEvents.some(event=>event.outputIndex===editedIndex),'edited response rejects late state');
     await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter returns to the room.'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
-    assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),3);
+    assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),4);
     await page.locator('#sr-settings-button').click();
     await Promise.all([page.waitForResponse(response=>response.url().endsWith('/transaction')),page.locator('#sr-reset-npc').click()]);
-    await page.evaluate(()=>mock.profileStateRequests[2].resolve({content:JSON.stringify({states:[{code:'C0',a:20,c:80,anger:90}]})}));
+    await page.evaluate(()=>mock.profileStateRequests[3].resolve({content:JSON.stringify({states:[{code:'C0',a:20,c:80,anger:90}]})}));
     await page.evaluate(async()=>{await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.deepEqual(store.chat.characterStateEvents,[],'reset cannot be undone by a late background response');
     await page.locator('[data-sr-tab="characters"]').click();
     await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-profile-emotion').uncheck()]);
+    assert.equal(await page.locator('#sr-emotion-now').isVisible(),false);
     await page.evaluate(async()=>{mock.streamingEnabled=false;await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
     assert.ok(await page.evaluate(()=>mock.prompts['scene-reader-state-capture'].length>0),'turning the option off restores main-model collection');
     await page.locator('#sr-settings-button').click();

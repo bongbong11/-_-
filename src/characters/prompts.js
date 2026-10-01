@@ -27,5 +27,5 @@ export const ACCESS_CHOICES = {
 export const PRESENCE_CHOICES = {
     absent: 'No meaningful role in the next response.',
     background: 'Present or continuity-relevant, but not taking part in the current interaction.',
-    active: 'Taking part in the current interaction through speech, thought, choice, action, refusal, or response; a separate new plot beat is unnecessary.',
+    active: 'Taking part in the current interaction through speech, their own viewpoint thought, choice, action, refusal, or response. Current incoming texts, chat messages and phone-call replies count as direct participation even from another location; being remembered or imagined by someone else does not. A separate new plot beat is unnecessary.',
 };
