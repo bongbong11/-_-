@@ -20,7 +20,7 @@ async function onCharacterMessageReceived(messageId) {
         if (collectorMode === 'main-output' && deps.activeGenerationCycle?.stateCaptureEnabled) {
             const result = collected;
             if (!String(output.mes || '').trim()) { result.states = []; result.error = 'empty_output'; }
-            rec.characterStateCapture = { outputIndex, status: result.error || 'collected', count: result.states.length, source: 'main-output' };
+            rec.characterStateCapture = { outputIndex, status: result.error || (result.diagnostics?.rejected ? 'partial' : result.states.length ? 'collected' : 'empty'), count: result.states.length, source: 'main-output', diagnostics: result.diagnostics || null };
             captureChanged = true;
             if (!result.error && result.states.length) {
                 const fingerprint = deps.stableFingerprint(output.mes || '');

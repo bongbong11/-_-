@@ -3,85 +3,121 @@ export const STATE_CLOSE = '[[/SR_STATE]]';
 export const STATE_MOODS = Object.freeze(['anger', 'joy', 'fear', 'sadness']);
 const FIELD_NAMES = new Set(['a', 'c', ...STATE_MOODS]);
 
-function percentage(value) {
-    if (!/^\d{1,3}$/.test(String(value))) return null;
-    const number = Number(value);
-    return number <= 100 ? number : null;
+const FIELD_ALIASES = { a:'a', arousal:'a', sexualarousal:'a', c:'c', selfcontrol:'c' };
+const fieldName = value => {
+    const key = String(value).toLowerCase().replace(/[ _-]/g, '');
+    return FIELD_ALIASES[key] || key;
+};
+function findPerson(code, roster) {
+    const label = String(code || '').trim();
+    const byCode = roster.find(item => item.code.toLowerCase() === label.toLowerCase());
+    if (byCode) return byCode;
+    const matches = roster.filter(item => item.id === label || item.name?.toLowerCase() === label.toLowerCase());
+    return matches.length === 1 ? matches[0] : null;
 }
-
-function stateFor(code, fields, roster) {
-    const person = roster.find(item => item.code === code);
-    if (!person || !Array.isArray(fields)) return null;
+function stateFor(code, fields, roster, reject = () => null) {
+    const person = findPerson(code, roster);
+    if (!person) return reject('unknown_person');
     const values = { anger: 0, joy: 0, fear: 0, sadness: 0 };
     const targets = {};
     const seen = new Set();
     for (const field of fields) {
-        const match = /^([a-z]+)(\d{1,3})(?:@([\p{L}\p{N} .'_-]{1,64}))?$/iu.exec(String(field).trim());
-        if (!match || !FIELD_NAMES.has(match[1]) || seen.has(match[1])) return null;
-        const number = percentage(match[2]);
-        if (number === null) return null;
-        if ((match[1] === 'a' || match[1] === 'c') && !person.trackArousal) return null;
-        seen.add(match[1]);
-        values[match[1]] = number;
-        if (match[3] && match[1] !== 'c') targets[match[1]] = match[3].trim();
+        const match = /^([a-z_]+(?:[ -][a-z]+)*)\s*(?:[:=]\s*)?(\d{1,3}(?:\.0+)?)\s*%?\s*(?:@\s*([\p{L}\p{N} .'_-]{1,64}))?$/iu.exec(String(field).trim());
+        if (!match) return reject('field_format');
+        const key = fieldName(match[1]);
+        if (!FIELD_NAMES.has(key)) return reject('unknown_field');
+        if (seen.has(key)) return reject('duplicate_field');
+        const number = Number(match[2]);
+        if (number > 100) return reject('out_of_range');
+        if ((key === 'a' || key === 'c') && !person.trackArousal) return reject('disabled_field');
+        seen.add(key);
+        values[key] = number;
+        if (match[3] && key !== 'c') targets[key] = match[3].trim();
     }
-    if (person.trackArousal && (!seen.has('a') || !seen.has('c'))) return null;
+    if (person.trackArousal && (!seen.has('a') || !seen.has('c'))) return reject('missing_fields');
     if (!person.trackArousal) { delete values.a; delete values.c; }
     return { id: person.id, values, targets };
 }
-
-export function parseStateLines(block, roster) {
-    const lines = String(block || '').trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    if (!lines.length || lines.length > roster.length || lines.some(line => line.length > 320)) return null;
-    const states = [];
-    const seen = new Set();
-    for (const line of lines) {
-        const [code, ...fields] = line.split('|');
-        if (seen.has(code)) return null;
-        const state = stateFor(code, fields, roster);
-        if (!state) return null;
-        states.push(state);
-        seen.add(code);
+function readRows(rows, roster, format) {
+    const diagnostics = { format, received: rows.length, accepted: 0, rejected: 0, reasons: [] };
+    const reason = value => { if (!diagnostics.reasons.includes(value)) diagnostics.reasons.push(value); return null; };
+    if (rows.length > 24) return { states: [], diagnostics: {...diagnostics, rejected: rows.length, reasons:['too_many_rows']} };
+    const seen = new Set(), blocked = new Set(), states = [];
+    for (const {code, fields, invalid} of rows) {
+        const person = findPerson(code, roster);
+        if (person && seen.has(person.id)) {
+            blocked.add(person.id); reason('duplicate_person'); continue;
+        }
+        if (person) seen.add(person.id);
+        const state = invalid ? reason(invalid) : stateFor(code, fields, roster, reason);
+        if (state) states.push(state);
     }
-    return states;
+    const accepted = states.filter(state => !blocked.has(state.id));
+    diagnostics.accepted = accepted.length;
+    diagnostics.rejected = rows.length - accepted.length;
+    return { states: accepted, diagnostics };
+}
+export function parseProfileStates(value, roster) {
+    const rows = Array.isArray(value) ? value : value && typeof value === 'object' ? [value] : null;
+    if (!rows) return {states:[],diagnostics:{format:'json',received:0,accepted:0,rejected:0,reasons:['json_format']}};
+    return readRows(rows.map(item => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return {invalid:'json_format'};
+        const code = item.code ?? item.id ?? item.name;
+        const values = item.values && typeof item.values === 'object' ? item.values : item;
+        const person = findPerson(code,roster);
+        const fields = Object.entries(values).filter(([key]) => FIELD_NAMES.has(fieldName(key)))
+            .filter(([key]) => person?.trackArousal || !['a','c'].includes(fieldName(key)))
+            .map(([key,value]) => `${fieldName(key)}${value}${item.targets?.[key] ? `@${item.targets[key]}` : ''}`);
+        return {code,fields};
+    }), roster, 'json');
+}
+export function parseStateData(block, roster) {
+    let content = String(block || '').trim();
+    content = content.replace(/^```[a-z0-9_-]*\s*\n([\s\S]*?)\n```$/i,'$1').trim();
+    if (/^[{[]/.test(content)) {
+        try { const value = JSON.parse(content); return parseProfileStates(value?.states ?? value,roster); }
+        catch { return {states:[],diagnostics:{format:'json',received:0,accepted:0,rejected:0,reasons:['json_format']}}; }
+    }
+    const lines = content.split(/\r?\n|;\s*(?=C\d+\s*\|)/i).map(line => line.trim()).filter(Boolean);
+    return readRows(lines.map(line => {
+        const [code,...fields] = line.replace(/^\|\s*|\s*\|$/g,'').split('|');
+        return {code,fields,invalid:line.length > 640 ? 'too_long' : ''};
+    }),roster,'lines');
+}
+export function parseStateLines(block, roster) {
+    const result = parseStateData(block,roster);
+    return result.states.length ? result.states : null;
 }
 
 // The whole tail is removed if the closing delimiter is missing. A malformed
 // metadata block must never become part of the displayed or saved RP text.
 export function extractStateBlock(raw, roster) {
     const source = String(raw || '');
-    const start = source.indexOf('[[SR_');
+    const start = source.search(/\[\[\s*SR_/i);
     if (start < 0) return { text: source, states: [], found: false, error: 'missing' };
-    const cleanText = source.slice(0, start).trimEnd();
-    if (!source.startsWith(STATE_OPEN, start)) return { text: cleanText, states: [], found: true, error: 'opening' };
-    const end = source.indexOf(STATE_CLOSE, start + STATE_OPEN.length);
-    if (end < 0) return { text: cleanText, states: [], found: true, error: 'closing' };
-    const trailing = source.slice(end + STATE_CLOSE.length).trim();
-    if (trailing || source.indexOf(STATE_OPEN, end + STATE_CLOSE.length) >= 0) return { text: cleanText, states: [], found: true, error: 'trailing' };
-    const states = parseStateLines(source.slice(start + STATE_OPEN.length, end), roster);
-    return { text: cleanText, states: states || [], found: true, error: states ? '' : 'format' };
+    let before = source.slice(0, start);
+    const fence = /(?:^|\r?\n)[ \t]*```[a-z0-9_-]*[ \t]*\r?\n[ \t]*$/i.exec(before);
+    if (fence) before = before.slice(0, fence.index);
+    const opening = /^\[\[\s*SR_STATE\s*\]\]/i.exec(source.slice(start));
+    if (!opening) return { text: before.trimEnd(), states: [], found: true, error: 'opening' };
+    const bodyStart = start + opening[0].length;
+    const closing = /\[\[\s*\/SR_STATE\s*\]\]/i.exec(source.slice(bodyStart));
+    if (!closing) return { text: before.trimEnd(), states: [], found: true, error: 'closing' };
+    const end = bodyStart + closing.index;
+    let after = source.slice(end + closing[0].length);
+    if (fence) after = after.replace(/^[ \t]*(?:\r?\n)?[ \t]*```[ \t]*(?:\r?\n|$)/, '');
+    // Preset info blocks may follow the metadata. Remove only metadata, never
+    // the rest of the RP reply, and do not choose between conflicting blocks.
+    const duplicate = /\[\[\s*SR_/i.test(after);
+    if (duplicate) after = extractStateBlock(after, []).text;
+    const text = [before.trimEnd(), after.trimStart()].filter(Boolean).join('\n');
+    if (duplicate) return { text, states: [], found: true, error: 'trailing' };
+    const {states,diagnostics} = parseStateData(source.slice(bodyStart, end), roster);
+    return { text, states, diagnostics, found: true, error: states.length || (!diagnostics.received && !diagnostics.reasons.length) ? '' : 'format' };
 }
 
 export function normalizeProfileStates(value, roster) {
-    if (!Array.isArray(value) || value.length > roster.length) return [];
-    const states = [];
-    const seen = new Set();
-    for (const item of value) {
-        const code = String(item?.code || '');
-        if (seen.has(code)) return [];
-        const person = roster.find(entry => entry.code === code);
-        if (!person) return [];
-        const fields = [];
-        if (person.trackArousal) {
-            fields.push(`a${item.a}${item.targets?.a ? `@${item.targets.a}` : ''}`, `c${item.c}`);
-        }
-        for (const mood of STATE_MOODS) if (Object.hasOwn(item, mood)) fields.push(`${mood}${item[mood]}${item.targets?.[mood] ? `@${item.targets[mood]}` : ''}`);
-        const state = stateFor(code, fields, roster);
-        if (!state) return [];
-        states.push(state);
-        seen.add(code);
-    }
-    return states;
+    return parseProfileStates(value,roster).states;
 }
 
 export function latestStateForChat(record, chat, fingerprint = null) {

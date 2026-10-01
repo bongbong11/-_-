@@ -227,8 +227,8 @@ try{
     assert.match(await page.locator('#sr-debug-preview').inputValue(),/Open the door\./,'reviewable full debug includes original RP evidence');
     await page.locator('#sr-debug-copy').click();
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/rawJevAnswers/);
-    await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter opens the door.\n[[SR_STATE]]\nC0|a38|c60|anger25\n[[/SR_STATE]]'});await mock.emit('MESSAGE_RECEIVED',1);mock.chat.push({is_user:true,mes:'(oOc: Explain.)',extra:{ooc_chat:true,ooc_instruction:'fixed wrapper'}});await mock.emit('MESSAGE_SENT',2);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
-    assert.equal(await page.evaluate(()=>mock.chat[1].mes),'Hunter opens the door.','internal state removed before the RP render point');
+    await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter opens the door.\n[[SR_STATE]]\nc0 | a:38% | c=60 | anger25\n[[/SR_STATE]]\n<Scene_Info>Time: 14:08</Scene_Info>'});await mock.emit('MESSAGE_RECEIVED',1);mock.chat.push({is_user:true,mes:'(oOc: Explain.)',extra:{ooc_chat:true,ooc_instruction:'fixed wrapper'}});await mock.emit('MESSAGE_SENT',2);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.equal(await page.evaluate(()=>mock.chat[1].mes),'Hunter opens the door.\n<Scene_Info>Time: 14:08</Scene_Info>','state notation is normalized and metadata removed while preset info remains intact');
     assert.equal(store.chat.characterStateEvents?.[0]?.states?.[0]?.values?.a,38,'state stored outside the chat message');
     await page.locator('[data-sr-tab="characters"]').click();
     await page.locator('.sr-character-card-tabs [data-character-card-view="emotion"]').first().click();
@@ -576,6 +576,12 @@ try{
     await page.setViewportSize({width:390,height:850});
     await page.locator('#sr-retrieval-test').scrollIntoViewIfNeeded();
     await page.screenshot({path:path.join(root,'artifacts','retrieval-settings-mobile.png')});
+    await page.locator('[data-sr-tab="characters"]').click();
+    await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter pauses.\n[[SR_STATE]]C0|a38[[/SR_STATE]]\n<Scene_Info>Time: 14:09</Scene_Info>'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
+    await page.locator('.sr-character-card-tabs [data-character-card-view="emotion"]').first().click();
+    assert.match(await page.locator('.sr-character-card-body:visible').first().textContent(),/필수 수치 누락/,'failed metadata explains the cause on the emotion tab');
+    assert.deepEqual(store.chat.characterStateCapture.diagnostics.reasons,['missing_fields']);
+    assert.equal(await page.evaluate(()=>mock.chat.at(-1).mes),'Hunter pauses.\n<Scene_Info>Time: 14:09</Scene_Info>','failed metadata does not erase the preset info block');
     // Exercise the actual background collector through UI, output hooks and storage.
     await page.locator('[data-sr-tab="characters"]').click();
     await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-profile-emotion').check()]);
@@ -583,7 +589,7 @@ try{
     assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','profile mode never asks the RP model for metadata, including streaming');
     await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter closes the door, angry about the delay.'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
     assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),1);
-    assert.equal(store.chat.characterStateCapture.status,'collecting','output hook finishes before the profile model replies');
+    assert.match(await page.locator('#sr-character-turn-results').textContent(),/수집 중/,'output hook finishes and updates the UI before the profile model replies');
     const profileRequest=await page.evaluate(()=>{const {messages,maxTokens,options}=mock.profileStateRequests[0];return {messages,maxTokens,options}});
     assert.equal(profileRequest.messages.length,2);
     assert.equal(JSON.parse(profileRequest.messages[1].content).output,'Hunter closes the door, angry about the delay.');

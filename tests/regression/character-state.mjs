@@ -58,6 +58,52 @@ assert.equal(extractStateBlock('RP\n[[SR_STATE]]\nC1|a38|c60\n[[/SR_STATE]]', ro
 assert.equal(extractStateBlock('RP\n[[SR_STATE]]\nC0|a38|c60\nC1\n[[/SR_STATE]]', roster).error, '', 'neutral NPC can omit all zero moods');
 for (const line of ['C0|a101|c60', 'C0|a38', 'C9|a38|c60', 'C0|a38|a39|c60']) assert.equal(extractStateBlock(`RP\n[[SR_STATE]]\n${line}\n[[/SR_STATE]]`, roster).error, 'format');
 
+const info = '<Scene_Info><small>Time: 14:08</small></Scene_Info>';
+for (const line of ['C0 | a38% | c60% | anger25', ' c0 | A: 38 | C = 60 | Anger 25 @ Dante ', 'C0|a38|c60|anger25']) {
+    const result = extractStateBlock(`RP\n[[SR_STATE]]\n${line}\n[[/SR_STATE]]\n${info}`, roster);
+    assert.equal(result.error, '', 'unambiguous notation variants and preset info after metadata are accepted');
+    assert.equal(result.states[0].values.a, 38);
+    assert.equal(result.states[0].values.anger, 25);
+    assert.equal(result.text, `RP\n${info}`, 'preset info survives metadata removal');
+}
+const fenced = extractStateBlock('RP\n```text\n[[sr_state]]\nC0|a38|c60\n[[/sr_state]]\n```\n'+info,roster);
+assert.equal(fenced.error,'');
+assert.equal(fenced.text,'RP\n'+info,'metadata code fences are removed without removing preset content');
+for (const line of ['C0|a-1|c60','C0|a38.5|c60','C0|a38|A39|c60','Unknown|a38|c60','C0|a38|c60|unknown25']) {
+    const result=extractStateBlock(`RP\n[[SR_STATE]]\n${line}\n[[/SR_STATE]]\n${info}`,roster);
+    assert.equal(result.error,'format');
+    assert.equal(result.text,`RP\n${info}`,'invalid values do not destroy the following RP info');
+}
+const doubled=extractStateBlock('RP\n[[SR_STATE]]C0|a38|c60[[/SR_STATE]]\n[[SR_STATE]]C0|a90|c10[[/SR_STATE]]\n'+info,roster);
+assert.equal(doubled.error,'trailing','conflicting blocks are not arbitrarily selected');
+assert.deepEqual(doubled.states,[]);
+assert.equal(doubled.text,'RP\n'+info);
+assert.match(mainOutputStatePrompt(roster),/\[\[SR_STATE\]\]\nC0\|a38\|c60\|anger25\n\[\[\/SR_STATE\]\]/,'prompt uses an actual roster code and explicit line breaks');
+for (const body of [
+    'Lucas | arousal:38% | self_control=60 | anger25',
+    '| C0 | a38.0 | c60 | anger25 |',
+    JSON.stringify({states:[{code:' c0 ',arousal:'38%',selfControl:60,anger:25}]}),
+    JSON.stringify([{id:'lucas',values:{a:38,c:60,anger:25}}]),
+    JSON.stringify({name:'Lucas',a:38,c:60,anger:25}),
+    '```json\n'+JSON.stringify({states:[{code:'C0',a:38,c:60,anger:25}]})+'\n```',
+]) {
+    const result=extractStateBlock(`RP\n[[SR_STATE]]\n${body}\n[[/SR_STATE]]`,roster);
+    assert.equal(result.error,'',body);
+    assert.equal(result.states[0].values.a,38);
+    assert.equal(result.states[0].values.anger,25);
+}
+const partial=extractStateBlock('RP\n[[SR_STATE]]\nC0|a38\nC1|anger25\n[[/SR_STATE]]',roster);
+assert.equal(partial.error,'','one invalid actor does not discard another actor');
+assert.deepEqual(partial.states.map(state=>state.id),['dante']);
+assert.deepEqual(partial.diagnostics.reasons,['missing_fields']);
+assert.equal(partial.diagnostics.accepted,1);
+assert.equal(partial.diagnostics.rejected,1);
+assert.doesNotMatch(JSON.stringify(partial.diagnostics),/Lucas|Dante|RP|a38/,'diagnostics contain structure and reason codes, not raw content');
+const duplicatePerson=extractStateBlock('RP\n[[SR_STATE]]C0|a38|c60\nLucas|a90|c10\nC1|joy20[[/SR_STATE]]',roster);
+assert.deepEqual(duplicatePerson.states.map(state=>state.id),['dante'],'duplicate identities cannot overwrite one another');
+assert.deepEqual(duplicatePerson.diagnostics.reasons,['duplicate_person']);
+assert.equal(extractStateBlock('RP\n[[SR_STATE]]C0|a101|c60[[/SR_STATE]]',roster).diagnostics.reasons[0],'out_of_range');
+
 const plan = [{ index: 0, id: 'lucas', name: 'Lucas', kind: 'character', recordMode: true, sourceVisibleToMain: true,
     profileCandidates: [], contextCandidates: [], profileSlotLimit: 4, core: { excerpts: [] }, priorState: rec.characterStateEvents[0].states[0] }];
 assert.ok(buildCharacterTurnQuestions(plan).character_0_affect_a);

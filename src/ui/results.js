@@ -45,10 +45,12 @@ function renderCharacterTurnResults() {
     const currentRecord=record();
     const judgment = currentRecord?.lastJudgment;
     const capture=currentRecord?.characterStateCapture;
-    const captureFailures={missing:'응답에 상태 정보 없음',opening:'상태 형식 확인 필요',closing:'상태 정보가 중간에 끊김',trailing:'상태 형식 확인 필요',format:'상태 형식 확인 필요',empty_output:'완성된 답변 없음',timeout:'응답 시간 초과',request:'연결 요청 실패',unavailable:'연결 설정 확인 필요',paused:'수집 쉬는 중'};
+    const captureFailures={missing:'응답에 상태 정보 없음',opening:'모델의 감정값 태그를 읽지 못함',closing:'상태 정보가 중간에 끊김',trailing:'모델이 감정값을 중복 출력함',format:'모델의 감정값 형식을 읽지 못함',empty_output:'완성된 답변 없음',timeout:'응답 시간 초과',request:'연결 요청 실패',unavailable:'연결 설정 확인 필요',paused:'수집 쉬는 중'};
     const chat=getContext().chat || [];
     const latestOutputIndex=chat.findLastIndex((message,index)=>!message.is_user&&!message.is_system&&!(currentRecord?.nonRpOutputIndices||[]).includes(index));
     const captureCurrent=capture?.outputIndex===latestOutputIndex ? capture : null;
+    const captureReasons={unknown_person:'대상 인물을 식별하지 못함',field_format:'숫자·항목 표기 오류',unknown_field:'알 수 없는 감정 항목',duplicate_field:'같은 수치가 중복됨',out_of_range:'0~100을 벗어난 수치',disabled_field:'수집을 끈 항목이 포함됨',missing_fields:'필수 수치 누락',duplicate_person:'같은 인물이 중복됨',too_many_rows:'인물 행이 지나치게 많음',too_long:'상태 행이 지나치게 김',json_format:'JSON 형식 오류'};
+    const captureReasonText=(captureCurrent?.diagnostics?.reasons||[]).map(reason=>captureReasons[reason]).filter(Boolean).join(' · ');
     const latestStates=latestStateForChat(currentRecord,chat,stableFingerprint);
     const stateById=new Map(latestStates.map(state=>[state.id,state]));
     const moodNames={a:'충동',c:'자제',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'};
@@ -84,7 +86,7 @@ function renderCharacterTurnResults() {
         const view=characterCardViews.get(person.id)==='emotion'?'emotion':'judgment';
         const saved=stateForEntry(stateById.get(person.id),entry)?.values || {};
         const bars=Object.entries(moodNames).filter(([key])=>Number.isInteger(saved[key])&&(['a','c'].includes(key)||saved[key]>0)).map(([key,name])=>`<div class="sr-emotion-row"><span>${name}</span><div class="sr-emotion-track"><span style="width:${Math.max(0,Math.min(100,saved[key]))}%"></span></div><strong>${saved[key]}%</strong></div>`).join('');
-        const emotionMessage=captureCurrent?.status==='collecting'?'수집 중':captureCurrent?.status==='collected'||captureCurrent?.status==='empty'?'수집된 값 없음':captureCurrent?.status?captureFailures[captureCurrent.status]||'수집 실패':'수집된 값 없음';
+        const emotionMessage=captureReasonText|| (captureCurrent?.status==='collecting'?'수집 중':captureCurrent?.status==='collected'||captureCurrent?.status==='empty'?'수집된 값 없음':captureCurrent?.status?captureFailures[captureCurrent.status]||'수집 실패':'수집된 값 없음');
         const emotion=bars||`<p class="sr-empty-small">${escapeHtml(emotionMessage)}</p>`;
         const tabs=`<div class="sr-character-card-tabs" role="tablist" aria-label="${escapeHtml(person.name)} 결과"><button type="button" role="tab" data-character-id="${escapeHtml(person.id)}" data-character-card-view="judgment" aria-selected="${view==='judgment'}" class="${view==='judgment'?'active':''}">판정</button><button type="button" role="tab" data-character-id="${escapeHtml(person.id)}" data-character-card-view="emotion" aria-selected="${view==='emotion'}" class="${view==='emotion'?'active':''}">감정값</button></div>`;
         return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : person.kind === 'persona' ? '페르소나' : '캐릭터') + ' · ' + status + '</small></h4>' + tabs + `<div class="sr-character-card-body" role="tabpanel" ${view==='emotion'?'hidden':''}>` + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + relevance + '</details>' : '') + `</div><div class="sr-character-card-body" role="tabpanel" ${view==='judgment'?'hidden':''}>${emotion}</div></section>`;

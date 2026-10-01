@@ -174,7 +174,7 @@ function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) 
         const message = getContext().chat?.[outputIndex];
         if (!message || stableFingerprint(message.mes || '') !== fingerprint) return;
         const rec = record(true);
-        rec.characterStateCapture = { outputIndex, status: result.error || (result.states.length ? 'collected' : 'empty'), count: result.states.length, source: 'profile-output' };
+        rec.characterStateCapture = { outputIndex, status: result.error || (result.diagnostics?.rejected ? 'partial' : result.states.length ? 'collected' : 'empty'), count: result.states.length, source: 'profile-output', diagnostics: result.diagnostics || null };
         if (result.states.length) storeStateEvent(rec, { outputIndex, fingerprint, states: result.states, source: 'profile-output' }, STATE_HISTORY_LIMIT, latestStateForChat(rec, getContext().chat.slice(0, outputIndex), stableFingerprint));
         await persistChat();
         if (chatKey === stateChatKey()) renderAll();

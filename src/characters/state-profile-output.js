@@ -1,4 +1,4 @@
-import { normalizeProfileStates, STATE_MOODS } from './state-contract.js';
+import { parseProfileStates, STATE_MOODS } from './state-contract.js';
 
 const PROFILE_STATE_SYSTEM = `Read the finished RP reply and return compact JSON only: {"states":[{"code":"C0","a":38,"c":60,"anger":25,"targets":{"anger":"Dante"}}]}. Judge only listed characters who actually speak, act, or have a viewpoint in this reply. a is sexual arousal, c is self-control, both 0-100 and required only when trackArousal is true. Optional mood fields: ${STATE_MOODS.join(', ')}; omit zero moods. Add an optional target by feeling only when explicit, even if the target is offscene. Do not infer unexpressed thoughts from model knowledge. Do not treat desire as action, consent, or relationship change. Return {"states":[]} when no eligible person appears.`;
 
@@ -16,8 +16,8 @@ export async function collectProfileOutputState({ request, service, profileId, o
             new Promise(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); }),
         ]);
         if (!response) return { states: [], error: 'timeout' };
-        const states = normalizeProfileStates(response.result?.states, roster);
-        return { states, error: Array.isArray(response.result?.states) && (states.length || !response.result.states.length) ? '' : 'format' };
+        const {states,diagnostics} = parseProfileStates(response.result?.states, roster);
+        return { states, diagnostics, error: states.length || (!diagnostics.received && !diagnostics.reasons.length) ? '' : 'format' };
     } catch { return { states: [], error: 'request' }; }
     finally { clearTimeout(timer); }
 }
