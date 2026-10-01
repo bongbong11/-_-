@@ -244,6 +244,10 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const mixedOoc = Boolean(context.metaGuidance.current);
     if (mixedOoc) deps.updateActivity('OOC 지시 확인 · RP와 분리해 판독 중…');
 
+    // Manual and automatic judgment both consume completed prior-response state.
+    await deps.waitForProfileState?.();
+    run.assert();
+
     const waitingReasoner = deps.settings.continuityEnabled ? deps.reasonerJobs.get(deps.stateChatKey()) : null;
     if (waitingReasoner) await Promise.race([waitingReasoner, new Promise((resolve) => setTimeout(resolve, 180))]).catch((error) => console.warn('[씬판독기] Reasoner 결과 대기 실패', error));
     run.assert();

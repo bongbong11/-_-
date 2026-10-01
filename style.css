@@ -141,6 +141,19 @@
 #scene-reader-dialog .sr-character-turn-card { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent); }
 #scene-reader-dialog .sr-character-turn-card h4 { display: flex; align-items: baseline; gap: 7px; margin: 0 0 3px; color: var(--SmartThemeBodyColor); }
 #scene-reader-dialog .sr-character-turn-card h4 small { color: var(--SmartThemeEmColor); font-size: .76em; font-weight: 500; }
+#scene-reader-dialog .sr-character-card-tabs { display: flex; gap: 5px; margin: 3px 0 5px; }
+#scene-reader-dialog .sr-character-card-tabs button { min-height: 30px; padding: 4px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: .82rem; cursor: pointer; }
+#scene-reader-dialog .sr-character-card-tabs button.active { background: color-mix(in srgb,var(--SmartThemeQuoteColor) 25%,transparent); font-weight: 700; }
+#scene-reader-dialog .sr-character-card-body { min-width: 0; }
+#scene-reader-dialog .sr-emotion-row { display: grid; grid-template-columns: 3.4em minmax(0,1fr) 3.2em; align-items: center; gap: 8px; padding: 5px 0; font-size: .84rem; }
+#scene-reader-dialog .sr-emotion-row strong { text-align: right; font-variant-numeric: tabular-nums; }
+#scene-reader-dialog .sr-emotion-track { height: 6px; overflow: hidden; border-radius: 99px; background: color-mix(in srgb,var(--SmartThemeBodyColor) 13%,transparent); }
+#scene-reader-dialog .sr-emotion-track > span { display: block; height: 100%; border-radius: inherit; background: var(--SmartThemeQuoteColor); }
+#scene-reader-dialog .sr-connection-card .sr-connection-grid { grid-template-columns: minmax(0,1fr); gap: 6px; margin-top: 8px; }
+#scene-reader-dialog .sr-connection-card .sr-connection-pane { gap: 4px; padding: 7px 8px; }
+#scene-reader-dialog .sr-connection-card .sr-connection-pane h4 { font-size: .86rem; }
+#scene-reader-dialog .sr-connection-card .sr-connection-pane .sr-help { font-size: .77rem; }
+#scene-reader-dialog .sr-connection-card .sr-retrieval-panel { margin-top: 7px; }
 #scene-reader-dialog .sr-backup-list { display: grid; gap: 8px; }
 #scene-reader-dialog .sr-backup-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; }
 #scene-reader-dialog .sr-backup-item > div { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }

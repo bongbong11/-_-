@@ -92,6 +92,7 @@ function setFormValues() {
     if (chatIcon) chatIcon.hidden = !deps.settings.showChatIcon;
     setChecked('sr-auto', deps.settings.autoJudge);
     setChecked('sr-user-impersonation', prefs.allowUserImpersonation);
+    setChecked('sr-profile-emotion', prefs.profileEmotionJudgment);
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) { setChecked(id, MEMORY_REFERENCE_ENABLED && prefs[key]); const input = deps.document.getElementById(id); if (input) input.disabled = !MEMORY_REFERENCE_ENABLED; }
     setChecked('sr-continuity-enabled', deps.settings.continuityEnabled);
     deps.renderReasonerProfiles();
@@ -1050,6 +1051,13 @@ function bindForm() {
         await deps.clearInjection(); await deps.persistChat(); deps.renderAll();
     })(), '인물 판정 설정을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-user-impersonation')?.addEventListener('change', event => deps.runUiTask(savePreference('allowUserImpersonation', event.target.checked), '사칭 허용 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-profile-emotion')?.addEventListener('change', event => deps.runUiTask((async () => {
+        if (event.target.checked && !deps.settings.reasonerProfileId) {
+            event.target.checked = false;
+            throw new Error('설정 → 모델 연결에서 연결 프로필을 먼저 선택하세요.');
+        }
+        await savePreference('profileEmotionJudgment', event.target.checked);
+    })(), '감정 판정 방식을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-character-volume')?.addEventListener('change', event => deps.runUiTask(savePreference('characterVolume', event.target.value), '인물 주입량 설정을 저장하지 못했습니다.'));
     for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) deps.document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));
     deps.document.getElementById('sr-character-lore-options')?.addEventListener('change',()=>{

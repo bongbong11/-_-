@@ -18,7 +18,7 @@ const recordText = (kind, item) => kind === 'world'
     : [item.type, item.target, ...(Array.isArray(item.when) ? item.when : [item.when]), item.rule, item.modality, item.knowledge_domain, item.knowledge_state].filter(Boolean).join(' · ');
 const status = error => String(error?.message || error || '검색 오류').slice(0, 180);
 
-export function createVectorRetrieval({ fetch, getRequestHeaders, getSettings, timeoutMs = 60000 }) {
+export function createVectorRetrieval({ fetch, getRequestHeaders, getSettings, onProgress = () => {}, timeoutMs = 60000 }) {
     const queries = new Map();
     function boundedSignal(signal) {
         const controller = new AbortController();
@@ -63,16 +63,19 @@ export function createVectorRetrieval({ fetch, getRequestHeaders, getSettings, t
             // The same bank can switch A -> B -> A, or be changed in another tab.
             // A cheap list request checks the actual index; it does not embed text.
             {
+                onProgress({kind, phase:'checking'});
                 const saved = await post('list', body, bounded.signal);
                 if (!Array.isArray(saved)) throw new Error('검색 색인 목록 오류');
                 const stale = saved.filter(hash => !entries.has(Number(hash)));
                 if (stale.length) await post('delete', { ...body, hashes: stale }, bounded.signal);
                 const missing = [...entries.values()].filter(entry => !saved.includes(entry.hash));
+                if (missing.length) onProgress({kind, phase:'indexing', count:missing.length});
                 for (let offset = 0; offset < missing.length; offset += 20) {
                     await post('insert', { ...body, items: missing.slice(offset, offset + 20).map(({ hash, index, text }) => ({ hash, index, text })) }, bounded.signal);
                 }
             }
             if (options.source !== 'transformers' && queries.has(cacheKey)) return { indices: queries.get(cacheKey), status: 'cached' };
+            onProgress({kind, phase:'querying'});
             const result = await post('query', { ...body, searchText: queryText(transcript), topK: Math.min(limit, items.length), threshold: 0.01 }, bounded.signal);
             // The native API returns sorted metadata, but no numeric similarity scores.
             // Never use its unfiltered hashes as accepted matches.
@@ -83,7 +86,9 @@ export function createVectorRetrieval({ fetch, getRequestHeaders, getSettings, t
             return { indices, status: 'ready' };
         } catch (error) {
             if (signal?.aborted) throw error;
-            return { indices: [], status: 'fallback', error: bounded.signal.aborted ? '검색 연결 시간이 초과되었습니다.' : status(error) };
+            const reason = bounded.signal.aborted ? '검색 연결 시간이 초과되었습니다.' : status(error);
+            onProgress({kind, phase:'fallback', error:reason});
+            return { indices: [], status: 'fallback', error: reason };
         } finally {
             bounded.finish();
         }

@@ -6,13 +6,18 @@ async function onCharacterMessageReceived(messageId) {
     const outputIndex = Number.isInteger(Number(messageId)) ? Number(messageId) : (deps.getContext().chat || []).length - 1;
     const output = (deps.getContext().chat || [])[outputIndex];
     const roster = deps.activeGenerationCycle?.stateRoster || [];
+    const collectorMode = deps.activeGenerationCycle?.stateCollectorMode || deps.STATE_COLLECTOR_MODE;
+    const stateCollectionPaused = deps.activeGenerationCycle?.stateCollectionPaused === true;
     // Remove recognizable metadata even if a generation was stopped or its roster
     // was cleared while the completed response was arriving.
     const collected = output && !output.is_user && !output.is_system ? deps.collectMainOutputState(output.mes, roster) : null;
     if (collected?.found) output.mes = collected.text;
     let captureChanged = false;
-    if (rec && cycleMode === 'rp' && (!deps.activeGenerationCycle?.chatKey || deps.activeGenerationCycle.chatKey === deps.stateChatKey()) && output && !output.is_user && !output.is_system && roster.length) {
-        if (deps.STATE_COLLECTOR_MODE === 'main-output' && deps.activeGenerationCycle?.stateCaptureEnabled) {
+    if (rec && cycleMode === 'rp' && (!deps.activeGenerationCycle?.chatKey || deps.activeGenerationCycle.chatKey === deps.stateChatKey()) && output && !output.is_user && !output.is_system && stateCollectionPaused) {
+        rec.characterStateCapture = { outputIndex, status:'paused', count:0, source:collectorMode };
+        captureChanged = true;
+    } else if (rec && cycleMode === 'rp' && (!deps.activeGenerationCycle?.chatKey || deps.activeGenerationCycle.chatKey === deps.stateChatKey()) && output && !output.is_user && !output.is_system && roster.length) {
+        if (collectorMode === 'main-output' && deps.activeGenerationCycle?.stateCaptureEnabled) {
             const result = collected;
             if (!String(output.mes || '').trim()) { result.states = []; result.error = 'empty_output'; }
             rec.characterStateCapture = { outputIndex, status: result.error || 'collected', count: result.states.length, source: 'main-output' };
@@ -21,7 +26,7 @@ async function onCharacterMessageReceived(messageId) {
                 const fingerprint = deps.stableFingerprint(output.mes || '');
                 deps.storeStateEvent(rec, { outputIndex, fingerprint, states: result.states, source: 'main-output' }, 12, deps.latestStateForChat(rec, deps.getContext().chat.slice(0, outputIndex), deps.stableFingerprint));
             }
-        } else if (deps.STATE_COLLECTOR_MODE === 'profile-output') {
+        } else if (collectorMode === 'profile-output') {
             deps.scheduleProfileStateCollection({ chatKey: deps.stateChatKey(), outputIndex, text: String(output.mes || ''), roster });
         }
     }
@@ -93,7 +98,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     const previousStateCount = rec.characterStateEvents?.length || 0;
     const preservedSwipeStates = ['swiped', 'regenerated'].includes(kind) ? (rec.characterStateEvents || []).filter(item => item.outputIndex === index) : [];
     if (!['swiped', 'regenerated'].includes(kind)) deps.dropStateEventsFrom(rec, index);
-    if (!['swiped', 'regenerated'].includes(kind) && rec.characterStateCapture?.outputIndex >= index) rec.characterStateCapture = null;
+    if (rec.characterStateCapture?.outputIndex >= index) rec.characterStateCapture = null;
     const stateEventsChanged = (rec.characterStateEvents?.length || 0) !== previousStateCount;
     if ((rec.nonRpOutputIndices || []).includes(index)) {
         if (kind === 'deleted') {
@@ -209,10 +214,11 @@ async function applyStoredInjection({ exactSnapshot = false } = {}) {
     await deps.setExtensionPrompt(deps.INJECT_KEY, macroMode ? '' : payload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     await deps.setExtensionPrompt(deps.WORLD_INJECT_KEY, worldMacroMode ? '' : worldPayload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const roster = deps.settings.enabled ? deps.stateRoster(deps.characterStore, rec?.preferences, rec?.lastJudgment) : [];
+    const stateCollectionPaused = rec?.lastJudgment?.sceneIntimacy?.route === 'paused';
     const context = deps.getContext();
     const multipleOutputs = context.mainApi === 'openai' && Number(context.chatCompletionSettings?.n) > 1;
-    const mainCapture = deps.STATE_COLLECTOR_MODE === 'main-output' && !deps.isStreamingEnabled() && !multipleOutputs;
-    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: roster, stateCaptureEnabled: mainCapture && roster.length > 0 };
+    const mainCapture = !stateCollectionPaused && deps.STATE_COLLECTOR_MODE === 'main-output' && !deps.isStreamingEnabled() && !multipleOutputs;
+    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: roster, stateCollectorMode: deps.STATE_COLLECTOR_MODE, stateCollectionPaused, stateCaptureEnabled: mainCapture && roster.length > 0 };
     await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, mainCapture ? deps.mainOutputStatePrompt(roster) : '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = payload || '현재 주입문 없음';
@@ -224,7 +230,7 @@ async function clearInjection() {
     deps.activeWorldMacroPayload = '';
     await deps.setExtensionPrompt(deps.INJECT_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     await deps.setExtensionPrompt(deps.WORLD_INJECT_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
-    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: [], stateCaptureEnabled: false };
+    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: [], stateCollectionPaused:false, stateCaptureEnabled: false };
     await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = '현재 주입문 없음';

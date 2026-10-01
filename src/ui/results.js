@@ -7,7 +7,9 @@ import { ITEM_LABELS, currentProfileItems, profileStatus } from '../../character
 import { normalizeContinuity } from '../../continuity-engine.js';
 import { displayValue, verificationText } from './presentation.js';
 import { renderRecordVersions } from './character-transfer.js';
-export function createResults({readState, document, getContext, record, ownerPrompt, escapeHtml, selectCharacter}) {
+import { latestStateForChat, stateForEntry } from '../characters/state-contract.js';
+export function createResults({readState, document, getContext, record, ownerPrompt, escapeHtml, selectCharacter, stableFingerprint}) {
+const characterCardViews = new Map();
 function decisionTitle(key) {
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();
     const context = getContext();
@@ -43,17 +45,22 @@ function renderCharacterTurnResults() {
     const currentRecord=record();
     const judgment = currentRecord?.lastJudgment;
     const capture=currentRecord?.characterStateCapture;
-    const captureFailures={missing:'응답에 상태 정보 없음',opening:'상태 형식 확인 필요',closing:'상태 정보가 중간에 끊김',trailing:'상태 형식 확인 필요',format:'상태 형식 확인 필요',empty_output:'완성된 답변 없음',timeout:'응답 시간 초과',request:'연결 요청 실패',unavailable:'연결 설정 확인 필요'};
-    const captureNote=capture?`<p class="sr-help">직전 출력 상태 · ${escapeHtml(capture.status==='collected'?`${capture.count}명 수집`:capture.status==='empty'?'대상 인물 없음':captureFailures[capture.status]||'수집 실패')}</p>`:'';
-    const trace = judgment?.characterTrace || [];
-    if (!trace.length) { root.innerHTML = captureNote+'<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
-    const stateLabel=state=>{
-        if(!state?.values)return '';
-        const names={a:'충동',c:'자제',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'};
-        return Object.entries(names).filter(([key])=>Number.isFinite(state.values[key])&&(['a','c'].includes(key)||state.values[key]>0))
-            .map(([key,name])=>`${name} ${state.values[key]}%${({rising:' ↑',falling:' ↓'})[state.changes?.[key]]||''}${state.targets?.[key]?` → ${state.targets[key]}`:''}`).join(' · ');
+    const captureFailures={missing:'응답에 상태 정보 없음',opening:'상태 형식 확인 필요',closing:'상태 정보가 중간에 끊김',trailing:'상태 형식 확인 필요',format:'상태 형식 확인 필요',empty_output:'완성된 답변 없음',timeout:'응답 시간 초과',request:'연결 요청 실패',unavailable:'연결 설정 확인 필요',paused:'수집 쉬는 중'};
+    const chat=getContext().chat || [];
+    const latestOutputIndex=chat.findLastIndex((message,index)=>!message.is_user&&!message.is_system&&!(currentRecord?.nonRpOutputIndices||[]).includes(index));
+    const captureCurrent=capture?.outputIndex===latestOutputIndex ? capture : null;
+    const latestStates=latestStateForChat(currentRecord,chat,stableFingerprint);
+    const stateById=new Map(latestStates.map(state=>[state.id,state]));
+    const moodNames={a:'충동',c:'자제',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'};
+    root.onclick=event=>{
+        const button=event.target.closest?.('[data-character-card-view]');
+        if(!button||!root.contains(button))return;
+        characterCardViews.set(button.dataset.characterId,button.dataset.characterCardView);
+        renderCharacterTurnResults();
     };
-    root.innerHTML = captureNote+`<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
+    const trace = judgment?.characterTrace || [];
+    if (!trace.length) { root.innerHTML = '<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
+    root.innerHTML = `<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
         const prefix = 'character_' + person.index + '_';
         const presence = judgment.details?.[prefix + 'presence'];
         const direction = judgment.details?.[prefix + 'response_direction'];
@@ -69,12 +76,18 @@ function renderCharacterTurnResults() {
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
             ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
-            ...(person.priorAffect?[['직전 출력 상태',stateLabel(person.priorAffect)||'기록 없음'],['상태 표현 판정',(person.affectSelections||[]).map(item=>`${({a:'충동',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'})[item.field]} · ${({inward:'속마음·억제',visible:'대사·작은 행동',active:'인물에 맞는 직접 행동'})[item.expression]}`).join(' / ')||'이번 응답에 별도 반영 없음']]:[]),
+            ...(person.priorAffect?[['상태 표현 판정',(person.affectSelections||[]).map(item=>`${({a:'충동',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'})[item.field]} · ${({inward:'속마음·억제',visible:'대사·작은 행동',active:'인물에 맞는 직접 행동'})[item.expression]}`).join(' / ')||'이번 응답에 별도 반영 없음']]:[]),
             ['지식 접근 제외', (person.deniedIds || []).length ? person.deniedIds.length + '개 · 해당 정보만 제외' : '없음'],
             ...(!person.recordMode ? [['반응 방향', characterTurnLabel('direction',person.direction)]] : []),
         ].map(([label,value]) => '<div class="sr-decision-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>').join('');
         const relevance = (person.relevance || []).map(item => `<div class="sr-decision-row"><span>${escapeHtml(item.type || '기록')}</span><small>${escapeHtml(item.id)} · 관련성 ${Math.round((Number(item.score)||0)*100)}% → ${item.selected?'선택':'제외'}${item.valid?'':' · 응답 오류'}</small></div>`).join('');
-        return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : person.kind === 'persona' ? '페르소나' : '캐릭터') + ' · ' + status + '</small></h4>' + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + relevance + '</details>' : '') + '</section>';
+        const view=characterCardViews.get(person.id)==='emotion'?'emotion':'judgment';
+        const saved=stateForEntry(stateById.get(person.id),entry)?.values || {};
+        const bars=Object.entries(moodNames).filter(([key])=>Number.isInteger(saved[key])&&(['a','c'].includes(key)||saved[key]>0)).map(([key,name])=>`<div class="sr-emotion-row"><span>${name}</span><div class="sr-emotion-track"><span style="width:${Math.max(0,Math.min(100,saved[key]))}%"></span></div><strong>${saved[key]}%</strong></div>`).join('');
+        const emotionMessage=captureCurrent?.status==='collecting'?'수집 중':captureCurrent?.status==='collected'||captureCurrent?.status==='empty'?'수집된 값 없음':captureCurrent?.status?captureFailures[captureCurrent.status]||'수집 실패':'수집된 값 없음';
+        const emotion=bars||`<p class="sr-empty-small">${escapeHtml(emotionMessage)}</p>`;
+        const tabs=`<div class="sr-character-card-tabs" role="tablist" aria-label="${escapeHtml(person.name)} 결과"><button type="button" role="tab" data-character-id="${escapeHtml(person.id)}" data-character-card-view="judgment" aria-selected="${view==='judgment'}" class="${view==='judgment'?'active':''}">판정</button><button type="button" role="tab" data-character-id="${escapeHtml(person.id)}" data-character-card-view="emotion" aria-selected="${view==='emotion'}" class="${view==='emotion'?'active':''}">감정값</button></div>`;
+        return '<section class="sr-character-turn-card"><h4>' + escapeHtml(person.name) + ' <small>' + escapeHtml(person.kind === 'npc' ? 'NPC' : person.kind === 'persona' ? '페르소나' : '캐릭터') + ' · ' + status + '</small></h4>' + tabs + `<div class="sr-character-card-body" role="tabpanel" ${view==='emotion'?'hidden':''}>` + rows + (person.excludedReason ? '<p class="sr-help">' + escapeHtml(person.excludedReason) + '</p>' : '') + (settings.showConfidence ? '<details class="sr-trace"><summary>판정 경로·확신도</summary>' + audit + relevance + '</details>' : '') + `</div><div class="sr-character-card-body" role="tabpanel" ${view==='judgment'?'hidden':''}>${emotion}</div></section>`;
     }).join('');
 }
 

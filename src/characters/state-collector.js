@@ -1,6 +1,7 @@
-// Change this one value after comparing real output latency. The two collectors
-// live in separate files so the unused one can be removed without touching RP.
-export const STATE_COLLECTOR_MODE = 'main-output'; // 'profile-output'
+// Keep collection independent from Jev and select one collector per chat.
+export function stateCollectorMode(preferences) {
+    return preferences?.profileEmotionJudgment === true ? 'profile-output' : 'main-output';
+}
 
 export function stateRoster(store, preferences, judgment) {
     if (!store?.enabled) return [];

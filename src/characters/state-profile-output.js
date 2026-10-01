@@ -2,7 +2,7 @@ import { normalizeProfileStates, STATE_MOODS } from './state-contract.js';
 
 const PROFILE_STATE_SYSTEM = `Read the finished RP reply and return compact JSON only: {"states":[{"code":"C0","a":38,"c":60,"anger":25,"targets":{"anger":"Dante"}}]}. Judge only listed characters who actually speak, act, or have a viewpoint in this reply. a is sexual arousal, c is self-control, both 0-100 and required only when trackArousal is true. Optional mood fields: ${STATE_MOODS.join(', ')}; omit zero moods. Add an optional target by feeling only when explicit, even if the target is offscene. Do not infer unexpressed thoughts from model knowledge. Do not treat desire as action, consent, or relationship change. Return {"states":[]} when no eligible person appears.`;
 
-// Dormant fallback: reads the completed RP output with the configured connection
+// Optional background collector: reads completed RP with the saved connection
 // profile. The main-output collector remains the default and makes no extra call.
 export async function collectProfileOutputState({ request, service, profileId, output, roster, timeoutMs = 30000 }) {
     if (!service || !profileId || !roster.length) return { states: [], error: 'unavailable' };

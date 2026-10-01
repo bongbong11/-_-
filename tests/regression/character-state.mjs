@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createOutputLifecycle } from '../../src/app/output-lifecycle.js';
-import { STATE_COLLECTOR_MODE, stateRoster } from '../../src/characters/state-collector.js';
+import { stateCollectorMode, stateRoster } from '../../src/characters/state-collector.js';
 import { mainOutputStatePrompt, collectMainOutputState } from '../../src/characters/state-main-output.js';
 import { collectProfileOutputState } from '../../src/characters/state-profile-output.js';
 import { latestStateForChat, storeStateEvent, dropStateEventsFrom, extractStateBlock, stateForEntry } from '../../src/characters/state-contract.js';
@@ -14,7 +14,9 @@ const judgment = { characterTrace: [{ id: 'lucas', presence: 'active' }, { id: '
 const roster = stateRoster(store, { allowUserImpersonation: false }, judgment);
 assert.deepEqual(roster.map(person => [person.id, person.trackArousal]), [['lucas', true], ['dante', false]]);
 assert.equal(mainOutputStatePrompt(roster).includes('Dante (moods only)'), true);
+const STATE_COLLECTOR_MODE = stateCollectorMode({});
 assert.equal(STATE_COLLECTOR_MODE, 'main-output');
+assert.equal(stateCollectorMode({profileEmotionJudgment:true}), 'profile-output');
 const legacyEntry = { id: 'legacy-lucas', kind: 'character', name: 'Lucas', source: 'Lucas guards his privacy.', selectedLore: [] };
 legacyEntry.recordBank = createRecordBank({ entity_type: 'character', entity_name: 'Lucas', intimacy_reference: { text: '', source_ids: [] }, records: [{ type: 'core', target: '', when: ['privacy'], rule: 'Lucas guards his privacy.', modality: 'tendency', basis: 'explicit', source_ids: ['S001'], knowledge_domain: 'none', knowledge_state: 'none' }] }, legacyEntry, 'legacy-test');
 legacyEntry.recordBank.coreFingerprint = 'a47ce2f4e7c738b1095044067ff9a33661f2ee5235b00a2fd77891a8d1fbedd6';
@@ -74,7 +76,14 @@ assert.equal(optedOut.values.anger,30);
 
 let profileCalls = 0;
 const alternate = await collectProfileOutputState({
-    request: async () => { profileCalls++; return { result: { states: [{ code: 'C0', a: 35, c: 70, anger: 10, targets: { anger: 'Dante' } }] } }; },
+    request: async (_service, profileId, _system, state, options) => {
+        profileCalls++;
+        assert.equal(profileId, 'profile-1');
+        assert.deepEqual(Object.keys(state).sort(), ['output', 'people']);
+        assert.equal(state.output, 'Lucas speaks.');
+        assert.equal(options.maxTokens, 350);
+        return { result: { states: [{ code: 'C0', a: 35, c: 70, anger: 10, targets: { anger: 'Dante' } }] } };
+    },
     service: {}, profileId: 'profile-1', output: 'Lucas speaks.', roster,
 });
 assert.equal(profileCalls, 1);
@@ -88,7 +97,7 @@ assert.equal(failed.error,'request');
 // The alternative collector uses the same saved state and next-turn path without
 // ever asking the RP model for an extra output block.
 const fallback=fixture();
-fallback.sandbox.STATE_COLLECTOR_MODE='profile-output';
+fallback.run('record(true).preferences.profileEmotionJudgment=true; characterStore.enabled=true;');
 fallback.sandbox.mockRequest=async()=>({result:{states:[{code:'C0',a:20,c:80,joy:30}]}});
 fallback.ctx.chat.push({is_user:false,mes:'Lucas smiles.'});
 fallback.run('record(true); settings.reasonerProfileId="p"; connectionRequestService={}; requestWithConnectionProfile=mockRequest;');
@@ -103,6 +112,24 @@ fallback.ctx.chat[0].mes='Edited reply.';
 resolveLate({result:{states:[{code:'C0',a:90,c:10}]}});
 await fallback.run('pendingProfileStateCollection');
 assert.equal(fallback.run('record().characterStateEvents.length'),1,'late fallback cannot attach state to edited text');
+
+fallback.ctx.chat[0].mes='Lucas smiles.';
+fallback.run('scheduleProfileStateCollection({chatKey:stateChatKey(),outputIndex:0,text:"Lucas smiles.",roster})');
+fallback.run('record().preferences.profileEmotionJudgment=false;');
+resolveLate({result:{states:[{code:'C0',a:90,c:10}]}});
+await fallback.run('pendingProfileStateCollection');
+assert.equal(fallback.run('record().characterStateEvents[0].states[0].values.a'),20,'switching off discards a late profile result');
+
+fallback.run('record().preferences.profileEmotionJudgment=true; scheduleProfileStateCollection({chatKey:stateChatKey(),outputIndex:0,text:"Lucas smiles.",roster})');
+let validWaitFinished=false;
+const validWait=fallback.run('waitForProfileState()').then(()=>{validWaitFinished=true;});
+await Promise.resolve();
+assert.equal(validWaitFinished,false,'the next judgment waits for its active collector');
+fallback.run('record().characterStateCapture=null;');
+assert.equal(await Promise.race([fallback.run('waitForProfileState()').then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),100))]),true,'cancelled collection does not delay the next judgment');
+resolveLate({result:{states:[{code:'C0',a:90,c:10}]}});
+await validWait;
+assert.equal(fallback.run('record().characterStateEvents[0].states[0].values.a'),20,'a cancelled capture cannot restore state even when the text is unchanged');
 
 const optInRoster=stateRoster(store,{allowUserImpersonation:true},{characterTrace:[{id:'vivienne',presence:'active'},{id:'dominic',presence:'active'}]});
 assert.deepEqual(optInRoster.map(item=>item.id),['dominic','vivienne']);
@@ -125,6 +152,33 @@ assert.deepEqual(latestStateForChat(ledger,swipeChat,fingerprint),[],'edited tex
 const slots={};
 deps.setExtensionPrompt=async(key,value)=>{slots[key]=value;};
 rec.lastJudgment=judgment;
+deps.STATE_COLLECTOR_MODE='profile-output';
+await lifecycle.applyStoredInjection();
+assert.equal(slots['test-state'],'','profile collection removes the main RP state prompt');
+let scheduled=0;
+let finishCollection;
+deps.scheduleProfileStateCollection=()=>{scheduled++; return new Promise(resolve=>{finishCollection=resolve;});};
+chat[1].mes='Lucas turns away.';
+await lifecycle.onCharacterMessageReceived(1);
+assert.equal(scheduled,1,'output hook starts exactly one profile collection without waiting for it');
+finishCollection();
+deps.STATE_COLLECTOR_MODE='main-output';
+await lifecycle.applyStoredInjection();
+assert.match(slots['test-state'], /SCENE_READER_STATE_CAPTURE/, 'switching off restores the main RP collector');
+rec.lastJudgment={...judgment,sceneIntimacy:{route:'paused',participantIds:['lucas']}};
+await lifecycle.applyStoredInjection();
+assert.equal(slots['test-state'],'','the scene reader NSFW gate pauses main-model state capture');
+assert.equal(deps.activeGenerationCycle.stateCollectionPaused,true);
+deps.STATE_COLLECTOR_MODE='profile-output';
+await lifecycle.applyStoredInjection();
+chat[1].mes='The intimate scene continues.';
+await lifecycle.onCharacterMessageReceived(1);
+assert.equal(scheduled,1,'the scene reader NSFW gate also pauses profile collection');
+assert.equal(rec.characterStateCapture.status,'paused');
+rec.lastJudgment=judgment;
+deps.STATE_COLLECTOR_MODE='main-output';
+await lifecycle.applyStoredInjection();
+assert.match(slots['test-state'], /SCENE_READER_STATE_CAPTURE/, 'state collection resumes after the scene reader gate ends');
 deps.isStreamingEnabled=()=>true;
 await lifecycle.applyStoredInjection();
 assert.equal(slots['test-state'],'','streaming never requests hidden output metadata');
@@ -139,4 +193,4 @@ assert.equal(chat[1].mes,'Stopped reply','a late response still has metadata rem
 dropStateEventsFrom(rec, 1);
 assert.equal(latestStateForChat(rec, chat, fingerprint).length, 0);
 
-console.log('Character state passed: nonstream pre-render strip, malformed removal, cast scope, prior-turn Jev use, and dormant profile collector.');
+console.log('Character state passed: pre-render strip, malformed removal, cast scope, prior-turn Jev use, background collection and cancelled-result rejection.');

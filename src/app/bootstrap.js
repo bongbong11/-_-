@@ -14,7 +14,7 @@ import { dialogTemplate } from '../ui/dialog-template.js';
 
 import { CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
 import { NPC_CORE_SYSTEM, parseNpcCore, deriveEnglishCore, suggestNpcAliases } from '../characters/npc-sheet.js';
-import { STATE_COLLECTOR_MODE, stateRoster } from '../characters/state-collector.js';
+import { stateCollectorMode, stateRoster } from '../characters/state-collector.js';
 import { mainOutputStatePrompt, collectMainOutputState } from '../characters/state-main-output.js';
 import { collectProfileOutputState } from '../characters/state-profile-output.js';
 import { latestStateForChat, storeStateEvent, dropStateEventsFrom } from '../characters/state-contract.js';
@@ -102,6 +102,7 @@ const CHAT_DEFAULTS = {
     relationshipPace: 'medium',
     resolutionPace: 'medium',
     allowUserImpersonation: false,
+    profileEmotionJudgment: false,
     fightSustain: false,
     villainEnabled: true,
     appearanceChance: 10,
@@ -113,7 +114,16 @@ const CHAT_DEFAULTS = {
 };
 
 let settings;
-const vectorRetrieval = createVectorRetrieval({ fetch: (...args) => fetch(...args), getRequestHeaders, getSettings: () => settings || DEFAULTS });
+const vectorRetrieval = createVectorRetrieval({ fetch: (...args) => fetch(...args), getRequestHeaders, getSettings: () => settings || DEFAULTS,
+    onProgress: ({kind,phase,count,error}) => {
+        const label=kind==='world'?'세계관':'인물';
+        const message=phase==='checking'?`${label} 검색 데이터 확인 중…`
+            :phase==='indexing'?`${label} 새 기록 ${count}개 벡터화 중…`
+            :phase==='querying'?`${label} 관련 기록 검색 중…`
+            :phase==='fallback'?`${label} 검색 연결 실패 · 글자 검색으로 진행 (${error})`:'';
+        if (message) updateActivity(message);
+    },
+});
 let dialog;
 let judgeInFlight = false;
 let judgeCompletionPromise = Promise.resolve();
@@ -139,18 +149,28 @@ let connectionRequestService = null;
 const reasonerJobs = new Map();
 let reasonerGeneration = 0;
 let pendingProfileStateCollection = Promise.resolve();
+let pendingProfileStateContext = null;
+
+async function waitForProfileState() {
+    const pending = pendingProfileStateContext;
+    if (stateCollectorMode(record()?.preferences) === 'profile-output' && pending?.chatKey === stateChatKey() && pending.owner === record() && pending.owner.characterStateCapture === pending.capture) await pendingProfileStateCollection;
+}
 
 function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) {
-    if (STATE_COLLECTOR_MODE !== 'profile-output' || !roster?.length || !text.trim()) return;
+    if (stateCollectorMode(record()?.preferences) !== 'profile-output' || !settings.enabled || !characterStore.enabled || !roster?.length || !text.trim()) return;
+    const owner = record();
     const fingerprint = stableFingerprint(text);
     const profileId = settings.reasonerProfileId;
+    const capture = { outputIndex, status:'collecting', count:0, source:'profile-output' };
+    owner.characterStateCapture = capture;
+    renderCharacterTurnResults();
     const task = (async () => {
         if (!connectionRequestService) await loadReasonerProfiles();
         const result = await collectProfileOutputState({
             request: requestWithConnectionProfile, service: connectionRequestService,
             profileId, output: text, roster,
         });
-        if (chatKey !== stateChatKey()) return;
+        if (chatKey !== stateChatKey() || record() !== owner || owner.characterStateCapture !== capture || !settings.enabled || !characterStore.enabled || stateCollectorMode(record()?.preferences) !== 'profile-output' || settings.reasonerProfileId !== profileId) return;
         const message = getContext().chat?.[outputIndex];
         if (!message || stableFingerprint(message.mes || '') !== fingerprint) return;
         const rec = record(true);
@@ -160,10 +180,12 @@ function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) 
         if (chatKey === stateChatKey()) renderAll();
     })().catch(error => console.warn('[씬판독기] 출력 상태 판독 실패', error?.message || error));
     pendingProfileStateCollection = task;
+    pendingProfileStateContext = { chatKey, owner, capture };
 }
 
 const {prepareProfiles, prepareStandardProfiles, prepareConflictProfiles} = createDraws(selectedWorld);
 let {decisionTitle, resultLabel, characterTurnLabel, renderCharacterTurnResults, renderJudgment, renderProfiles, renderStoredState, renderCharacterStore, renderCharacterAnalysisBrowser, renderBackups, renderReasonerProfiles, renderContinuity, renderAll} = createResults({document, getContext, record, ownerPrompt, escapeHtml,
+    stableFingerprint,
     readState: () => ({settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload}),
     selectCharacter: value => {characterAnalysisSelection = value;},
 });
@@ -354,7 +376,7 @@ function record(create = false) {
         value.preferences.seasonalReferences = [...new Set((Array.isArray(value.preferences.seasonalReferences) ? value.preferences.seasonalReferences : []).filter(key => Object.hasOwn(SEASONAL_OPTIONS, key)))];
         value.preferences.advancedElements = [...new Set((Array.isArray(value.preferences.advancedElements) ? value.preferences.advancedElements : []).filter((key) => ADVANCED_ELEMENTS[key]))];
         if (!value.preferences.advancedElements.length) value.preferences.advancedElements = [...ADVANCED_DEFAULT_ELEMENTS];
-        for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune', 'allowUserImpersonation']) value.preferences[key] = Boolean(value.preferences[key]);
+        for (const key of ['charmMemory', 'lorebookMemory', 'advancedEnabled', 'negativePriority', 'fightSustain', 'villainEnabled', 'socialEnabled', 'worldHostility', 'privatePromptEnabled', 'npcToUser', 'userMisfortune', 'allowUserImpersonation', 'profileEmotionJudgment']) value.preferences[key] = Boolean(value.preferences[key]);
         for (const key of ['appearanceChance']) value.preferences[key] = Math.max(1, Math.min(100, Number(value.preferences[key]) || CHAT_DEFAULTS[key]));
         const pacing = value.pacingState && typeof value.pacingState === 'object' ? value.pacingState : {};
         const relation = pacing.relationship && typeof pacing.relationship === 'object' ? pacing.relationship : {};
@@ -535,7 +557,7 @@ function restoreReversibleState(rec, snapshot) {
 
 let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection} = createOutputLifecycle({
     get STATE_CAPTURE_KEY() { return STATE_CAPTURE_KEY; },
-    get STATE_COLLECTOR_MODE() { return STATE_COLLECTOR_MODE; },
+    get STATE_COLLECTOR_MODE() { return stateCollectorMode(record()?.preferences); },
     get stateRoster() { return stateRoster; },
     get mainOutputStatePrompt() { return mainOutputStatePrompt; },
     get collectMainOutputState() { return collectMainOutputState; },
@@ -586,6 +608,7 @@ let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAss
 });
 
 let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalCandidates, sourceUserRpForOutput, postVerifiedCharacterOutput, registerSceneOpportunity, commitPriorVerification, commitContinuityCandidates, runJudge, executeJudge} = createSceneExecution({
+    waitForProfileState,
     get latestStateForChat() { return latestStateForChat; },
     get vectorRetrieval() { return vectorRetrieval; },
     get addCharacterNeedsQuestions() { return addCharacterNeedsQuestions; },
@@ -987,7 +1010,7 @@ async function onBeforeGeneration(type, data, dryRun) {
     }
     generationMode = 'rp';
     activeGenerationCycle = { mode: 'rp', chatKey: stateChatKey(), inputKey: generationInputKey, startedAt: new Date().toISOString() };
-    if (STATE_COLLECTOR_MODE === 'profile-output') await pendingProfileStateCollection;
+    await waitForProfileState();
     if (!settings.autoJudge) {
         const rec = record();
         if (cachedJudgmentMatches(rec, context, generationInputKey)) {

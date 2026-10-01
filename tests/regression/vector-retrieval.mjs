@@ -24,13 +24,17 @@ async function fetch(url,{body}) {
     }
     throw new Error(route);
 }
-const retrieval=createVectorRetrieval({fetch,getRequestHeaders:()=>({'Content-Type':'application/json'}),getSettings:()=>settings});
+const progress=[];
+const retrieval=createVectorRetrieval({fetch,getRequestHeaders:()=>({'Content-Type':'application/json'}),getSettings:()=>settings,onProgress:event=>progress.push(event)});
 const rules=Array.from({length:69},(_,index)=>({type:'core',target:'self',when:['general'],rule:index===42?'Lucas chooses careful words when Dominic texts about the investigation.':`Lucas has ordinary established habit number ${index}.`,modality:'habit',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}));
 const entry={id:'lucas',kind:'npc',name:'Lucas',source:'Lucas has documented habits and speaks with Dominic.',selectedLore:[],sourceVisibleToMain:true};
 entry.recordBank=createRecordBank({entity_type:'npc',entity_name:'Lucas',records:rules},entry,'audit');
 const transcript='Dominic texted Lucas about the investigation. Lucas considers how to reply.';
 const result=await retrieval.search({kind:'character',bankId:'room:lucas',items:rules,transcript,limit:9});
 assert.equal(result.status,'ready');
+assert.ok(progress.some(item=>item.phase==='checking'));
+assert.ok(progress.some(item=>item.phase==='indexing' && item.count===69));
+assert.ok(progress.some(item=>item.phase==='querying'));
 assert.ok(result.indices.includes(42));
 const stats={};
 const candidates=selectRecordCandidates(entry,transcript,{limit:14,semanticIndices:result.indices,categoryHints:['core'],stats});
@@ -69,6 +73,7 @@ assert.equal(calls.filter(call=>call.route==='query').length,before+1,'model swi
 fail=true;
 const fallback=await retrieval.search({kind:'world',bankId:'world',items:[{id:'W1',category:'mechanism',when:'current',rule:'A rule.',keywords:[]}],transcript});
 assert.equal(fallback.status,'fallback');
+assert.ok(progress.some(item=>item.kind==='world'&&item.phase==='fallback'));
 assert.ok(fallback.error.includes('503'));
 fail=false;
 assert.match(await retrieval.test(),/연결 성공/);
