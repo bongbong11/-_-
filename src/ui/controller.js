@@ -69,6 +69,7 @@ function setFormValues() {
     setValue('sr-development-style', prefs.developmentStyle);
     setValue('sr-progress-intensity', Number(prefs.progressIntensity ?? 1).toFixed(1));
     setValue('sr-character-volume', prefs.characterVolume || 'generous');
+    setValue('sr-npc-record-limit', prefs.npcRecordLimit || 3);
     const intensityValue=deps.document.getElementById('sr-progress-intensity-value');
     if(intensityValue)intensityValue.textContent=Number(prefs.progressIntensity ?? 1).toFixed(1);
     setValue('sr-world-profile', prefs.selectedWorldId);
@@ -80,6 +81,7 @@ function setFormValues() {
     setValue('sr-world-injection-mode', deps.macroAvailable ? prefs.worldInjectionMode : 'depth');
     setValue('sr-relationship-pace', prefs.relationshipPace);
     setValue('sr-resolution-pace', prefs.resolutionPace);
+    setValue('sr-physical-intimacy-pace', prefs.physicalIntimacyPace || 'medium');
     setChecked('sr-fight-sustain', prefs.fightSustain);
     setChecked('sr-villain-enabled', prefs.villainEnabled);
     setValue('sr-appearance-chance', prefs.appearanceChance);
@@ -655,6 +657,8 @@ function bindForm() {
             rawJevAnswers: frame?.answers || judgment.rawChoices,
             worldSelection: judgment.worldSelection, worldGate: frame?.worldGate,
             decisions: judgment.details, actionPlan: judgment.actionPlan, rolls: judgment.rolls,
+            correctionSelection: judgment.correctionSelection,
+            characterTrace: judgment.characterTrace,
             verification: judgment.priorVerification, characterStateCapture: selectedStateCapture(),
             finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
         }, deps.ownerPrompt());
@@ -675,15 +679,15 @@ function bindForm() {
         const tab = deps.dialog.querySelector('.sr-tab-panel.active')?.id?.replace('sr-tab-', '') || 'flow';
         const related = (key) => tab === 'advanced' ? key.startsWith('advanced_') || ['primary_focus', 'secondary_focus', 'event_state', 'event_route'].includes(key)
             : tab === 'conflict' ? ['conflict_state', 'fight_sustain', 'villain_route', 'npc_autonomy', 'npc_knowledge_fit', 'world_hostility', 'misfortune', 'negative_priority'].includes(key) || key.startsWith('verification_')
-                : tab === 'characters' ? key.startsWith('character_') || ['npc_route', 'npc_presence', 'npc_knowledge_fit'].includes(key)
+                : tab === 'characters' ? key.startsWith('character_') || key.startsWith('sexual_') || ['npc_route', 'npc_presence', 'npc_knowledge_fit'].includes(key)
                     : true;
         const details = Object.fromEntries(Object.entries(judgment.details || {}).filter(([key]) => related(key)).map(([key, value]) => [key, {
             original: value.selected, confidence: value.certainty, final: value.effective, reason: value.rule || '',
         }]));
         const report = { tab, judgedAt: judgment.judgedAt, model: judgment.model,
             jevOriginalChoices: Object.fromEntries(Object.entries(judgment.rawChoices || {}).filter(([key]) => related(key))), decisions: details,
-            actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification,
-            ...(tab==='characters'?{characterStateCapture:selectedStateCapture()}:{}), };
+            actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification, correctionSelection: judgment.correctionSelection,
+            ...(tab==='characters'?{characterStateCapture:selectedStateCapture(),characterTrace:(judgment.characterTrace || []).map(person=>({id:person.id,kind:person.kind,presence:person.presence,storedRecordCount:person.storedRecordCount,candidateCount:person.candidateCount,jevSelectedRuleIds:person.jevSelectedRuleIds,profileIds:person.profileIds,injectedRuleIds:person.injectedRuleIds,omittedBySlotRuleIds:person.omittedBySlotRuleIds,omittedRuleIds:person.omittedRuleIds,excludedByPresenceRuleIds:person.excludedByPresenceRuleIds,blockChars:person.blockChars,zeroReason:person.zeroReason})),sexualTrace:judgment.sexualTrace}:{}), };
         await deps.copyText(JSON.stringify(report, null, 2));
         notifySceneReaderToast(deps.window, 'success', '판정 원선택과 최종 조정 결과를 복사했습니다.', '씬판독기');
     })()));
@@ -720,6 +724,7 @@ function bindForm() {
     deps.document.getElementById('sr-world-injection-mode')?.addEventListener('change', (event) => deps.runUiTask(saveWorldInjectionMode(event.target.value)));
     deps.document.getElementById('sr-relationship-pace')?.addEventListener('change', (event) => deps.runUiTask(savePreference('relationshipPace', event.target.value)));
     deps.document.getElementById('sr-resolution-pace')?.addEventListener('change', (event) => deps.runUiTask(savePreference('resolutionPace', event.target.value)));
+    deps.document.getElementById('sr-physical-intimacy-pace')?.addEventListener('change', (event) => deps.runUiTask(savePreference('physicalIntimacyPace', event.target.value)));
     for (const [id, key] of [['sr-negative-priority', 'negativePriority'], ['sr-fight-sustain', 'fightSustain'], ['sr-social-enabled', 'socialEnabled'], ['sr-world-hostility', 'worldHostility'], ['sr-npc-user', 'npcToUser'], ['sr-user-misfortune', 'userMisfortune']]) {
         deps.document.getElementById(id)?.addEventListener('change', (event) => deps.runUiTask(savePreference(key, event.target.checked)));
     }
@@ -1074,6 +1079,7 @@ function bindForm() {
         setFormValues();
     })(), '감정 판정 방식을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-character-volume')?.addEventListener('change', event => deps.runUiTask(savePreference('characterVolume', event.target.value), '인물 주입량 설정을 저장하지 못했습니다.'));
+    deps.document.getElementById('sr-npc-record-limit')?.addEventListener('change', event => deps.runUiTask(savePreference('npcRecordLimit', Number(event.target.value)), 'NPC 주입 개수 설정을 저장하지 못했습니다.'));
     for (const [id, kind] of [['sr-character-new', 'character'], ['sr-persona-new', 'persona'], ['sr-npc-sheet-new', 'npc']]) deps.document.getElementById(id)?.addEventListener('click', () => showCharacterEditor(kind));
     deps.document.getElementById('sr-character-lore-options')?.addEventListener('change',()=>{
         const checked=new Set([...deps.document.querySelectorAll('#sr-character-lore-options input:checked')].map(input=>input.value));

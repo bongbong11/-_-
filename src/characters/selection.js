@@ -66,6 +66,5 @@ export function selectActiveEntries(store, transcript, primaryCharacterName = ''
     return scored
         .sort((a, b) => b.score - a.score || b.order - a.order)
         .map((item) => item.entry)
-        .slice(0, allowUserImpersonation ? 4 : 3);
+        .slice(0, 6);
 }
-

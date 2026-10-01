@@ -38,7 +38,7 @@ await access(new URL('./downloads/scene-reader-jev-plugin-v0.7.0.zip', import.me
 await access(new URL(`./downloads/scene-reader-sillytavern-v${manifest.version}.zip`, import.meta.url));
 
 assert.equal(manifest.display_name, '씬판독기');
-assert.equal(manifest.version, '0.25.4');
+assert.equal(manifest.version, '0.26.0');
 assert.equal(pkg.version, manifest.version);
 assert.match(decisionEngineSource, /Math\.max\(0, Math\.min\(1, Number\.isFinite\(confidence\) \? confidence : p\)\)/);
 assert.match(decisionEngineSource, /allowedChoices\.includes\(candidate\)/);
@@ -573,7 +573,8 @@ assert.match(exactPayload, /<RELATIONSHIP_PACING mode="medium">/);
 assert.match(exactPayload, /<RELATIONSHIP_BEAT type="confession">/);
 assert.match(exactPayload, /<EXECUTION_CORRECTION>/);
 assert.match(exactPayload, /When an established intent, threat, hostile pressure/);
-assert.doesNotMatch(exactPayload, /Stop repeating near-actions/);
+assert.match(exactPayload, /repeating hesitation or near-actions/);
+assert.match(exactPayload, /Do not substitute repeated questions/);
 const position = (text) => exactPayload.indexOf(text);
 assert.ok(position('<WORLD_DIRECTION') < position('<RELATIONSHIP_PACING'));
 assert.ok(position(LEGACY_PROMPTS.CHARACTER_TO_USER_DEFAULT) < position('<RELATIONSHIP_PACING'), 'fixed relationship policy precedes this-turn relationship execution');
@@ -675,12 +676,27 @@ assert.equal(buildCharacterInjection([]).text,'');const charPayload = buildInjec
     characterBlock: charBlock,
 });
 assert.match(charPayload, /<CHARACTER_EXECUTION>/);
-assert.equal((charPayload.match(/Do not reuse the recent closing architecture/g) || []).length, 0, 'only the two highest-priority execution corrections may be injected');
+assert.equal((charPayload.match(/Do not reuse the recent closing architecture/g) || []).length, 1, 'every detected correction is represented');
 assert.equal((charPayload.match(/<EXECUTION_CORRECTION>/g) || []).length, 1);
 assert.match(charPayload, /Treat \{\{user\}\}'s input as already established/);
 assert.match(charPayload, /Do not substitute repeated questions/);
+assert.match(charPayload, /Change one concrete action, fact, consequence|Begin with a response or consequence/);
 assert.ok(charPayload.indexOf('<NARRATIVE_CADENCE') < charPayload.indexOf('<CHARACTER_EXECUTION>'));
 assert.match(charPayload, /one primary beat/);
+const allCorrectionsPayload = buildInjection({
+    settings: { worldDirection:'natural', relationshipDirection:'dynamic', progressionMode:'off', roleplayPace:'medium' },
+    decisions: {
+        npc_knowledge_fit:'overreach', directive_followthrough:'missed', npc_followthrough:'partial',
+        action_evasion:'yes', scene_cutoff:'yes', user_handoff:'yes', circularity:'yes',
+        refusal_stall:'yes', input_echo:'yes', repetitive_ending:'yes', hesitation_drag:'yes',
+    },
+});
+const correctionLines = allCorrectionsPayload.match(/<EXECUTION_CORRECTION>\n([^]*?)\n<\/EXECUTION_CORRECTION>/)?.[1].split('\n') || [];
+assert.equal(correctionLines.length, 7, 'six prioritized corrections plus scope are injected');
+assert.match(allCorrectionsPayload, /Do not substitute repeated questions/);
+assert.match(allCorrectionsPayload, /Do not reuse the recent closing architecture/);
+assert.doesNotMatch(allCorrectionsPayload, /repeating hesitation or near-actions/);
+assert.ok(correctionLines.join('\n').length < 1600, `all corrections remain compact (${correctionLines.join('\n').length} chars)`);
 const repeatedEndingPayload = buildInjection({
     settings: { worldDirection: 'natural', relationshipDirection: 'dynamic', progressionMode: 'off', relationshipPace: 'medium', resolutionPace: 'medium', roleplayPace: 'medium' },
     decisions: { response_cadence: 'natural', relationship_pacing: 'hold', relationship_beat: 'none', event_state: 'none', resolution_pacing: 'continue', primary_focus: 'direct', npc_route: 'none', villain_route: 'none', fight_sustain: 'no', repetitive_ending: 'yes' },

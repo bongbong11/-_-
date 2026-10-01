@@ -160,12 +160,12 @@ export function buildContinuityInjection(selected, chosenFollowup = null) {
     const lines = [];
     const usable = (value, max) => { const text = String(value || '').trim(); return text && text.length <= max && !/[가-힣]/u.test(text) ? text : ''; };
     for (const item of selected?.items || []) {
-        const label = usable(item.label, 100);
+        const label = usable(item.label, 140);
         if (label) lines.push(`${label}: ${item.lifecycle}${item.pressure && item.pressure !== 'none' ? `; pressure=${item.pressure}` : ''}.`);
     }
     for (const item of selected?.knowledge || []) {
-        const summary = usable(item.summary || item.factId, 120);
-        if (summary) lines.push(`${short(item.character, 60)} has a ${item.source} information source concerning ${summary}; preserve whether it is a report, observation, or verified fact.`);
+        const summary = usable(item.summary || item.factId, 160);
+        if (summary) lines.push(`${short(item.character, 80)} has a ${item.source} information source concerning ${summary}; preserve whether it is a report, observation, or verified fact.`);
     }
     for (const item of selected?.dependencies || []) lines.push(`${short(item.stateId, 60)} remains in its established lifecycle; pressure=${item.pressure}.`);
     const action = usable(chosenFollowup?.data?.action, 180);

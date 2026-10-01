@@ -40,7 +40,7 @@ for(const style of ['static','balanced','dynamic']) for(const advanced of [false
     const {f,seen}=setup({style,advanced,impersonate});
     await f.run('runJudge({force:true})');
     const req=seen[0], people=req.state.character_profiles.people;
-    assert.equal(req.state.controls.settingsContract,3);
+    assert.equal(req.state.controls.settingsContract,4);
     assert.equal(req.state.controls.developmentStyle,style);
     assert.ok(req.questions.basic_move && req.questions.progress_need);
     assert.equal(Boolean(req.questions.advanced_world_rules),advanced);
@@ -133,7 +133,9 @@ for (const style of ['static','dynamic']) for (const intensity of [0.5,1.5]) {
     await f.run('runJudge({force:true})');
     assert.equal(calls,2,'state choices do not add a Jev call');
     const judgment=JSON.parse(f.run('JSON.stringify(record().lastJudgment)'));
-    assert.match(judgment.payload,/Prior state sexual arousal 35%/,'ordinary progression does not consume the character-state allowance');
+    assert.doesNotMatch(judgment.payload,/Prior state sexual arousal 35%/,'stored arousal no longer competes with the independent physical-conduct router');
+    assert.match(judgment.payload,/<SEXUAL_CONDUCT pace="medium">/,'physical conduct is injected independently of ordinary progression');
+    assert.ok(!Object.keys(seen.at(-1).questions).some(key=>key.endsWith('_affect_a')),'the old arousal-expression question is suppressed for router-managed people');
     assert.match(judgment.payload,/Prior state anger 25%/,'different feelings coexist');
     assert.ok(seen[0].state.prior_output_character_states.every(person=>person.id!=='persona'),'persona state stays private when impersonation is off');
     f.run('characterStore.npcs[0].trackArousal=false;');

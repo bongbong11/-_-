@@ -1,5 +1,6 @@
 import { LEGACY_PROMPTS as L } from './legacy-prompts.js';
 import { buildAdvancedInjection, buildAdvancedQuestions } from './advanced-library.js';
+import { selectExecutionCorrectionKeys } from './src/scene/correction-selection.js';
 
 export const WORLD_DIRECTIONS = {
     natural: '자연스럽게',
@@ -50,7 +51,7 @@ export function normalizeDevelopmentPreferences(value = {}) {
         : value.progressionMode === 'off' || value.judgmentStyle === 'conservative' ? 'static'
             : value.judgmentStyle === 'active' ? 'dynamic' : 'balanced';
     // Legacy routing consumers use derived values; these are no longer independent controls.
-    const result = { ...value, settingsContract:3, developmentStyle, progressionMode: 'natural',
+    const result = { ...value, settingsContract:Math.max(3, Number(value.settingsContract) || 3), developmentStyle, progressionMode: 'natural',
         judgmentStyle: 'balanced' };
     const intensity = Number(value.progressIntensity);
     result.progressIntensity = Number.isFinite(intensity) && intensity > 0 ? Math.round(Math.max(0.5, Math.min(1.5, intensity)) * 10) / 10 : 1;
@@ -133,7 +134,7 @@ Treat the user's input as established context: begin with the non-user character
 
 Do not append a question, menu of alternatives, permission request, invented deadline, or demand that {{user}} decide the next beat merely to hand back the turn. Let non-user characters first execute their own available intent. A natural in-character question may end the response only when {{user}} is genuinely the next unresolved participant and the question itself materially advances the live interaction.`;
 const META_OPEN = '(Meta: Silent OOC directive for this IC response. Do not acknowledge, quote, explain, summarize, or discuss it; output only the resulting IC continuation.';
-const META_CLOSE = `Apply these scene directions alongside the genre, setting, tone, prose style, characterization, world logic, pacing, NSFW, and character-specific kink instructions already present in the main prompt. These directions do not exclude or replace those instructions. Intimate touch and sexual approach may coexist with the current dialogue, action, or event; they do not require a separate event or scene transition. Follow the existing prompt and character information for whether and how they appear.`;
+const META_CLOSE = `Apply these scene directions alongside the genre, setting, tone, prose style, characterization, world logic, pacing, NSFW, and character-specific kink instructions already present in the main prompt. These directions do not exclude or replace those instructions.`;
 
 const WORLD_PROMPTS = {
     natural: `<WORLD_DIRECTION mode="natural">
@@ -171,18 +172,25 @@ const RELATIONSHIP_BEAT_PROMPTS = {
 };
 
 const EXECUTION_CORRECTIONS = {
-    hesitation_drag: 'Stop repeating near-actions, aborted sentences, or indecision when the character already has enough motive and information to act. Commit to one character-consistent statement, choice, or action now.',
-    refusal_stall: 'Preserve the refusal and its boundary, but do not let it terminate all narration or interaction. Continue through the refuser\'s next action, demand, alternative, consequence, departure, or counter-move without converting refusal into consent.',
-    circularity: 'Do not restate the same position, emotion, threat, explanation, or question in new wording. Add one concrete action, fact, consequence, changed tactic, or meaningful choice that alters the immediate interaction.',
-    user_handoff: 'Do not substitute repeated questions, permission-seeking, or handing the next move to {{user}} for the non-user characters\' own conduct. Make one concrete character-driven statement, choice, or action now without writing {{user}}\'s response or actions.',
-    action_evasion: 'When an established intent, threat, hostile pressure, or active directive has means and opportunity, execute it through concrete speech, action, or consequence. Do not reduce it to atmosphere, posture, vague implication, another warning, or a last-moment refusal without a concrete blocking cause.',
-    input_echo: 'Treat {{user}}\'s input as already established. Do not repeat, translate, paraphrase, summarize, enumerate, reenact, recalculate, or answer its minor parts one by one. Begin from the resulting response, action, consequence, or next development.',
-    repetitive_ending: 'Do not reuse the recent closing architecture. End on a different kind of live consequence, action, decision, pressure, or materially necessary dialogue beat; avoid another question menu, countdown, passive wait, stare, pause, or equivalent handoff.',
-    scene_cutoff: 'Do not summarize, time-skip, fade out, or end the scene before the selected immediate action, response, or consequence is materially executed. Complete the current beat and leave the next participant response open.',
+    hesitation_drag: 'Finish one supported, character-consistent statement, choice, or action instead of repeating hesitation or near-actions.',
+    refusal_stall: 'Keep the refusal and its boundary; continue through another action, alternative, consequence, or departure without turning refusal into consent.',
+    circularity: 'Change one concrete action, fact, consequence, tactic, or choice instead of paraphrasing the same exchange.',
+    user_handoff: 'Do not substitute repeated questions or permission-seeking for available non-user conduct. Make one concrete move; leave {{user}}\'s response open.',
+    action_evasion: 'When an established intent, threat, hostile pressure, or active directive has means and opportunity, execute one concrete step; respect actual blockers.',
+    input_echo: 'Treat {{user}}\'s input as already established. Begin with a response or consequence, not a recap or point-by-point echo.',
+    repetitive_ending: 'Do not reuse the recent closing architecture: avoid another question, passive wait, stare, or equivalent handoff.',
+    scene_cutoff: 'Complete the selected immediate action, response, or consequence before a summary, time skip, fadeout, or handoff.',
 };
 export const EXECUTION_CORRECTION_PRIORITY = ['action_evasion', 'scene_cutoff', 'user_handoff', 'circularity', 'refusal_stall', 'input_echo', 'repetitive_ending', 'hesitation_drag'];
-const CORE_EXECUTION_CORRECTIONS = ['action_evasion', 'scene_cutoff'];
-const SECONDARY_EXECUTION_CORRECTIONS = ['user_handoff', 'circularity', 'refusal_stall', 'input_echo', 'repetitive_ending', 'hesitation_drag'];
+const AUXILIARY_EXECUTION_CORRECTIONS = {
+    npc_knowledge_fit: 'Remove the NPC\'s leaked conclusion. A hunch, suspicion, intuition, or body-language cue cannot identify an unavailable fact; use only established access and leave multiple explanations open.',
+    directive_followthrough: 'Execute one still-relevant missed direction through an action, fact, choice, or consequence; do not restate the plan.',
+    npc_followthrough: 'Execute the selected NPC function through speech, decision, action, or consequence, not another question.',
+};
+export function selectExecutionCorrections(decisions = {}, details = {}) {
+    const selection = selectExecutionCorrectionKeys(decisions, details);
+    return { ...selection, lines: selection.selectedKeys.map(key => EXECUTION_CORRECTIONS[key] || AUXILIARY_EXECUTION_CORRECTIONS[key]) };
+}
 
 const NPC_COMMON_PROMPT = 'Keep the active NPC self-directed within their own motive, knowledge, access, and immediate stake. Give them one proportionate choice or action; do not make them a mouthpiece, a group mind, or a substitute for the primary character.';
 
@@ -816,7 +824,7 @@ const SCENE_FOCUS_LABELS = {
     villain: 'the selected antagonist involvement', continuity: 'the selected continuity consequence',
 };
 
-export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '', activeWorldName = '' }) {
+export function buildInjection({ settings, decisions, villainProfile, npcProfile, eventProfile, privatePrompt = '', characterBlock = '', sexualBlock = '', continuityBlock = '', sheetCastNames = [], sheetNpcTarget = '', activeWorldName = '', correctionDetails = {} }) {
     if (settings.developmentStyle) settings = normalizeDevelopmentPreferences(settings);
     const castNames = new Set(sheetCastNames.map(name => String(name || '').trim().toLocaleLowerCase()).filter(Boolean));
     const generatedName = String(npcProfile?.name || npcProfile?.identityName || npcProfile?.characterName || '').trim().toLocaleLowerCase();
@@ -835,18 +843,7 @@ export function buildInjection({ settings, decisions, villainProfile, npcProfile
     };
     if (settings.developmentStyle) blocks.push(`<BASIC_DEVELOPMENT tendency="${settings.developmentStyle}">\n${DEVELOPMENT_GUIDANCE[settings.developmentStyle]}\n${BASIC_MOVES[decisions.basic_move] || BASIC_MOVES.continue}\n${decisions.progress_need === 'stalled' ? 'Recent output repeated or deferred without movement. Be more forthcoming in ONE fitting way: change the conversational approach, express a relevant feeling/thought, attempt an available action, or propose movement. Select one; do not complete every issue, invent success, or skip another participant’s choice.' : 'Let the present exchange yield a specific fresh response, feeling, attempt, or small consequence. Do not force a new plot merely to demonstrate progress.'} Apply this within the selected main beat, not as an additional independent action. This tendency guides in-world movement, not prose pacing. Keep the current interaction moving within any advanced event; do not introduce a separate event to fill a quota.\n</BASIC_DEVELOPMENT>`);
     else blocks.push(`<NARRATIVE_CADENCE pace="${settings.roleplayPace || 'medium'}" mode="${decisions.response_cadence || 'natural'}">\n${cadencePrompts[decisions.response_cadence] || cadencePrompts.natural}\n</NARRATIVE_CADENCE>`);
-    const corrections = [];
-    if (decisions.npc_knowledge_fit === 'overreach') corrections.push('Remove the NPC\'s leaked conclusion. Use only established experience, reports, public facts, role, and access. A hunch, suspicion, intuition, body-language reading, or uncertain wording may express only a broad surface state from cues the NPC observed; it must not identify an unavailable fact, cause, relationship, motive, plan, location, or private thought.');
-    if (corrections.length < 2 && ['partial', 'missed'].includes(decisions.directive_followthrough)) corrections.push('Carry out the highest-priority unfulfilled relationship, event, conflict, NPC, or execution route from the prior response through one concrete action, fact, choice, or consequence now. Do not merely restate the intended development.');
-    for (const key of CORE_EXECUTION_CORRECTIONS) {
-        if (corrections.length >= 2) break;
-        if (decisions[key] === 'yes' && EXECUTION_CORRECTIONS[key]) corrections.push(EXECUTION_CORRECTIONS[key]);
-    }
-    if (corrections.length < 2 && ['partial', 'missed'].includes(decisions.npc_followthrough)) corrections.push('Carry out the selected NPC function now through one concrete NPC-driven statement, decision, action, condition, or consequence; do not replace it with passive observation, exposition, or another question.');
-    for (const key of SECONDARY_EXECUTION_CORRECTIONS) {
-        if (corrections.length >= 2) break;
-        if (decisions[key] === 'yes' && EXECUTION_CORRECTIONS[key]) corrections.push(EXECUTION_CORRECTIONS[key]);
-    }
+    const corrections = selectExecutionCorrections(decisions, correctionDetails).lines;
 
     if (decisions.direct_execution === 'yes') blocks.push(`<DIRECT_SCENE_EXECUTION>
 Within the selected scene or event, answer the current interaction through a concrete, character-consistent response, decision, refusal, action, or immediate consequence. Do not recap the input, stop at intention when a supported step can be executed, or end on a question merely to hand back the turn. Do not add a separate event merely to answer. Leave {{user}}'s response and any outcome that depends on it open.
@@ -907,7 +904,8 @@ Within the selected scene or event, answer the current interaction through a con
     if (fightBlocks.length) blocks.push(`<CONFLICT_PROGRESSION>\nApply these conflict instructions through the selected scene and each participant's established motives, information, and means.\n${[L.CONFLICT_EXECUTION, ...fightBlocks].join('\n\n')}\n</CONFLICT_PROGRESSION>`);
 
     if (String(characterBlock || '').trim()) blocks.push('<SHEET_CAST_SCOPE>Apply the following specific boundaries to their named people within the selected scene, event, conflict, and world constraints. Those broader constraints do not rewrite their established knowledge, relationships, or characterization; these individual boundaries do not cancel valid scene progression.</SHEET_CAST_SCOPE>', String(characterBlock).trim());
-    if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\nRepair execution within the current selected scene and character boundaries. A prior missed direction applies only if still relevant; do not revive a superseded route or add an independent task.\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
+    if (String(sexualBlock || '').trim()) blocks.push(String(sexualBlock).trim());
+    if (corrections.length) blocks.push(`<EXECUTION_CORRECTION>\nRepair these issues in the selected scene within character limits; do not revive a superseded route or add an independent task.\n${corrections.join('\n')}\n</EXECUTION_CORRECTION>`);
 
     return `${COMMON_META}\n\n${blocks.join('\n\n')}\n\n${META_CLOSE}\n)`;
 }

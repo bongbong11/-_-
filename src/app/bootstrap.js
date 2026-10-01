@@ -35,6 +35,7 @@ import { REASONER_SYSTEM, applyContinuityVerdicts, buildContinuityInjection, nor
 import { listConnectionProfiles, requestWithConnectionProfile } from '../../st-profile-reasoner.js';
 import { sha256Hex } from '../../security-utils.js';
 import { profileStatus, normalizeCharacterStore, selectActiveEntries, addCharacterNeedsQuestions, characterCategoryHints, buildLiveCharacterPlan, buildCharacterTurnQuestions, resolveLiveCharacterPlan, buildCharacterInjection } from '../../character-library.js';
+import { PHYSICAL_PACES, normalizePhysicalPace } from '../characters/sexual-conduct.js';
 
 import { createJobScope, createWriteQueue, StaleRunError } from '../app/jobs.js';
 import { messageSnapshot, firstChangedMessage, attachSelectedOutput } from '../input/message-identity.js';
@@ -88,9 +89,10 @@ const CHAT_DEFAULTS = {
     worldDirection: 'natural',
     relationshipDirection: 'dynamic',
     negativePriority: false,
-    settingsContract: 3,
+    settingsContract: 4,
     progressIntensity: 1,
     characterVolume: 'generous',
+    npcRecordLimit: 3,
     developmentStyle: 'balanced',
     progressionMode: 'natural',
     judgmentStyle: 'balanced',
@@ -103,6 +105,7 @@ const CHAT_DEFAULTS = {
     advancedElements: ADVANCED_DEFAULT_ELEMENTS,
     relationshipPace: 'medium',
     resolutionPace: 'medium',
+    physicalIntimacyPace: 'medium',
     allowUserImpersonation: false,
     profileEmotionJudgment: false,
     fightSustain: false,
@@ -410,7 +413,7 @@ function record(create = false) {
         const validValue = (valueToCheck, choices, fallback) => Object.hasOwn(choices, valueToCheck) ? valueToCheck : fallback;
         value.preferences.worldDirection = validValue(value.preferences.worldDirection, WORLD_DIRECTIONS, CHAT_DEFAULTS.worldDirection);
         value.preferences.relationshipDirection = validValue(value.preferences.relationshipDirection, RELATIONSHIP_DIRECTIONS, CHAT_DEFAULTS.relationshipDirection);
-        if (saved.settingsContract !== 3) {
+        if (saved.settingsContract !== 4) {
             value.lastJudgment = null;
             if (!value.pendingPlan?.outputText) value.pendingPlan = null;
         }
@@ -418,8 +421,10 @@ function record(create = false) {
         value.preferences = normalizeDevelopmentPreferences({...value.preferences, developmentStyle:migratedDevelopment.developmentStyle});
         value.preferences.advancedStyle = validValue(value.preferences.advancedStyle, ADVANCED_STYLES, CHAT_DEFAULTS.advancedStyle);
         value.preferences.characterVolume = ['basic','generous','detailed'].includes(value.preferences.characterVolume) ? value.preferences.characterVolume : CHAT_DEFAULTS.characterVolume;
+        value.preferences.npcRecordLimit = [2,3,4].includes(Number(value.preferences.npcRecordLimit)) ? Number(value.preferences.npcRecordLimit) : CHAT_DEFAULTS.npcRecordLimit;
         if (!Object.hasOwn(saved,'characterVolume')) { value.lastJudgment=null; if (!value.pendingPlan?.outputText) value.pendingPlan=null; }
         for (const key of ['relationshipPace', 'resolutionPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
+        value.preferences.physicalIntimacyPace = normalizePhysicalPace(value.preferences.physicalIntimacyPace);
         for (const key of ['injectionMode', 'worldInjectionMode']) value.preferences[key] = ['depth', 'macro'].includes(value.preferences[key]) ? value.preferences[key] : CHAT_DEFAULTS[key];
         value.preferences.selectedWorldId = typeof value.preferences.selectedWorldId === 'string' && value.preferences.selectedWorldId ? value.preferences.selectedWorldId : CHAT_DEFAULTS.selectedWorldId;
         value.preferences.seasonalReferences = [...new Set((Array.isArray(value.preferences.seasonalReferences) ? value.preferences.seasonalReferences : []).filter(key => Object.hasOwn(SEASONAL_OPTIONS, key)))];
@@ -907,16 +912,17 @@ function optionsHtml(items) {
 function createDialog() {
     dialog = document.createElement('dialog');
     dialog.id = 'scene-reader-dialog';
-    dialog.innerHTML = dialogTemplate({optionsHtml, escapeHtml, WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, PACE_OPTIONS, ADVANCED_STYLES, ADVANCED_ELEMENTS});
+    dialog.innerHTML = dialogTemplate({optionsHtml, escapeHtml, WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, PACE_OPTIONS, PHYSICAL_PACES, ADVANCED_STYLES, ADVANCED_ELEMENTS});
     document.body.append(dialog);
     // A modal dialog sits in the browser's top layer. Body-level toasts would
     // render behind it regardless of z-index, so keep the shared toast container
     // inside the dialog only while the dialog is open.
     const syncToastLayer = () => {
-        const container = document.getElementById('toast-container');
-        if (!container) return;
         const target = dialog.open ? dialog : document.body;
-        if (container.parentElement !== target) target.append(container);
+        for (const id of ['toast-container', 'scene-reader-toast-container']) {
+            const container = document.getElementById(id);
+            if (container && container.parentElement !== target) target.append(container);
+        }
     };
     new MutationObserver(syncToastLayer).observe(document.body, { childList: true });
     dialog.addEventListener('close', syncToastLayer);
@@ -955,6 +961,8 @@ function openSceneReader() {
     if (!dialog.open) dialog.showModal();
     const toastContainer = document.getElementById('toast-container');
     if (toastContainer && toastContainer.parentElement !== dialog) dialog.append(toastContainer);
+    const sceneToastContainer = document.getElementById('scene-reader-toast-container');
+    if (sceneToastContainer && sceneToastContainer.parentElement !== dialog) dialog.append(sceneToastContainer);
     void loadReasonerProfiles();
 }
 

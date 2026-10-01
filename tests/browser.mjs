@@ -36,6 +36,7 @@ window.toastr=Object.fromEntries(['info','success','error','warning'].map(name=>
     container.append(node);const expiry=options.timeOut??5000;if(expiry>0)setTimeout(()=>node.remove(),expiry);
     const item={0:node,find(selector){return {text(value){const child=node.querySelector(selector);if(child)child.textContent=value}}},toggleClass(name,on){node.classList.toggle(name,on)},remove(){node.remove()},fadeOut(_ms,callback){node.remove();callback?.call(item)}};return item;
 }]));
+new MutationObserver(()=>{for(const node of document.querySelectorAll('#scene-reader-toast-container > .sr-scene-toast')){if(node.dataset.srRecorded)continue;node.dataset.srRecorded='true';const level=node.dataset.srLevel,message=node.querySelector('.sr-toast-message')?.textContent||'';(mock.toasts ||= []).push({level,message});if(level==='error')mock.errors.push(message);}}).observe(document.body,{childList:true,subtree:true});
 window.eventSource={on(name,fn){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn)}};
 </script><script type="module" src="${prefix}index.js"></script></html>`;
 const server=http.createServer(async(req,res)=>{try{
@@ -122,7 +123,7 @@ try{
     await page.evaluate(async()=>{
         const api=await import('/scripts/extensions/third-party/scene-reader/src/ui/toasts.js');
         window.toastTest={...api,native:window.toastr};
-        document.querySelectorAll('#toast-container > .toast').forEach(node=>node.remove());
+        document.querySelectorAll('#toast-container > .toast, #scene-reader-toast-container > .sr-scene-toast').forEach(node=>node.remove());
         window.toastr.info('Other extension');
         toastTest.progress=api.notifySceneReaderToast(window,'info','検索 <script>unsafe</script>','씬판독기',{sceneState:'working',timeOut:0,extendedTimeOut:0});
     });
@@ -132,11 +133,11 @@ try{
     assert.equal(await page.locator('#toast-container > .toast:not(.sr-scene-toast) .sr-toast-mascot').count(),0,'foreign toast is untouched');
     assert.equal(await progressToast.locator('script').count(),0,'notification content is plain text');
     await page.evaluate(()=>toastTest.updateSceneReaderToast(toastTest.progress,'인물 판독 중',{sceneState:'working'}));
-    assert.equal(await progressToast.locator('.toast-message').textContent(),'인물 판독 중','next stage updates immediately');
+    assert.equal(await progressToast.locator('.sr-toast-message').textContent(),'인물 판독 중','next stage updates immediately');
     await page.evaluate(()=>toastTest.updateSceneReaderToast(toastTest.progress,'적용 완료',{level:'success'}));
     assert.equal(await progressToast.getAttribute('data-sr-state'),'success');
     assert.equal(await progressToast.locator('.sr-toast-pose').evaluate(image=>image.src.endsWith('/success.webp')),true);
-    await progressToast.locator('.toast-message').click();
+    await progressToast.locator('.sr-toast-message').click();
     await page.evaluate(()=>toastTest.updateSceneReaderToast(toastTest.progress,'다음 단계',{sceneState:'working'}));
     assert.equal(await page.locator('.sr-scene-toast').count(),0,'dismissed progress never reappears on updates');
     const toastStates=['info','working','success','warning','error','paused','resumed'];
@@ -147,9 +148,10 @@ try{
             await page.evaluate(state=>{toastTest.current=toastTest.notifySceneReaderToast(window,'info',state==='paused'?'잠깐 비켜드릴게요♡':'이번 작업의 알림을 확인해 주세요.',state==='paused'?'앗, 둘만의 시간이네요!':'씬판독기',{sceneState:state});},state);
             const toast=page.locator('.sr-scene-toast');
             await page.waitForFunction(()=>[...document.querySelectorAll('.sr-scene-toast img')].every(image=>image.complete&&image.naturalWidth>0));
-            const layout=await toast.evaluate(node=>({width:node.getBoundingClientRect().width,scroll:node.scrollWidth,client:node.clientWidth,mascot:parseFloat(getComputedStyle(node.querySelector('.sr-toast-mascot')).width),font:parseFloat(getComputedStyle(node.querySelector('.toast-message')).fontSize),pose:node.querySelector('.sr-toast-pose').src}));
+            const layout=await toast.evaluate(node=>({width:node.getBoundingClientRect().width,scroll:node.scrollWidth,client:node.clientWidth,mascot:parseFloat(getComputedStyle(node.querySelector('.sr-toast-mascot')).width),font:parseFloat(getComputedStyle(node.querySelector('.sr-toast-message')).fontSize),pose:node.querySelector('.sr-toast-pose').src,center:node.getBoundingClientRect().left+node.getBoundingClientRect().width/2,viewport:innerWidth}));
             assert.ok(layout.width<=width-16&&layout.width>240,`${width}/${state}: toast stays within screen`);
             assert.ok(layout.scroll<=layout.client,`${width}/${state}: no text clipping`);
+            assert.ok(Math.abs(layout.center-layout.viewport/2)<2,`${width}/${state}: toast centered`);
             assert.equal(layout.mascot,width<=600?64:75);
             assert.ok(layout.font>=13,'mobile text remains readable');
             poseFiles.push(layout.pose);
@@ -170,7 +172,7 @@ try{
     assert.equal(await page.locator('.sr-toast-peek').evaluate(node=>getComputedStyle(node).opacity),'0');
     await page.locator('.sr-toast-mascot').click();
     await page.emulateMedia({reducedMotion:'no-preference'});
-    await page.evaluate(()=>document.querySelectorAll('#toast-container > .toast').forEach(node=>node.remove()));
+    await page.evaluate(()=>document.querySelectorAll('#toast-container > .toast, #scene-reader-toast-container > .sr-scene-toast').forEach(node=>node.remove()));
     for(const width of [320,390,768,1280]){
         await page.setViewportSize({width,height:850});
         for(const tab of ['flow','advanced','conflict','characters']){
@@ -304,9 +306,11 @@ try{
     await page.locator('#sr-settings-button').click();await page.locator('#sr-injection-mode').evaluate(element=>element.closest('details').open=true);await page.locator('#sr-injection-mode').selectOption('macro');
     const beforeMacro=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door again.'});await mock.emit('MESSAGE_SENT',3);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
-    assert.ok(requests.some(r=>r.body.questions?.character_0_affect_a),'prior output state becomes a next-turn Jev question');
-    assert.ok(requests.some(r=>r.body.questions?.character_0_affect_a),'Jev checks the specific feeling before carrying it forward');
-    assert.ok(store.chat.lastJudgment?.payload?.includes('Prior state sexual arousal 38%'),'selected state reaches the final character injection');
+    assert.ok(requests.some(r=>r.body.questions?.sexual_0_restraint),'physical self-control becomes an independent next-turn Jev question');
+    assert.ok(requests.some(r=>r.body.questions?.sexual_0_route),'Jev selects the physical conduct route separately from stored emotion values');
+    assert.ok(!requests.some(r=>r.body.questions?.character_0_affect_a),'the legacy arousal-expression question is suppressed for router-managed people');
+    assert.ok(store.chat.lastJudgment?.payload?.includes('<SEXUAL_CONDUCT pace="medium">'),'the independent physical decision reaches the final injection');
+    assert.ok(!store.chat.lastJudgment?.payload?.includes('Prior state sexual arousal 38%'),'stored arousal does not duplicate or block the physical conduct decision');
     assert.ok(!requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeMacro).some(r=>r.body.state?.memory_reference?.entries?.length),'reserved memory stays off in macro mode');
     const beforeLoreEdit=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.evaluate(async()=>{
@@ -335,6 +339,9 @@ try{
     const pausedPrompt=await page.evaluate(()=>mock.macros['scene-reader']?.()||'');
     assert.match(pausedPrompt,/Wade keeps intimate wishes private/,'participating character reference remains available');
     assert.ok(!pausedPrompt.includes('CHARACTER_EXECUTION'),'dynamic character direction pauses');
+    assert.ok(!pausedPrompt.includes('SEXUAL_CONDUCT'),'dynamic physical-conduct routing pauses');
+    assert.match(pausedPrompt,/<FIXED_SCENE_SETTINGS>/,'basic fixed extension settings remain active');
+    assert.match(pausedPrompt,/Active world:/,'the active world marker remains active');
     assert.match(pausedPrompt,/genre, setting, tone, prose style/,'fixed prompt coexistence remains');
     gateScenario={level:'0',phase:'ended'};
     const beforeResume=requests.length;
@@ -356,7 +363,7 @@ try{
         assert.equal(await page.locator('#sr-development-style').inputValue(),value);
         assert.equal(store.chat.preferences.developmentStyle,value);
     }
-    for (const [id,key,value] of [['sr-relationship-pace','relationshipPace','slow'],['sr-resolution-pace','resolutionPace','fast'],['sr-appearance-chance','appearanceChance','35']]) {
+    for (const [id,key,value] of [['sr-relationship-pace','relationshipPace','slow'],['sr-resolution-pace','resolutionPace','fast'],['sr-physical-intimacy-pace','physicalIntimacyPace','fast'],['sr-appearance-chance','appearanceChance','35']]) {
         await page.locator('#'+id).selectOption(value);
         await page.locator('[data-sr-tab="advanced"]').click();await page.locator('[data-sr-tab="flow"]').click();
         assert.equal(String(store.chat.preferences[key]),value);
@@ -479,6 +486,9 @@ try{
     await page.locator('[data-sr-tab="characters"]').click();
     await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-character-volume').selectOption('basic')]);
     assert.equal(store.chat.lastJudgment,null,'changing the volume discards the old judgment');
+    await Promise.all([page.waitForResponse(response=>response.url().endsWith('/chat')),page.locator('#sr-npc-record-limit').selectOption('2')]);
+    assert.equal(store.chat.preferences.npcRecordLimit,2,'NPC limit persists independently');
+    assert.equal(store.chat.preferences.characterVolume,'basic','NPC limit does not alter character/persona volume');
     await page.locator('#sr-close').click();
     await page.reload();
     await page.locator('#sr-extension-open').evaluate(e=>e.closest('details').open=true);

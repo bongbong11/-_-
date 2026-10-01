@@ -7,6 +7,8 @@ import { currentRecords, recordBankIsCurrent } from '../characters/records.js';
 import { addWorldQuestions, selectedWorldRecords, worldPayload as buildWorldPayload } from '../world/advanced.js';
 import { seasonalWorldNote } from '../world/seasonal.js';
 import { stateForEntry } from '../characters/state-contract.js';
+import { selectExecutionCorrectionKeys } from './correction-selection.js';
+import { applySexualChoice, buildSexualInjection, buildSexualQuestions, resolveSexualConduct, sexualEligible, sexualRoutingState } from '../characters/sexual-conduct.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
@@ -16,8 +18,8 @@ function sourceRevisionKey(rec, world) {
         reasoner: deps.settings.reasonerProfileId || '',
         retrieval: [deps.settings.retrievalProvider, deps.settings.retrievalModel, deps.settings.retrievalVertexAuth, deps.settings.retrievalVertexRegion, deps.settings.retrievalVertexProject],
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
-        characterSelectorContract: 3,
-        injectionAssemblyContract: 3,
+        characterSelectorContract: 5,
+        injectionAssemblyContract: 5,
         characterStateContract: 2,
         characterStateRevision: Number(rec?.characterStateRevision) || 0,
         sceneGateContract: 2,
@@ -408,24 +410,26 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         .map((item) => item.id)])];
     const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds, { allowUserImpersonation: prefs.allowUserImpersonation });
     const priorStates = new Map(activeCharacters.map(entry => [entry.id, stateForEntry(rawPriorStates.get(entry.id), entry)]).filter(([, state]) => state));
-    const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
+    const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 6);
     const categoryHints = deps.characterCategoryHints(worldRecordAnswers);
     const retrievalResults = new Map(await Promise.all((deps.characterStore.enabled ? activeCharacters.filter(recordBankIsCurrent) : []).map(async entry => {
         const values = priorStates.get(entry.id)?.values || {};
-        const cue = [values.a > 0 ? 'sexual desire restraint boundary' : '', ...['anger','joy','fear','sadness'].filter(key => values[key] > 0)].filter(Boolean).join(' ');
+        const cue = [sexualEligible(entry) ? 'sexual desire restraint boundary' : values.a > 0 ? 'sexual desire restraint boundary' : '', ...['anger','joy','fear','sadness'].filter(key => values[key] > 0)].filter(Boolean).join(' ');
         return [entry.id, await deps.vectorRetrieval.search({kind:'character',bankId:`${run.identity}:${entry.id}`,items:currentRecords(entry),transcript:cue ? `${transcript}\n${cue}` : transcript,limit:12,signal:run.controller.signal})];
     })));
     run.assert();
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
-        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true, volume:prefs.characterVolume, retrievalResults, categoryHints,
+        transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true, volume:prefs.characterVolume, npcSlots:prefs.npcRecordLimit, retrievalResults, categoryHints,
     }) : [];
     for (const person of liveCharacters) person.priorState = priorStates.get(person.id) || null;
+    for (const person of liveCharacters) person.sexualConductManaged = sexualEligible(person);
     if (deps.characterStore.characters.length === 1) {
         const primary = liveCharacters.find((person) => person.id === deps.characterStore.characters[0].id);
         if (primary) primary.mainSillyTavernName = deps.getContext().name2 || '';
     }
     if (deps.characterStore.enabled) Object.assign(questions, deps.buildCharacterTurnQuestions(liveCharacters));
+    Object.assign(questions, buildSexualQuestions(liveCharacters, prefs.physicalIntimacyPace));
     questions.npc_target = {
         type: 'choice',
         instructions: 'Only if an existing NPC is routed to act, select the specific established person with a plausible current role and access. This selects identity, not knowledge or conduct. Judge independently from the other questions.',
@@ -477,6 +481,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
+                sexual_routing: sexualRoutingState(liveCharacters, prefs.physicalIntimacyPace),
                 prior_output_character_states: liveCharacters.filter(person => person.priorState).map(person => ({
                     id: person.id, name: person.name, values: person.priorState.values, targets: person.priorState.targets,
                     scope: 'Previous completed assistant output only; not proof of a current action or another person’s knowledge.',
@@ -499,7 +504,9 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const details = {};
         for (const key of Object.keys(questions)) {
             const choices = Object.keys(questions[key]?.criteria || {});
-            details[key] = questions[key]?.type === 'noul' && /^character_\d+_record_\d+$/.test(key)
+            details[key] = key.startsWith('sexual_')
+                ? applySexualChoice(data.answers[key], choices)
+                : questions[key]?.type === 'noul' && /^character_\d+_record_\d+$/.test(key)
                 ? deps.applyRecordRelevance(data.answers[key])
                 : key.startsWith('character_') || key === 'npc_identity_route'
                 ? deps.applyCharacterPolicy(key, data.answers[key], prefs.judgmentStyle, choices)
@@ -610,6 +617,9 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const resolvedCharacters = deps.characterStore.enabled ? deps.resolveLiveCharacterPlan(liveCharacters, decisions, details) : [];
         const characterExecution = deps.buildCharacterInjection(resolvedCharacters, { conflictActive: ['tension', 'active'].includes(decisions.conflict_state) || decisions.fight_sustain === 'yes', volume:prefs.characterVolume });
         const characterTrace = characterExecution.traces;
+        const sexualPlan = resolveSexualConduct(resolvedCharacters, decisions, prefs.physicalIntimacyPace);
+        const sexualExecution = buildSexualInjection(sexualPlan, prefs.physicalIntimacyPace);
+        for (const item of characterTrace) item.sexualConduct = sexualPlan.find(plan => plan.id === item.id) || null;
         for(const item of characterTrace) {
             if(item.recordMode) {
                 const prefix=`character_${item.index}_record_`;
@@ -634,12 +644,14 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const sheetCastNames = [...deps.characterStore.characters, ...deps.characterStore.npcs, ...[deps.characterStore.persona].filter(Boolean)].flatMap(entry => [entry.name, ...(entry.aliases || [])]);
         const selectedSheetNpc = decisions.npc_route === 'reuse' && /^sheet_\d+$/.test(decisions.npc_target || '')
             ? npcTargets[Number(decisions.npc_target.slice(6))] || null : null;
-        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: selectedSheetNpc ? null : staged.npcProfile, sheetNpcTarget: selectedSheetNpc?.name || '', eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, continuityBlock, sheetCastNames, activeWorldName:world?.name||'' });
+        const correctionSelection = selectExecutionCorrectionKeys(decisions, details);
+        const payload = deps.buildInjection({ settings: prefs, decisions, villainProfile: staged.villainProfile, npcProfile: selectedSheetNpc ? null : staged.npcProfile, sheetNpcTarget: selectedSheetNpc?.name || '', eventProfile: staged.eventProfile, privatePrompt: prefs.privatePromptEnabled ? deps.ownerPrompt() : '', characterBlock, sexualBlock:sexualExecution.text, continuityBlock, sheetCastNames, activeWorldName:world?.name||'', correctionDetails:details });
         const finalContinuityCacheKey = deps.settings.continuityEnabled
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
         const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities, noul: answer?.noul }]));
-        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, characterInjectionChars:characterExecution.charCount, characterInjectionLimit:characterExecution.charLimit, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
+        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, characterInjectionChars:characterExecution.charCount, characterInjectionLimit:characterExecution.charLimit, sexualInjectionChars:sexualExecution.charCount, sexualTrace:sexualExecution.traces, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
+        rec.lastJudgment.correctionSelection = correctionSelection;
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
             rec.pendingPlan = {

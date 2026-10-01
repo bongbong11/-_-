@@ -5,3 +5,8 @@ export const CHARACTER_VOLUMES = Object.freeze({
 });
 
 export function characterVolume(key) { return CHARACTER_VOLUMES[key] || CHARACTER_VOLUMES.generous; }
+
+export function npcRecordLimit(value) {
+    const count = Number(value);
+    return [2, 3, 4].includes(count) ? count : 3;
+}

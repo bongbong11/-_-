@@ -23,14 +23,18 @@ export function selectRecordCandidates(entry, transcript, {limit=20,maxChars=160
     // Semantic hits lead, while a few lexical and broad anchors prevent one topic
     // from hiding a relationship, role or boundary that the scene also needs.
     const diverse=[], types=new Set();
-    for(const item of sorted) if((item.semantic || item.lexical) && !types.has(item.record.type) && diverse.length<4){types.add(item.record.type);diverse.push(item);}
+    const protectedRecord = item => item.record.type === 'boundary' || (item.record.type === 'knowledge' && ['does_not_know','misunderstands'].includes(item.record.knowledge_state));
+    const anchors = [...sorted.filter(protectedRecord), ...sorted.filter(item => !protectedRecord(item))];
+    for(const item of anchors) if((item.semantic || item.lexical) && !types.has(item.record.type) && diverse.length<4){types.add(item.record.type);diverse.push(item);}
     const primary=semanticRank.size ? [
         ...sorted.filter(item=>item.semantic).slice(0,Math.max(1,limit-4)),
         ...sorted.filter(item=>item.lexical && !item.semantic).slice(0,3),
         ...sorted.filter(item=>item.record.type==='core' && generic(item.record.when)).slice(0,1),
     ] : sorted;
     const selected=[], seen=new Set();let used=0, excludedByChars=0;
-    for(const item of [...primary,...diverse]) {
+    const reserved = Math.min(4, limit);
+    const candidates = reserved ? [...primary.slice(0, limit-reserved), ...diverse, ...primary.slice(limit-reserved)] : primary;
+    for(const item of candidates) {
         if(seen.has(item.index) || selected.length>=limit) continue;
         seen.add(item.index);
         const size=JSON.stringify(item.record).length;

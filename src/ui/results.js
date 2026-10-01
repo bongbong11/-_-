@@ -1,7 +1,8 @@
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { continuityView } from '../storage/knowledge.js';
 import { memoryStatusText } from '../memory/context.js';
-import { DECISION_LABELS, EXECUTION_CORRECTION_PRIORITY } from '../../prompt-library.js';
+import { DECISION_LABELS } from '../../prompt-library.js';
+import { selectExecutionCorrectionKeys } from '../scene/correction-selection.js';
 import { currentRecords, RECORD_LABELS, recordBankIsCurrent } from '../characters/records.js';
 import { ITEM_LABELS, currentProfileItems, profileStatus } from '../../character-library.js';
 import { normalizeContinuity } from '../../continuity-engine.js';
@@ -37,6 +38,12 @@ const CHARACTER_TURN_LABELS = {
     presence: { absent: '이번 응답에서 역할 없음', background: '배경에 머묾', active: '실제로 반응하거나 행동할 차례' },
     direction: { none: '별도 행동 지시 없음', speak: '대사로 반응', act: '행동으로 반응', selective: '중요한 부분만 반응', withhold: '근거 있는 정보 제한', evade: '근거 있는 회피', deceive: '근거 있는 기만', withdraw: '장면에서 물러남', confront: '현재 쟁점에 맞섬' },
 };
+const SEXUAL_TURN_LABELS = {
+    pace: { glacial:'극도의 슬로우번', slow:'느리게', medium:'중간', fast:'빠르게', unrestrained:'무절제' },
+    restraint: { full:'충분함', some:'조금 있음', little:'거의 없음', none:'없음' },
+    route: { approach:'상대에게 접근', self_relief:'개인적인 해소', controlled:'조절된 행동', inward:'내면에 유지', blocked:'실제 제약으로 보류' },
+    target: { self:'자신', scene_partner:'현재 장면의 상대' },
+};
 function characterTurnLabel(field, value) { return CHARACTER_TURN_LABELS[field]?.[value] || '적용하지 않음'; }
 function renderCharacterTurnResults() {
     const {settings, characterStore} = readState();
@@ -71,7 +78,7 @@ function renderCharacterTurnResults() {
         if(entry)trace.push({id:entry.id,name:entry.name,kind:entry.kind,index:trace.length,presence:'active',profileIds:[],emotionOnly:true});
     }
     if (!trace.length) { root.innerHTML = '<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
-    root.innerHTML = `<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
+    root.innerHTML = `<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 육체 판정 ${Number(judgment.sexualInjectionChars)||0}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
         const prefix = 'character_' + person.index + '_';
         const presence = judgment.details?.[prefix + 'presence'];
         const direction = judgment.details?.[prefix + 'response_direction'];
@@ -80,14 +87,18 @@ function renderCharacterTurnResults() {
             '<div class="sr-decision-row"><span>' + label + '</span><small>Jev ' + escapeHtml(String(detail.selected || '응답 없음')) + ' → 확신 ' + Math.round((Number(detail.certainty)||0)*100) + '% / 기준 ' + Math.round((Number(detail.threshold)||0)*100) + '% → 최종 ' + escapeHtml(String(detail.effective || '없음')) + ' · ' + escapeHtml(detail.rule || (detail.fallbackApplied ? '확신도 부족 · 기본값 적용' : '선택 유지')) + '</small></div>').join('');
         const entry = [...characterStore.characters,...characterStore.npcs,characterStore.persona].filter(Boolean).find((item) => item.id === person.id);
         const profileNames = (person.injectedRuleIds || []).map((id) => (person.recordMode ? person.recordSelections || [] : currentProfileItems(entry)).find((item) => item.id === id)?.rule).filter(Boolean);
+        const sexual = person.sexualConduct || judgment.sexualTrace?.find(item => item.id === person.id) || null;
         const rows = [
             ['이번 역할', characterTurnLabel('presence',person.presence)],
-            ...(person.recordMode ? [['판독 기록 상태', ({ current:'새 인물 기록 사용', stale:'기록이 오래됨 · 다시 추출 필요', legacy:'이전 방식만 저장됨 · 새 기록 추출 필요', missing:'저장된 인물 기록 없음' })[person.recordStatus] || '기록 상태 확인 필요'], ['검색 상태', ({ready:'임베딩 검색',cached:'검색 결과 재사용',fallback:'글자 검색으로 대체',lexical:'글자 검색',plain:'검색 대상 없음'})[person.prefilterStats?.retrievalStatus] || person.prefilterStats?.retrievalStatus || '확인 필요'], ['저장 → 후보 → Jev 선택 → 실제 주입', `${person.storedRecordCount || 0} → ${person.candidateCount || 0} → ${person.profileIds.length} → ${(person.injectedRuleIds || []).length}개`],['인물별 주입 길이',`${person.blockChars || 0}자`],...(person.zeroReason?[['선택 0개 이유',person.zeroReason]]:[])] : []),
+            ...(person.recordMode ? [['판독 기록 상태', ({ current:'새 인물 기록 사용', stale:'기록이 오래됨 · 다시 추출 필요', legacy:'이전 방식만 저장됨 · 새 기록 추출 필요', missing:'저장된 인물 기록 없음' })[person.recordStatus] || '기록 상태 확인 필요'], ['검색 상태', ({ready:'임베딩 검색',cached:'검색 결과 재사용',fallback:'글자 검색으로 대체',lexical:'글자 검색',plain:'검색 대상 없음'})[person.prefilterStats?.retrievalStatus] || person.prefilterStats?.retrievalStatus || '확인 필요'], ['저장 → 후보 → Jev 선택 → 실제 주입', `${person.storedRecordCount || 0} → ${person.candidateCount || 0} → ${(person.jevSelectedRuleIds || person.profileIds).length} → ${(person.injectedRuleIds || []).length}개`],['인물별 주입 길이',`${person.blockChars || 0}자`],...(person.zeroReason?[['선택 0개 이유',person.zeroReason]]:[])] : []),
             ...((person.prefilterStats?.excludedByChars || person.prefilterStats?.excludedByLimit) ? [['후보에서 제외',`개수 한도 ${person.prefilterStats.excludedByLimit || 0}개 · 후보 길이 한도 ${person.prefilterStats.excludedByChars || 0}개`]]:[]),
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
+            ...((person.omittedBySlotRuleIds || []).length ? [['선택 개수 한도로 제외', `${person.omittedBySlotRuleIds.length}개 규칙 · 경계와 지식 제한 우선`]] : []),
+            ...((person.excludedByPresenceRuleIds || []).length ? [['참여 판정으로 제외', `${person.excludedByPresenceRuleIds.length}개 규칙 · 이번 응답에 참여하지 않아 미적용`]] : []),
             ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
             ...(person.priorAffect?[['상태 표현 판정',(person.affectSelections||[]).map(item=>`${({a:'충동',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'})[item.field]} · ${({inward:'속마음·억제',visible:'대사·작은 행동',active:'인물에 맞는 직접 행동'})[item.expression]}`).join(' / ')||'이번 응답에 별도 반영 없음']]:[]),
+            ...(sexual ? [['육체적 진행 단계',SEXUAL_TURN_LABELS.pace[sexual.pace]||sexual.pace],['성적 자제력',SEXUAL_TURN_LABELS.restraint[sexual.restraint]||'응답 확인 필요'],['행동 경로',SEXUAL_TURN_LABELS.route[sexual.route]||'기존 프리셋에 맡김'],['행동 대상',SEXUAL_TURN_LABELS.target[sexual.target]||'판정 없음'],['육체 판정 주입',sexual.valid?'별도 주입 적용':sexual.presence!=='active'?'이번 응답 참여 없음':'응답 누락·형식 오류로 기존 프리셋에 맡김']]:[]),
             ['지식 접근 제외', (person.deniedIds || []).length ? person.deniedIds.length + '개 · 해당 정보만 제외' : '없음'],
             ...(!person.recordMode ? [['반응 방향', characterTurnLabel('direction',person.direction)]] : []),
         ].map(([label,value]) => '<div class="sr-decision-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>').join('');
@@ -136,14 +147,9 @@ function renderJudgment() {
     if (verificationKeys.length) roots['sr-conflict-quality'].insertAdjacentHTML('beforeend', verificationKeys.map((key) => card([key, judgment.details[key]])).join(''));
 
     const d = judgment.decisions || {};
-    const correctionIssues = EXECUTION_CORRECTION_PRIORITY.filter((key) => d[key] === 'yes').length
-        + (['partial', 'missed'].includes(d.directive_followthrough) ? 1 : 0)
-        + (['partial', 'missed'].includes(d.npc_followthrough) ? 1 : 0)
-        + (d.npc_knowledge_fit === 'overreach' ? 1 : 0);
-    const hasPrimaryCorrection = EXECUTION_CORRECTION_PRIORITY.some((key) => d[key] === 'yes')
-        || ['partial', 'missed'].includes(d.directive_followthrough)
-        || ['partial', 'missed'].includes(d.npc_followthrough);
-    const appliedCorrections = Math.min(2, correctionIssues);
+    const correctionSelection = judgment.correctionSelection || selectExecutionCorrectionKeys(d, judgment.details);
+    const correctionIssues = correctionSelection.detectedKeys.length;
+    const appliedCorrections = correctionSelection.selectedKeys.length;
     const npcText = ['create', 'reuse'].includes(d.npc_route) ? `${judgment.npcTargetName ? `${judgment.npcTargetName} · ` : ''}${resultLabel('npc_route', d.npc_route)} · ${resultLabel('npc_weight', d.npc_weight)} · ${resultLabel('npc_valence', d.npc_valence)}` : '미사용';
     const conflictApplied = [];
     if (d.negative_priority === 'on') conflictApplied.push('부정 편향 우선');
@@ -168,6 +174,7 @@ function renderJudgment() {
         ['갈등용', conflictApplied.length ? conflictApplied.join(' · ') : '미적용'],
         ['기본 진행', resultLabel('basic_move', d.basic_move)],
         ['실행 교정', correctionIssues ? `${correctionIssues}개 감지 · ${appliedCorrections}개 우선 적용` : '문제 없음'],
+        ...(correctionSelection.omittedKeys.length ? [['이번 교정에서 제외', correctionSelection.omittedKeys.map(decisionTitle).join(' · ')]] : []),
         ['실질 진행 압력', `${Number(record()?.progressionState?.turnsSinceMeaningfulProgress) || 0}회 연속 미이행`],
         ['상태 반영', record()?.pendingPlan ? (record().pendingPlan.status === 'awaiting_verification' ? '출력 있음 · 다음 판독에서 검증 대기' : '출력 대기') : record()?.lastVerification ? verificationText(record().lastVerification) : '검증할 계획 없음'],
     ].map(([name, value]) => `<div class="sr-summary-item"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');

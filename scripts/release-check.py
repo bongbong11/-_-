@@ -33,7 +33,7 @@ with ZipFile(archive_path) as archive:
     assert 'scene-reader/src/ui/character-transfer.js' in archive.namelist()
     assert 'scene-reader/src/ui/character-error.js' in archive.namelist()
     assert 'scene-reader/src/scene/intimacy-gate.js' in archive.namelist()
-    for required in ['README.md','CHANGELOG.md','src/world/advanced.js','src/world/seasonal.js','src/world/bundled.js','src/ui/toasts.js']:
+    for required in ['README.md','CHANGELOG.md','src/world/advanced.js','src/world/seasonal.js','src/world/bundled.js','src/ui/toasts.js','src/scene/correction-selection.js','src/characters/sexual-conduct.js','src/characters/volume.js']:
         assert 'scene-reader/'+required in archive.namelist()
     for pose in ['director','reading','success','warning','error','cover','peek','wave']:
         assert f'scene-reader/assets/toasts/{pose}.webp' in archive.namelist()

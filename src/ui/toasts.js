@@ -14,7 +14,7 @@ function decorate(toast, message, { level = 'info', title = '씬판독기', scen
     const state = Object.hasOwn(POSES, sceneState) ? sceneState : Object.hasOwn(POSES, level) ? level : 'info';
     node.classList.add('sr-scene-toast');
     node.dataset.srState = state;
-    for (const type of ['info', 'success', 'warning', 'error']) node.classList.toggle(`toast-${type}`, type === level);
+    node.dataset.srLevel = level;
     const document = node.ownerDocument;
     let mascot = node.querySelector('.sr-toast-mascot');
     if (!mascot) {
@@ -31,11 +31,11 @@ function decorate(toast, message, { level = 'info', title = '씬판독기', scen
     mascot.querySelector('.sr-toast-pose').src = POSES[state];
     const peek = mascot.querySelector('.sr-toast-peek');
     peek.src = PEEK; peek.hidden = state !== 'paused';
-    let titleNode = node.querySelector('.toast-title');
-    if (!titleNode) { titleNode = document.createElement('div'); titleNode.className = 'toast-title'; node.append(titleNode); }
+    let titleNode = node.querySelector('.sr-toast-title');
+    if (!titleNode) { titleNode = document.createElement('div'); titleNode.className = 'sr-toast-title'; node.append(titleNode); }
     titleNode.textContent = String(title || '씬판독기');
-    let messageNode = node.querySelector('.toast-message');
-    if (!messageNode) { messageNode = document.createElement('div'); messageNode.className = 'toast-message'; node.append(messageNode); }
+    let messageNode = node.querySelector('.sr-toast-message');
+    if (!messageNode) { messageNode = document.createElement('div'); messageNode.className = 'sr-toast-message'; node.append(messageNode); }
     messageNode.textContent = String(message ?? '');
     let rating = node.querySelector('.sr-toast-rating');
     if (state === 'paused') {
@@ -58,13 +58,33 @@ function decorate(toast, message, { level = 'info', title = '씬판독기', scen
     }
 }
 
-// Decorate only this extension's notifications; leave the host's toastr object intact.
+// Use independent markup so host toast icons, pseudo-elements and themes cannot leak in.
 export function notifySceneReaderToast(host, level, message, title = '씬판독기', options = {}) {
-    const { sceneState, ...nativeOptions } = options;
+    const { sceneState, timeOut: requestedTimeOut } = options;
     const duration = DURATIONS[sceneState] || DURATIONS[level] || DURATIONS.info;
-    const timeOut = sceneState === 'working' || nativeOptions.timeOut === 0 ? nativeOptions.timeOut ?? duration : Math.max(Number(nativeOptions.timeOut) || 0, duration);
-    const toast = host?.toastr?.[level]?.(message, title, { ...nativeOptions, timeOut, closeButton: false, tapToDismiss: true, escapeHtml: true });
+    const timeOut = sceneState === 'working' || requestedTimeOut === 0 ? requestedTimeOut ?? duration : Math.max(Number(requestedTimeOut) || 0, duration);
+    const document = host?.document;
+    // Hosts without a DOM can still receive diagnostics (including headless integrations).
+    if (!document?.createElement) return host?.toastr?.[level]?.(message, title, { ...options, timeOut, closeButton: false, escapeHtml: true });
+    let container = document.getElementById('scene-reader-toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'scene-reader-toast-container';
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-relevant', 'additions text');
+    }
+    const target = document.querySelector('#scene-reader-dialog[open]') || document.body;
+    if (container.parentElement !== target) target.append(container);
+    const node = document.createElement('div');
+    let timer;
+    const toast = { 0: node, remove() {
+        host.clearTimeout(timer);
+        node.dataset.srDismissed = 'true';
+        node.remove();
+    } };
     decorate(toast, message, { level, title, sceneState });
+    container.append(node);
+    if (timeOut > 0) timer = host.setTimeout(() => toast.remove(), timeOut);
     return toast;
 }
 
