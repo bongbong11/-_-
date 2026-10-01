@@ -37,13 +37,15 @@ import { createVectorRetrieval, RETRIEVAL_PROVIDERS } from '../../src/retrieval/
 
 import * as jobs from '../../src/app/jobs.js';
 import * as identity from '../../src/input/message-identity.js';
+import * as toasts from '../../src/ui/toasts.js';
+import { MASCOT_ICON_URL } from '../../src/ui/mascot.js';
 const source = (await readFile(new URL('../../src/app/bootstrap.js', import.meta.url), 'utf8'))
     .replace(/^import[\s\S]*?from\s+['"][^'"]+['"];\r?\n/gm, '');
 export function fixture() {
     const ctx = { characterId: 1, chatId: 'room-A', name1: 'User', name2: 'Hunter', chat: [], saveMetadata: async () => {} };
     const sandbox = {
-        createUiController,createSceneExecution,createOutputLifecycle,createRepository, createVectorRetrieval, RETRIEVAL_PROVIDERS, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...npcSheet, ...jobs, ...identity, ...prompt, ...advanced, ...world, ...seasonal, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...legacyProfiles, ...security, ...stateContract, ...stateCollector, ...stateMainOutput, ...stateProfileOutput,
-        currentContext: ctx, chat_metadata: {}, extension_settings: {},
+        createUiController,createSceneExecution,createOutputLifecycle,createRepository, createVectorRetrieval, RETRIEVAL_PROVIDERS, ...knowledge, ...memory, createResults, createDraws, ...policy, ...coordinator, dialogTemplate, ...presentation, ...characterPrompts, ...npcSheet, ...jobs, ...identity, ...toasts, ...prompt, ...advanced, ...world, ...seasonal, ...runtime, ...decision, ...state, ...action, ...hooks, ...continuity, ...profile, ...character, ...legacyProfiles, ...security, ...stateContract, ...stateCollector, ...stateMainOutput, ...stateProfileOutput,
+        currentContext: ctx, chat_metadata: {}, extension_settings: {}, MASCOT_ICON_URL,
         console, structuredClone, setTimeout, clearTimeout, AbortController, AbortSignal,
         jQuery() {}, document: { getElementById() { return null; } },
         fetch: async () => ({ok:true,json:async()=>({ok:true})}),

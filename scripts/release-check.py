@@ -33,8 +33,12 @@ with ZipFile(archive_path) as archive:
     assert 'scene-reader/src/ui/character-transfer.js' in archive.namelist()
     assert 'scene-reader/src/ui/character-error.js' in archive.namelist()
     assert 'scene-reader/src/scene/intimacy-gate.js' in archive.namelist()
-    for required in ['README.md','CHANGELOG.md','src/world/advanced.js','src/world/seasonal.js','src/world/bundled.js']:
+    for required in ['README.md','CHANGELOG.md','src/world/advanced.js','src/world/seasonal.js','src/world/bundled.js','src/ui/toasts.js']:
         assert 'scene-reader/'+required in archive.namelist()
+    for pose in ['director','reading','success','warning','error','cover','peek','wave']:
+        assert f'scene-reader/assets/toasts/{pose}.webp' in archive.namelist()
+    assert 'scene-reader/assets/mascot-face.webp' in archive.namelist()
+    assert 'scene-reader/src/ui/mascot.js' in archive.namelist()
     assert not any(name.endswith(('INSTALL.md','MAINTENANCE.md')) for name in archive.namelist())
 assert not list(root.glob('AUDIT-*.md')), 'remove stale release audit notes'
 assert not (root/'docs/character-phase1-contract.md').exists()

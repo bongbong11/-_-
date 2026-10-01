@@ -1,3 +1,5 @@
+import { notifySceneReaderToast, updateSceneReaderToast } from '../ui/toasts.js';
+import { MASCOT_ICON_URL } from '../ui/mascot.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { createRepository } from '../storage/repository.js';
 import { createOutputLifecycle } from '../app/output-lifecycle.js';
@@ -164,7 +166,7 @@ function notifyEmotionCapture(status, count=0, selected=true) {
     const message=status==='collecting'?'감정 수집 중…':status==='collected'?`${selected?'감정 수집 완료':'다른 스와이프 감정 저장 완료'} · ${count}명`:status==='partial'?`감정 ${count}명 수집 · 일부 값은 형식 확인 필요`:status==='empty'?'감정 수집 완료 · 이번 답변에서 수집할 값 없음':messages[status];
     if(!message)return;
     const level=status==='collecting'||status==='empty'?'info':status==='collected'?'success':'warning';
-    window.toastr?.[level]?.(message,'씬판독기',{timeOut:status==='collecting'?1800:3000});
+    notifySceneReaderToast(window, level, message,'씬판독기',{timeOut:status==='collecting'?1800:3000,sceneState:status==='collecting'?'working':undefined});
 }
 
 function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) {
@@ -361,20 +363,16 @@ function updateActivity(message, { done = false, error = false, owner = 'scene' 
     let item = activityToasts.get(owner);
     if (!item) {
         const method = error ? 'error' : done ? 'success' : 'info';
-        item = {toast: window.toastr?.[method]?.(message, error ? '씬판독기 오류' : done ? '씬판독기' : '씬판독기 실행 중', {timeOut:0,extendedTimeOut:0,tapToDismiss:false}), timer:null};
+        item = {toast: notifySceneReaderToast(window, method, message, error ? '씬판독기 오류' : done ? '씬판독기' : '씬판독기 실행 중', {timeOut:0,extendedTimeOut:0,sceneState:!done&&!error?'working':undefined}), timer:null};
         activityToasts.set(owner,item);
     }
     clearTimeout(item.timer);
     const toast = item.toast;
-    toast?.find?.('.toast-title')?.text(error ? '씬판독기 오류' : done ? '씬판독기' : '씬판독기 실행 중');
-    toast?.find?.('.toast-message')?.text(message);
-    toast?.toggleClass?.('toast-info', !done && !error);
-    toast?.toggleClass?.('toast-success', done && !error);
-    toast?.toggleClass?.('toast-error', error);
+    updateSceneReaderToast(toast,message,{level:error?'error':done?'success':'info',title:error?'씬판독기 오류':done?'씬판독기':'씬판독기 실행 중',sceneState:!done&&!error?'working':undefined});
     if (done || error) item.timer = setTimeout(() => {
         toast?.remove?.();
         if (activityToasts.get(owner) === item) activityToasts.delete(owner);
-    }, error ? 2200 : 1000);
+    }, error ? 8000 : 4000);
 }
 
 async function copyText(value) {
@@ -777,14 +775,14 @@ function updateKeyStatus(text = '') {
 function runUiTask(task, failureMessage = '설정을 저장하지 못했습니다.') {
     void Promise.resolve(task).catch((error) => {
         console.error('[씬판독기] UI 작업 실패', error);
-        if (!error?.activityReported && !(error instanceof StaleRunError)) window.toastr?.error?.(`${failureMessage}${error?.message ? ` · ${error.message}` : ''}`, '씬판독기');
+        if (!error?.activityReported && !(error instanceof StaleRunError)) notifySceneReaderToast(window, 'error', `${failureMessage}${error?.message ? ` · ${error.message}` : ''}`, '씬판독기');
     });
 }
 
 function runEventTask(task, failureMessage) {
     return Promise.resolve().then(task).catch((error) => {
         console.error('[씬판독기] 이벤트 처리 실패', error);
-        window.toastr?.error?.(`${failureMessage}${error?.message ? ` · ${error.message}` : ''}`, '씬판독기');
+        notifySceneReaderToast(window, 'error', `${failureMessage}${error?.message ? ` · ${error.message}` : ''}`, '씬판독기');
     });
 }
 
@@ -805,7 +803,7 @@ async function testConnection() {
         }, 15000);
         if (!data.answers.connection?.choice) throw new Error('Jev 연결 확인 응답이 올바르지 않습니다.');
         updateKeyStatus('키 인증 성공 · 서버 플러그인 응답 확인');
-        window.toastr?.success?.('Jev 연결에 성공했습니다.', '씬판독기');
+        notifySceneReaderToast(window, 'success', 'Jev 연결에 성공했습니다.', '씬판독기');
     } catch (error) {
         updateKeyStatus(error.message);
         throw error;
@@ -967,11 +965,14 @@ function createQuickEntry() {
     if (!holder) return false;
     const button = document.createElement('div');
     button.id = 'scene-reader-quick-button';
-    button.className = 'fa-solid fa-magnifying-glass-chart interactable';
+    button.className = 'interactable';
     button.tabIndex = 0;
     button.setAttribute('role', 'button');
     button.setAttribute('aria-label', '씬판독기 열기');
     button.title = '씬판독기';
+    const icon = document.createElement('img');
+    icon.src = MASCOT_ICON_URL; icon.alt = ''; icon.width = 26; icon.height = 26;
+    button.append(icon);
     button.hidden = !settings.showChatIcon;
     button.addEventListener('click', openSceneReader);
     button.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') openSceneReader(); });
@@ -1054,7 +1055,7 @@ async function onBeforeGeneration(type, data, dryRun) {
     }
     if (debugInjectionArmed && !context?.oocOnly) {
         debugInjectionArmed = false;
-        window.toastr?.info?.('다음 입력이 OOC-only가 아니어서 검사용 주입 유지가 취소되었습니다.', '씬판독기', { timeOut: 1800 });
+        notifySceneReaderToast(window, 'info', '다음 입력이 OOC-only가 아니어서 검사용 주입 유지가 취소되었습니다.', '씬판독기', { timeOut: 1800 });
     }
     if (context?.oocOnly) {
         await handleOocOnlySkip({ inputKey: generationInputKey });
@@ -1177,5 +1178,5 @@ async function init() {
 
 jQuery(() => void init().catch((error) => {
     console.error('[씬판독기] 초기화 실패', error);
-    window.toastr?.error?.('씬판독기를 불러오지 못했습니다.', '씬판독기');
+    notifySceneReaderToast(window, 'error', '씬판독기를 불러오지 못했습니다.', '씬판독기');
 }));

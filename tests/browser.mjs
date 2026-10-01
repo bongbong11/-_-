@@ -28,7 +28,14 @@ const listeners=new Map(), prompts={},macros={};
 window.mock={chat:[],prompts,macros,errors:[],worldBooks:{'Hunter Lore':{entries:{1:{uid:1,key:['door'],content:'The council meets tomorrow.'},2:{uid:2,key:['unrelated'],content:'Not relevant.'}}},'Hunter Extra':{entries:{3:{uid:3,constant:true,content:'Hunter owns the house.'}}},'Persona Lore':{entries:{4:{uid:4,key:['friend'],content:'Rosa is a friend of the user persona.'}}},'Persona Specific':{entries:{5:{uid:5,key:['neighbor'],content:'Rosa knows the user persona as a neighbor.'}}}},async emit(name,...args){for(const fn of listeners.get(name)||[])await fn(...args)}};
 window.ctx={characterId:1,characters:[null,{avatar:'Hunter.png',data:{description:'Sawyer Valentine is Hunter’s colleague.',personality:'Hunter speaks carefully under pressure.',extensions:{world:'Hunter Lore'}}}],powerUserSettings:{persona_description_lorebook:'Persona Lore',persona_descriptions:{'User.png':{lorebook:'Persona Specific'}}},chatId:'test-room',name1:'User',name2:'Hunter',chat:mock.chat,extensionPrompts:prompts,saveMetadata:async()=>{},macros:{register(name,value){macros[name]=value.handler},category:{MISC:'misc'}}};
 window.SillyTavern={getContext:()=>ctx};window.jQuery=fn=>fn();
-window.toastr=Object.fromEntries(['info','success','error','warning'].map(name=>[name,(message)=>{(mock.toasts ||= []).push({level:name,message});if(name==='error')mock.errors.push(message);let container=document.getElementById('toast-container');if(!container){container=document.createElement('div');container.id='toast-container';document.body.append(container)}const item={find(){return {text(){}}},toggleClass(){},remove(){},fadeOut(_ms,callback){callback?.call(item)}};return item}]));
+window.toastr=Object.fromEntries(['info','success','error','warning'].map(name=>[name,(message,title='',options={})=>{
+    (mock.toasts ||= []).push({level:name,message,options});if(name==='error')mock.errors.push(message);
+    let container=document.getElementById('toast-container');if(!container){container=document.createElement('div');container.id='toast-container';document.body.append(container)}
+    const node=document.createElement('div');node.className='toast toast-'+name;
+    for(const [className,text] of [['toast-title',title],['toast-message',message]]){const child=document.createElement('div');child.className=className;child.textContent=text;node.append(child)}
+    container.append(node);const expiry=options.timeOut??5000;if(expiry>0)setTimeout(()=>node.remove(),expiry);
+    const item={0:node,find(selector){return {text(value){const child=node.querySelector(selector);if(child)child.textContent=value}}},toggleClass(name,on){node.classList.toggle(name,on)},remove(){node.remove()},fadeOut(_ms,callback){node.remove();callback?.call(item)}};return item;
+}]));
 window.eventSource={on(name,fn){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn)}};
 </script><script type="module" src="${prefix}index.js"></script></html>`;
 const server=http.createServer(async(req,res)=>{try{
@@ -69,7 +76,7 @@ const server=http.createServer(async(req,res)=>{try{
         else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,q.type==='noul'?{type:'noul',noul:0.9}:{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_affect_')?'visible':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
         res.end(JSON.stringify(result));return;
     }
-    if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'application/javascript');res.end(await readFile(file));return;}
+    if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':file.endsWith('.webp')?'image/webp':'application/javascript');res.end(await readFile(file));return;}
     res.statusCode=404;res.end('not found');
 }catch(error){res.statusCode=500;res.end(error.message);}});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -80,6 +87,9 @@ try{
     const page=await context.newPage();page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});page.on('console',message=>{if(message.type()==='error')console.error(message.text())});
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.locator('#scene-reader-quick-button').waitFor();
+    await page.waitForFunction(()=>document.querySelector('#scene-reader-quick-button img')?.naturalWidth>0);
+    assert.deepEqual(await page.locator('#scene-reader-quick-button').evaluate(node=>({width:node.offsetWidth,height:node.offsetHeight})),{width:32,height:32},'opening button keeps its original size');
+    assert.equal(await page.locator('#scene-reader-quick-button img').evaluate(node=>node.offsetWidth),26);
     assert.equal(await page.locator('#scene-reader-extension-settings').evaluate(e=>e.open),false);
     await page.locator('#scene-reader-extension-settings > summary').click();
     await page.locator('#sr-extension-icon').uncheck();
@@ -96,6 +106,7 @@ try{
     assert.equal(store.settings.global.enabled,false);
     await page.locator('#sr-extension-open').click();
     await page.locator('#scene-reader-dialog[open]').waitFor();
+    await page.waitForFunction(()=>document.querySelector('.sr-header-mascot')?.naturalWidth>0);
     assert.equal(await page.locator('#sr-run').isDisabled(),true);
     await page.locator('#sr-settings-button').click();
     await page.locator('#sr-enabled').check();
@@ -108,6 +119,58 @@ try{
     await page.locator('#scene-reader-dialog[open]').waitFor();
     await page.evaluate(()=>window.toastr.info('toast layer check'));
     await page.waitForFunction(()=>document.getElementById('toast-container')?.parentElement?.id==='scene-reader-dialog');
+    await page.evaluate(async()=>{
+        const api=await import('/scripts/extensions/third-party/scene-reader/src/ui/toasts.js');
+        window.toastTest={...api,native:window.toastr};
+        document.querySelectorAll('#toast-container > .toast').forEach(node=>node.remove());
+        window.toastr.info('Other extension');
+        toastTest.progress=api.notifySceneReaderToast(window,'info','検索 <script>unsafe</script>','씬판독기',{sceneState:'working',timeOut:0,extendedTimeOut:0});
+    });
+    const progressToast=page.locator('.sr-scene-toast');
+    await progressToast.waitFor();
+    assert.equal(await page.evaluate(()=>toastTest.native===window.toastr),true,'host toast API stays intact');
+    assert.equal(await page.locator('#toast-container > .toast:not(.sr-scene-toast) .sr-toast-mascot').count(),0,'foreign toast is untouched');
+    assert.equal(await progressToast.locator('script').count(),0,'notification content is plain text');
+    await page.evaluate(()=>toastTest.updateSceneReaderToast(toastTest.progress,'인물 판독 중',{sceneState:'working'}));
+    assert.equal(await progressToast.locator('.toast-message').textContent(),'인물 판독 중','next stage updates immediately');
+    await page.evaluate(()=>toastTest.updateSceneReaderToast(toastTest.progress,'적용 완료',{level:'success'}));
+    assert.equal(await progressToast.getAttribute('data-sr-state'),'success');
+    assert.equal(await progressToast.locator('.sr-toast-pose').evaluate(image=>image.src.endsWith('/success.webp')),true);
+    await progressToast.locator('.toast-message').click();
+    await page.evaluate(()=>toastTest.updateSceneReaderToast(toastTest.progress,'다음 단계',{sceneState:'working'}));
+    assert.equal(await page.locator('.sr-scene-toast').count(),0,'dismissed progress never reappears on updates');
+    const toastStates=['info','working','success','warning','error','paused','resumed'];
+    for(const width of [320,390,1280]){
+        await page.setViewportSize({width,height:850});
+        const poseFiles=[];
+        for(const state of toastStates){
+            await page.evaluate(state=>{toastTest.current=toastTest.notifySceneReaderToast(window,'info',state==='paused'?'잠깐 비켜드릴게요♡':'이번 작업의 알림을 확인해 주세요.',state==='paused'?'앗, 둘만의 시간이네요!':'씬판독기',{sceneState:state});},state);
+            const toast=page.locator('.sr-scene-toast');
+            await page.waitForFunction(()=>[...document.querySelectorAll('.sr-scene-toast img')].every(image=>image.complete&&image.naturalWidth>0));
+            const layout=await toast.evaluate(node=>({width:node.getBoundingClientRect().width,scroll:node.scrollWidth,client:node.clientWidth,mascot:parseFloat(getComputedStyle(node.querySelector('.sr-toast-mascot')).width),font:parseFloat(getComputedStyle(node.querySelector('.toast-message')).fontSize),pose:node.querySelector('.sr-toast-pose').src}));
+            assert.ok(layout.width<=width-16&&layout.width>240,`${width}/${state}: toast stays within screen`);
+            assert.ok(layout.scroll<=layout.client,`${width}/${state}: no text clipping`);
+            assert.equal(layout.mascot,width<=600?64:75);
+            assert.ok(layout.font>=13,'mobile text remains readable');
+            poseFiles.push(layout.pose);
+            assert.equal(await toast.locator('.toast-close-button').count(),0);
+            if(state==='paused'){
+                assert.equal(await toast.locator('.sr-toast-detail').textContent(),'Ⅱ 동적 주입 쉬는 중');
+                await mkdir(path.join(root,'artifacts'),{recursive:true});
+                await toast.screenshot({path:path.join(root,'artifacts',`toast-pause-${width}.png`)});
+            }
+            await toast.focus();await page.keyboard.press('Enter');
+            assert.equal(await page.locator('.sr-scene-toast').count(),0);
+        }
+        assert.equal(new Set(poseFiles).size,7,'every notification state has its own pose');
+    }
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await page.evaluate(()=>toastTest.current=toastTest.notifySceneReaderToast(window,'info','잠깐 비켜드릴게요♡','앗, 둘만의 시간이네요!',{sceneState:'paused'}));
+    assert.equal(await page.locator('.sr-toast-mascot').evaluate(node=>getComputedStyle(node).animationName),'none');
+    assert.equal(await page.locator('.sr-toast-peek').evaluate(node=>getComputedStyle(node).opacity),'0');
+    await page.locator('.sr-toast-mascot').click();
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.evaluate(()=>document.querySelectorAll('#toast-container > .toast').forEach(node=>node.remove()));
     for(const width of [320,390,768,1280]){
         await page.setViewportSize({width,height:850});
         for(const tab of ['flow','advanced','conflict','characters']){

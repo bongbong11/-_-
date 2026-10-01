@@ -1,3 +1,4 @@
+import { notifySceneReaderToast } from '../ui/toasts.js';
 import { makeAppearanceOffer, addAppearanceQuestions, applyAppearanceOffer } from './appearance.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
@@ -338,7 +339,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const appliedWorldRecords = selectedWorldRecords(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed);
     const selectedWorldPayload = [buildWorldPayload(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed), seasonalContext].filter(Boolean).join('\n\n');
     const worldSelection = { status: !world?.advanced ? 'plain' : worldSelectionFailed ? 'fallback' : worldInvalidCount ? 'partial' : 'selected', invalidCount:worldInvalidCount, retrievalStatus: worldRetrieval.status, retrievalError:worldRetrieval.error || '', candidateIds: worldRecordCandidates.map(record=>record.id), selectedIds: worldRecordCandidates.filter((_,index)=>worldRecordAnswers[`world_record_${index}`]?.choice==='yes').map(record=>record.id), appliedIds: appliedWorldRecords.map(record=>record.id) };
-    if (world?.advanced && worldSelectionFailed) deps.window.toastr?.warning?.('세계관 판정 응답을 확인하지 못해 이번 턴은 고정 규칙만 적용합니다.', '씬판독기');
+    if (world?.advanced && worldSelectionFailed) notifySceneReaderToast(deps.window, 'warning', '세계관 판정 응답을 확인하지 못해 이번 턴은 고정 규칙만 적용합니다.', '씬판독기');
     const worldGateFrame = { request: gateRequest, answers: worldRecordAnswers };
     deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: gateRequest, answers: worldRecordAnswers, worldGate: worldGateFrame, model: deps.JEV_MODEL };
     if(sceneGate.route==='paused') {
@@ -355,12 +356,12 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         else await deps.persistChat(run.identity,rec);
         run.assert();deps.chatRecords.set(run.identity,rec);
         await deps.applyStoredInjection();deps.renderAll();
-        if(sceneGate.transition==='entered')deps.window.toastr?.info?.('현재 장면이 진행되는 동안 동적 주입을 쉽니다.','씬판독기');
+        if(sceneGate.transition==='entered')notifySceneReaderToast(deps.window, 'info', '잠깐 비켜드릴게요♡','앗, 둘만의 시간이네요!',{sceneState:'paused'});
         deps.updateStatus('현재 장면 · 고정 지침 적용');
         deps.updateActivity('현재 장면 · 고정 지침과 저장된 인물 참고문만 적용',{done:true});
         return rec.lastJudgment;
     }
-    if(sceneGate.transition==='exited')deps.window.toastr?.info?.('장면 전환을 확인해 일반 판독·주입을 재개합니다.','씬판독기');
+    if(sceneGate.transition==='exited')notifySceneReaderToast(deps.window, 'info', '일반 판독·주입을 다시 시작합니다.','다시 왔어요!',{sceneState:'resumed'});
     if (prefs.settingsContract >= 3) {
         const offerKey = deps.stableFingerprint({identity:run.identity,users:context.selected.filter(message=>message.is_user).map(message=>({text:message.mes,index:deps.getContext().chat?.indexOf(message)}))});
         const cached = appearanceOffers.get(offerKey);

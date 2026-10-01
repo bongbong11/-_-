@@ -1,3 +1,4 @@
+import { notifySceneReaderToast } from './toasts.js';
 import { compilerRequest } from '../characters/records.js';
 import { buildSources, promptText, validateImport } from '../vendor/character-reasoner/index.js';
 import { importRecordVersion, applyRecordVersion, deleteRecordVersion, bankOutput, allEntries } from '../characters/versions.js';
@@ -77,7 +78,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
         await persist(result.store,result.entry);
         status(`${result.entry.name} · ${result.entry.recordBank.records.length}개 기록을 날짜별로 저장하고 적용했습니다.`);
         el('sr-character-editor-cancel')?.click();
-        deps.window.toastr?.success?.(`${result.entry.name} 판독시트를 저장·적용했습니다.`, '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', `${result.entry.name} 판독시트를 저장·적용했습니다.`, '씬판독기');
     },'validate'));
     async function readFile(file) {
         if(!file)return;
@@ -107,7 +108,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
             if(action==='copy'){await deps.copyText(JSON.stringify(output,null,2));status('판독시트를 복사했습니다.');}
             if(action==='download')downloadJson(`${group.name.replace(/[<>:"/\\|?*]/g,'_')}.json`,output);
             if(action==='view')showVersionPreview(group,version);
-            if(action==='apply'){const result=applyRecordVersion(deps.characterStore,groupId,versionId);await persist(result.store,result.entry);status('선택한 버전을 적용했습니다. 다음 판독부터 사용합니다.');deps.window.toastr?.success?.('선택한 날짜의 판독시트를 적용했습니다.','씬판독기');}
+            if(action==='apply'){const result=applyRecordVersion(deps.characterStore,groupId,versionId);await persist(result.store,result.entry);status('선택한 버전을 적용했습니다. 다음 판독부터 사용합니다.');notifySceneReaderToast(deps.window, 'success', '선택한 날짜의 판독시트를 적용했습니다.','씬판독기');}
             if(action==='edit'){
                 const entry=entriesForVersion(deps.characterStore,version,group.kind);
                 showVersionEditor(group.kind,entry,group,version);
@@ -116,7 +117,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
                 if(!deps.window.confirm('이 날짜의 판독시트를 삭제할까요? 적용 중인 버전이면 이번 인물의 기록 적용도 해제됩니다.'))return;
                 await persist(deleteRecordVersion(deps.characterStore,groupId,versionId));
                 el('sr-character-preview').hidden=true;status('해당 버전을 삭제했습니다.');
-                deps.window.toastr?.success?.('해당 날짜의 판독시트를 삭제했습니다.','씬판독기');
+                notifySceneReaderToast(deps.window, 'success', '해당 날짜의 판독시트를 삭제했습니다.','씬판독기');
             }
         });
     });

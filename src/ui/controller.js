@@ -1,3 +1,4 @@
+import { notifySceneReaderToast } from './toasts.js';
 import { latestStateEventForChat } from '../characters/state-contract.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 // User actions and form state; dependencies are explicit and supplied by the application.
@@ -373,7 +374,7 @@ async function saveCharacterEntry() {
     await deps.persistChat(); await deps.clearInjection();
     deps.renderCharacterStore();
     taskStatus(deps.profileStatus(entry));
-    deps.window.toastr?.success?.('시트를 저장했습니다.', '씬판독기');
+    notifySceneReaderToast(deps.window, 'success', '시트를 저장했습니다.', '씬판독기');
     return entry;
 }
 
@@ -472,7 +473,7 @@ async function deleteCharacterEntry(kind=deps.characterEditorKind,id=deps.charac
     await deps.clearInjection();
     closeCharacterEditor();
     deps.renderCharacterStore();
-    deps.window.toastr?.success?.('인물 시트를 삭제했습니다.', '씬판독기');
+    notifySceneReaderToast(deps.window, 'success', '인물 시트를 삭제했습니다.', '씬판독기');
 }
 
 
@@ -551,7 +552,7 @@ async function savePreference(key, value) {
 }
 
 async function saveInjectionMode(value) {
-    if (value === 'macro' && !deps.macroAvailable) deps.window.toastr?.warning?.('현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
+    if (value === 'macro' && !deps.macroAvailable) notifySceneReaderToast(deps.window, 'warning', '현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
     const mode = value === 'macro' && deps.macroAvailable ? 'macro' : 'depth';
     deps.preferences().injectionMode = mode;
     await deps.persistChat();
@@ -560,7 +561,7 @@ async function saveInjectionMode(value) {
 }
 
 async function saveWorldInjectionMode(value) {
-    if (value === 'macro' && !deps.macroAvailable) deps.window.toastr?.warning?.('현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
+    if (value === 'macro' && !deps.macroAvailable) notifySceneReaderToast(deps.window, 'warning', '현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
     deps.preferences().worldInjectionMode = value === 'macro' && deps.macroAvailable ? 'macro' : 'depth';
     await deps.persistChat();
     await deps.applyStoredInjection();
@@ -579,7 +580,7 @@ async function endActiveEvent() {
     await deps.persistChat();
     await deps.clearInjection();
     deps.renderAll();
-    deps.window.toastr?.success?.('현재 사건을 끝냈습니다. 다음 적합한 기회부터 새 사건을 판정합니다.', '씬판독기');
+    notifySceneReaderToast(deps.window, 'success', '현재 사건을 끝냈습니다. 다음 적합한 기회부터 새 사건을 판정합니다.', '씬판독기');
 }
 
 function bindForm() {
@@ -604,12 +605,12 @@ function bindForm() {
         input.value='';
         deps.vectorRetrieval.clear();
         await retrievalSecretState();
-        deps.window.toastr?.success?.('SillyTavern 키 저장소에 저장했습니다.','씬판독기');
+        notifySceneReaderToast(deps.window, 'success', 'SillyTavern 키 저장소에 저장했습니다.','씬판독기');
     })(),'검색 키를 저장하지 못했습니다.'));
     deps.document.getElementById('sr-retrieval-test')?.addEventListener('click',()=>deps.runUiTask((async()=>{
         const node=deps.document.getElementById('sr-retrieval-key-status');
         if(node)node.textContent='검색 연결 확인 중…';
-        try { const result=await deps.vectorRetrieval.test();if(node)node.textContent=result;deps.window.toastr?.success?.(result,'씬판독기'); }
+        try { const result=await deps.vectorRetrieval.test();if(node)node.textContent=result;notifySceneReaderToast(deps.window, 'success', result,'씬판독기'); }
         catch(error){if(node)node.textContent=`연결 실패 · ${error.message}`;throw error;}
     })(),'검색 연결 확인에 실패했습니다.'));
     bindCharacterTransfer(deps,{characterForm,invalidatePreparedJudgment,downloadJson,ensureLoreLoaded,captureCharacterError,showVersionEditor,showVersionPreview});
@@ -644,7 +645,7 @@ function bindForm() {
     deps.document.getElementById('sr-character-sheet-refresh')?.addEventListener('click',()=>deps.runUiTask(importCurrentSheet(),'현재 시트를 가져오지 못했습니다.'));
     deps.document.getElementById('sr-debug-open')?.addEventListener('click', () => {
         const judgment = deps.record()?.lastJudgment;
-        if (!judgment) { deps.window.toastr?.warning?.('검토할 판정이 없습니다.', '씬판독기'); return; }
+        if (!judgment) { notifySceneReaderToast(deps.window, 'warning', '검토할 판정이 없습니다.', '씬판독기'); return; }
         const frame = deps.lastDebugFrame?.chatKey === deps.stateChatKey() && deps.lastDebugFrame?.inputKey === judgment.inputKey ? deps.lastDebugFrame : null;
         const preview = deps.document.getElementById('sr-debug-preview');
         if (!preview) return;
@@ -663,14 +664,14 @@ function bindForm() {
         const preview = deps.document.getElementById('sr-debug-preview');
         if (!preview || preview.hidden || !preview.value.trim()) throw new Error('먼저 전체 판정을 열고 개인정보를 확인하세요.');
         await deps.copyText(preview.value);
-        deps.window.toastr?.success?.('검토한 판정 기록을 복사했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '검토한 판정 기록을 복사했습니다.', '씬판독기');
     })(), '판정 기록을 복사하지 못했습니다.'));
     for (const [id,key] of [['sr-memory-charm','charmMemory'],['sr-memory-lorebook','lorebookMemory']]) deps.document.getElementById(id)?.addEventListener('change', event => { if (MEMORY_REFERENCE_ENABLED && deps.ownerUnlocked()) deps.runUiTask(savePreference(key,event.target.checked)); });
 
     deps.document.getElementById('sr-close')?.addEventListener('click', () => deps.dialog.close());
     deps.document.getElementById('sr-copy-debug')?.addEventListener('click', () => deps.runUiTask((async () => {
         const judgment = deps.record()?.lastJudgment;
-        if (!judgment) { deps.window.toastr?.warning?.('복사할 판정이 없습니다.', '씬판독기'); return; }
+        if (!judgment) { notifySceneReaderToast(deps.window, 'warning', '복사할 판정이 없습니다.', '씬판독기'); return; }
         const tab = deps.dialog.querySelector('.sr-tab-panel.active')?.id?.replace('sr-tab-', '') || 'flow';
         const related = (key) => tab === 'advanced' ? key.startsWith('advanced_') || ['primary_focus', 'secondary_focus', 'event_state', 'event_route'].includes(key)
             : tab === 'conflict' ? ['conflict_state', 'fight_sustain', 'villain_route', 'npc_autonomy', 'npc_knowledge_fit', 'world_hostility', 'misfortune', 'negative_priority'].includes(key) || key.startsWith('verification_')
@@ -684,7 +685,7 @@ function bindForm() {
             actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification,
             ...(tab==='characters'?{characterStateCapture:selectedStateCapture()}:{}), };
         await deps.copyText(JSON.stringify(report, null, 2));
-        deps.window.toastr?.success?.('판정 원선택과 최종 조정 결과를 복사했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '판정 원선택과 최종 조정 결과를 복사했습니다.', '씬판독기');
     })()));
     deps.dialog.addEventListener('click', (event) => { if (event.target === deps.dialog) deps.dialog.close(); });
     deps.dialog.querySelectorAll('[data-sr-tab]').forEach((button) => button.addEventListener('click', () => {
@@ -725,7 +726,7 @@ function bindForm() {
     deps.document.getElementById('sr-private-prompt-enabled')?.addEventListener('change', (event) => deps.runUiTask((async () => {
         if (event.target.checked && !deps.ownerPrompt()) {
             event.target.checked = false;
-            deps.window.toastr?.warning?.('먼저 제작자 전용 원문을 저장하세요.', '씬판독기');
+            notifySceneReaderToast(deps.window, 'warning', '먼저 제작자 전용 원문을 저장하세요.', '씬판독기');
             return;
         }
         await savePreference('privatePromptEnabled', event.target.checked);
@@ -734,14 +735,14 @@ function bindForm() {
         const input = deps.document.getElementById('sr-owner-password');
         const candidate = String(input?.value || '').trim();
         if (!candidate || await deps.sha256Hex(candidate) !== deps.OWNER_PASSWORD_HASH) {
-            deps.window.toastr?.error?.('제작자 비밀번호가 맞지 않습니다.', '씬판독기');
+            notifySceneReaderToast(deps.window, 'error', '제작자 비밀번호가 맞지 않습니다.', '씬판독기');
             return;
         }
         try { deps.localStorage.setItem(deps.OWNER_UNLOCK_STORAGE, 'yes'); } catch { /* extension settings still persist unlock */ }
         await saveGlobal('ownerUnlocked', true);
         if (input) input.value = '';
         deps.renderOwnerMode();
-        deps.window.toastr?.success?.('개발자 모드를 열었습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '개발자 모드를 열었습니다.', '씬판독기');
     };
     deps.document.getElementById('sr-owner-unlock')?.addEventListener('click', () => deps.runUiTask(unlockOwner(), '잠금을 해제하지 못했습니다.'));
     deps.document.getElementById('sr-owner-password')?.addEventListener('keydown', (event) => {
@@ -760,7 +761,7 @@ function bindForm() {
         await deps.persistChat();
         await deps.clearInjection();
         setFormValues();
-        deps.window.toastr?.success?.(value ? '제작자 전용 원문을 전용 저장소에 저장했습니다.' : '제작자 전용 원문을 비웠습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', value ? '제작자 전용 원문을 전용 저장소에 저장했습니다.' : '제작자 전용 원문을 비웠습니다.', '씬판독기');
     })(), '제작자 전용 원문을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-villain-enabled')?.addEventListener('change', (event) => deps.runUiTask((async () => {
         await savePreference('villainEnabled', event.target.checked);
@@ -785,12 +786,12 @@ function bindForm() {
     deps.document.getElementById('sr-arm-ooc-debug')?.addEventListener('click', () => {
         const rec = deps.record();
         if (!rec?.lastJudgment?.payload) {
-            deps.window.toastr?.warning?.('먼저 정상 RP 판독을 한 번 실행해 직전 주입문을 저장하세요.', '씬판독기');
+            notifySceneReaderToast(deps.window, 'warning', '먼저 정상 RP 판독을 한 번 실행해 직전 주입문을 저장하세요.', '씬판독기');
             return;
         }
         deps.debugInjectionArmed = !deps.debugInjectionArmed;
         setFormValues();
-        deps.window.toastr?.info?.(deps.debugInjectionArmed ? '다음 OOC-only 응답에 직전 주입문을 한 번 유지합니다.' : '검사용 OOC 대기를 취소했습니다.', '씬판독기', { timeOut: 1800 });
+        notifySceneReaderToast(deps.window, 'info', deps.debugInjectionArmed ? '다음 OOC-only 응답에 직전 주입문을 한 번 유지합니다.' : '검사용 OOC 대기를 취소했습니다.', '씬판독기', { timeOut: 1800 });
     });
     deps.document.getElementById('sr-recent-turns')?.addEventListener('change', (event) => deps.runUiTask(saveGlobal('recentTurns', Math.max(1, Math.min(5, Number(event.target.value) || 3)))));
     deps.document.getElementById('sr-progress-intensity')?.addEventListener('change', event => {
@@ -817,20 +818,20 @@ function bindForm() {
             deps.localStorage.removeItem(deps.JEV_KEY_STORAGE);
             input.value = '';
             deps.updateKeyStatus();
-            deps.window.toastr?.success?.(key ? 'Jev 키를 전용 저장소에 저장했습니다.' : '저장된 Jev 키를 삭제했습니다.', '씬판독기');
-        } catch (error) { deps.window.toastr?.error?.(`Jev 키를 저장하지 못했습니다. · ${error.message}`, '씬판독기'); }
+            notifySceneReaderToast(deps.window, 'success', key ? 'Jev 키를 전용 저장소에 저장했습니다.' : '저장된 Jev 키를 삭제했습니다.', '씬판독기');
+        } catch (error) { notifySceneReaderToast(deps.window, 'error', `Jev 키를 저장하지 못했습니다. · ${error.message}`, '씬판독기'); }
     });
     deps.document.getElementById('sr-jev-toggle')?.addEventListener('click', () => {
         const input = deps.document.getElementById('sr-jev-key');
         if (input) input.type = input.type === 'password' ? 'text' : 'password';
     });
     deps.document.getElementById('sr-jev-test')?.addEventListener('click', async () => {
-        try { await deps.testConnection(); } catch (error) { deps.window.toastr?.error?.(error.message, '씬판독기'); }
+        try { await deps.testConnection(); } catch (error) { notifySceneReaderToast(deps.window, 'error', error.message, '씬판독기'); }
     });
     deps.document.getElementById('sr-continuity-enabled')?.addEventListener('change', (event) => deps.runUiTask((async () => {
         deps.invalidateReasonerJobs();
         await saveGlobal('continuityEnabled', event.target.checked);
-        if (event.target.checked && !deps.settings.reasonerProfileId) deps.window.toastr?.warning?.('연속성 추론에 사용할 연결 프로필을 선택하세요.', '씬판독기');
+        if (event.target.checked && !deps.settings.reasonerProfileId) notifySceneReaderToast(deps.window, 'warning', '연속성 추론에 사용할 연결 프로필을 선택하세요.', '씬판독기');
         const rec = deps.record(true);
         if (!event.target.checked) rec.pendingContinuityCandidates = [];
         rec.lastJudgment = null;
@@ -852,7 +853,7 @@ function bindForm() {
     deps.document.getElementById('sr-reasoner-refresh')?.addEventListener('click', () => deps.runUiTask((async () => {
         await deps.loadReasonerProfiles();
         if (deps.reasonerProfileError) throw new Error(deps.reasonerProfileError);
-        deps.window.toastr?.info?.(`SillyTavern 연결 프로필 ${deps.reasonerProfiles.length}개를 읽었습니다.`, '씬판독기', { timeOut: 1800 });
+        notifySceneReaderToast(deps.window, 'info', `SillyTavern 연결 프로필 ${deps.reasonerProfiles.length}개를 읽었습니다.`, '씬판독기', { timeOut: 1800 });
     })(), 'SillyTavern 연결 프로필을 새로 읽지 못했습니다.'));
     deps.document.getElementById('sr-reasoner-test')?.addEventListener('click', () => deps.runUiTask((async () => {
         if (!deps.settings.reasonerProfileId) throw new Error('연결 프로필을 선택하세요.');
@@ -862,18 +863,18 @@ function bindForm() {
         if (!deps.connectionRequestService) throw new Error(deps.reasonerProfileError || 'SillyTavern 연결 기능을 찾지 못했습니다.');
         try {
             const result = await deps.requestWithConnectionProfile(deps.connectionRequestService, deps.settings.reasonerProfileId, '', {}, { testing: true });
-            deps.window.toastr?.success?.(`연결 성공 · ${result.profile.model}`, '씬판독기');
+            notifySceneReaderToast(deps.window, 'success', `연결 성공 · ${result.profile.model}`, '씬판독기');
         } finally { deps.renderReasonerProfiles(); }
     })(), 'Reasoner 연결 확인에 실패했습니다.'));
     deps.document.getElementById('sr-copy-macro')?.addEventListener('click', async () => {
         try {
             await deps.copyText('{{scene-reader}}');
-            deps.window.toastr?.success?.('씬판독기 매크로를 복사했습니다.', '씬판독기');
-        } catch { deps.window.toastr?.error?.('매크로를 복사하지 못했습니다.', '씬판독기'); }
+            notifySceneReaderToast(deps.window, 'success', '씬판독기 매크로를 복사했습니다.', '씬판독기');
+        } catch { notifySceneReaderToast(deps.window, 'error', '매크로를 복사하지 못했습니다.', '씬판독기'); }
     });
     deps.document.getElementById('sr-copy-world-macro')?.addEventListener('click', async () => {
-        try { await deps.copyText('{{scene-reader-world}}'); deps.window.toastr?.success?.('세계관 매크로를 복사했습니다.', '씬판독기'); }
-        catch { deps.window.toastr?.error?.('매크로를 복사하지 못했습니다.', '씬판독기'); }
+        try { await deps.copyText('{{scene-reader-world}}'); notifySceneReaderToast(deps.window, 'success', '세계관 매크로를 복사했습니다.', '씬판독기'); }
+        catch { notifySceneReaderToast(deps.window, 'error', '매크로를 복사하지 못했습니다.', '씬판독기'); }
     });
     deps.dialog.addEventListener('click', (event) => {
         if (event.target.closest('#sr-end-active-event')) { deps.runUiTask(endActiveEvent(), '사건을 종료하지 못했습니다.'); return; }
@@ -891,7 +892,7 @@ function bindForm() {
         const prompt = String(deps.document.getElementById('sr-world-edit-prompt')?.value || '').trim();
         const franchise = Boolean(deps.document.getElementById('sr-world-edit-franchise')?.checked);
         const revision = worldEditorRevision;
-        if (!name || !prompt) { deps.window.toastr?.warning?.('세계관 이름과 전문을 입력하세요.', '씬판독기'); return; }
+        if (!name || !prompt) { notifySceneReaderToast(deps.window, 'warning', '세계관 이름과 전문을 입력하세요.', '씬판독기'); return; }
         const worlds = deps.loadCustomWorlds();
         const oldId = String(deps.document.getElementById('sr-world-edit-id')?.value || '');
         const id = oldId || `custom-${Date.now()}`;
@@ -912,17 +913,17 @@ function bindForm() {
         const index = worlds.findIndex((world) => world.id === id);
         if (index >= 0) worlds[index] = next; else worlds.push(next);
         const previous = deps.loadCustomWorlds();
-        if (!deps.saveCustomWorlds(worlds)) { deps.window.toastr?.error?.('브라우저 저장소에 세계관을 저장하지 못했습니다.', '씬판독기'); return; }
+        if (!deps.saveCustomWorlds(worlds)) { notifySceneReaderToast(deps.window, 'error', '브라우저 저장소에 세계관을 저장하지 못했습니다.', '씬판독기'); return; }
         try { await deps.saveServerSettings(); }
         catch (error) { deps.saveCustomWorlds(previous); throw error; }
         invalidatePreparedJudgment(); await deps.persistChat();
         if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
         showWorldList();
-        deps.window.toastr?.success?.('커스텀 세계관을 저장했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '커스텀 세계관을 저장했습니다.', '씬판독기');
     }), '커스텀 세계관을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-world-advanced-copy')?.addEventListener('click', () => deps.runUiTask((async () => {
         await deps.copyText(WORLD_COMPILER_PROMPT);
-        deps.window.toastr?.success?.('분석 명령문을 복사했습니다. 뒤에 세계관 원문을 붙여 주세요.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '분석 명령문을 복사했습니다. 뒤에 세계관 원문을 붙여 주세요.', '씬판독기');
     })(), '분석 명령문을 복사하지 못했습니다.'));
     deps.document.getElementById('sr-world-advanced-file')?.addEventListener('change', event => deps.runUiTask(worldTask(async () => {
         const file = event.target.files?.[0];
@@ -950,7 +951,7 @@ function bindForm() {
         invalidatePreparedJudgment(); await deps.persistChat();
         if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
         showWorldList();
-        deps.window.toastr?.success?.(`고급 세계관 ${parsed.name} · 기록 ${parsed.records.length}개 저장`, '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', `고급 세계관 ${parsed.name} · 기록 ${parsed.records.length}개 저장`, '씬판독기');
     }), '고급 세계관을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-world-advanced-delete')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
         const id = deps.document.getElementById('sr-world-advanced-edit-id').value;
@@ -962,18 +963,18 @@ function bindForm() {
         if (deps.preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
         invalidatePreparedJudgment(); await deps.persistChat();
         showWorldList();
-        deps.window.toastr?.success?.('고급 세계관을 삭제했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '고급 세계관을 삭제했습니다.', '씬판독기');
     }), '고급 세계관을 삭제하지 못했습니다.'));
     deps.document.getElementById('sr-world-delete')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
         const id = String(deps.document.getElementById('sr-world-edit-id')?.value || '');
         if (!id) return;
         const previous = deps.loadCustomWorlds();
-        if (!deps.saveCustomWorlds(previous.filter((world) => world.id !== id))) { deps.window.toastr?.error?.('브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
+        if (!deps.saveCustomWorlds(previous.filter((world) => world.id !== id))) { notifySceneReaderToast(deps.window, 'error', '브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
         try { await deps.saveServerSettings(); }
         catch (error) { deps.saveCustomWorlds(previous); throw error; }
         if (deps.preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
         showWorldList();
-        deps.window.toastr?.success?.('커스텀 세계관을 삭제했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '커스텀 세계관을 삭제했습니다.', '씬판독기');
     }), '커스텀 세계관을 삭제하지 못했습니다.'));
     deps.document.getElementById('sr-reset-npc')?.addEventListener('click', () => deps.runUiTask((async () => {
         deps.invalidateReasonerJobs();
@@ -1005,7 +1006,7 @@ function bindForm() {
         await deps.saveSession(deps.stateChatKey(), rec, []);
         await deps.clearInjection();
         deps.renderAll();
-        deps.window.toastr?.success?.('이 채팅의 판정, 관계 누적, 사건과 추첨 인물을 초기화했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '이 채팅의 판정, 관계 누적, 사건과 추첨 인물을 초기화했습니다.', '씬판독기');
     })(), '채팅 판정 상태를 초기화하지 못했습니다.'));
     deps.document.getElementById('sr-reset-villain')?.addEventListener('click', () => deps.runUiTask((async () => {
         const rec = deps.record(true);
@@ -1017,7 +1018,7 @@ function bindForm() {
         await deps.persistChat();
         await deps.clearInjection();
         deps.renderAll();
-        deps.window.toastr?.success?.('현재 빌런을 종료하고 새 추첨 대기로 전환했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '현재 빌런을 종료하고 새 추첨 대기로 전환했습니다.', '씬판독기');
     })(), '현재 빌런을 종료하지 못했습니다.'));
     deps.document.getElementById('sr-reset-current-npc')?.addEventListener('click', () => deps.runUiTask((async () => {
         const rec = deps.record(true);
@@ -1030,7 +1031,7 @@ function bindForm() {
         await deps.persistChat();
         await deps.clearInjection();
         deps.renderAll();
-        deps.window.toastr?.success?.('현재 일반 NPC를 종료하고 새 판독 대기로 전환했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '현재 일반 NPC를 종료하고 새 판독 대기로 전환했습니다.', '씬판독기');
     })(), '현재 일반 NPC를 종료하지 못했습니다.'));
     deps.document.getElementById('sr-reset-event')?.addEventListener('click', () => deps.runUiTask(endActiveEvent(), '사건을 종료하지 못했습니다.'));
     deps.document.getElementById('sr-reset-relationship')?.addEventListener('click', () => deps.runUiTask((async () => {
@@ -1044,7 +1045,7 @@ function bindForm() {
         await deps.persistChat();
         await deps.clearInjection();
         deps.renderAll();
-        deps.window.toastr?.success?.('확장이 저장한 관계 누적 상태를 초기화했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '확장이 저장한 관계 누적 상태를 초기화했습니다.', '씬판독기');
     })(), '관계 누적 상태를 초기화하지 못했습니다.'));
     deps.document.getElementById('sr-character-enabled')?.addEventListener('change', (event) => deps.runUiTask((async () => {
         const previous = deps.characterStore.enabled;
@@ -1135,20 +1136,20 @@ function bindForm() {
                 deps.invalidateReasonerJobs();
                 const data = await deps.storagePost('backup/restore', { id }); deps.backupList = data.backups || [];
                 await deps.hydrateServerState({ migrate: false }); setFormValues(); deps.renderAll();
-                deps.window.toastr?.success?.('백업을 복원했습니다. 복원 직전 상태도 자동 백업했습니다.', '씬판독기');
+                notifySceneReaderToast(deps.window, 'success', '백업을 복원했습니다. 복원 직전 상태도 자동 백업했습니다.', '씬판독기');
             } else if (action === 'download') {
                 const data = await deps.storagePost('backup/export', { id }); downloadJson(`scene-reader-${id}.json`, data.snapshot);
-                deps.window.toastr?.success?.('백업을 다운로드했습니다.', '씬판독기');
+                notifySceneReaderToast(deps.window, 'success', '백업을 다운로드했습니다.', '씬판독기');
             } else if (action === 'delete') {
                 const data = await deps.storagePost('backup/delete', { id }); deps.backupList = data.backups || []; deps.renderBackups();
-                deps.window.toastr?.success?.('백업을 삭제했습니다.', '씬판독기');
+                notifySceneReaderToast(deps.window, 'success', '백업을 삭제했습니다.', '씬판독기');
             }
         })(), '백업 작업에 실패했습니다.');
     });
     deps.document.getElementById('sr-backup-create')?.addEventListener('click', () => deps.runUiTask((async () => {
         await deps.saveServerSettings(); await deps.saveServerChat(); await deps.saveCharacterStore();
         const data = await deps.storagePost('backup/create'); deps.backupList = data.backups || []; deps.renderBackups();
-        deps.window.toastr?.success?.('현재 데이터를 날짜·시간 백업으로 저장했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '현재 데이터를 날짜·시간 백업으로 저장했습니다.', '씬판독기');
     })(), '백업을 만들지 못했습니다.'));
     deps.document.getElementById('sr-backup-import')?.addEventListener('change', (event) => deps.runUiTask((async () => {
         deps.invalidateReasonerJobs();
@@ -1156,7 +1157,7 @@ function bindForm() {
         const snapshot = JSON.parse(await file.text());
         const data = await deps.storagePost('backup/import', { snapshot }); deps.backupList = data.backups || [];
         await deps.hydrateServerState({ migrate: false }); setFormValues(); deps.renderAll(); event.target.value = '';
-        deps.window.toastr?.success?.('백업 파일을 가져와 복원했습니다.', '씬판독기');
+        notifySceneReaderToast(deps.window, 'success', '백업 파일을 가져와 복원했습니다.', '씬판독기');
     })(), '백업 파일을 가져오지 못했습니다.'));
 }
 

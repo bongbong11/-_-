@@ -1,8 +1,10 @@
+import { MASCOT_DIRECTOR_URL } from './mascot.js';
+
 export function dialogTemplate({optionsHtml, escapeHtml, WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, PACE_OPTIONS, ADVANCED_STYLES, ADVANCED_ELEMENTS}) {
     return `
         <div class="sr-shell">
             <header class="sr-header">
-                <div><h2>씬판독기</h2><p>최근 장면을 Jev가 판독해 필요한 진행문만 넣습니다</p></div>
+                <div><h2><img class="sr-header-mascot" src="${MASCOT_DIRECTOR_URL}" width="32" height="32" alt="">씬판독기</h2><p>최근 장면을 Jev가 판독해 필요한 진행문만 넣습니다</p></div>
                 <div class="sr-header-actions"><button id="sr-copy-debug" class="sr-icon-button" aria-label="현재 판정 디버그 복사" title="현재 판정 디버그 복사"><i class="fa-solid fa-clipboard"></i></button><button id="sr-settings-button" class="sr-icon-button" aria-label="설정"><i class="fa-solid fa-gear"></i></button><button id="sr-close" class="sr-icon-button" aria-label="닫기"><i class="fa-solid fa-xmark"></i></button></div>
             </header>
             <nav class="sr-tabs" aria-label="씬판독기 메뉴"><button class="active" data-sr-tab="flow">자동 전개</button><button data-sr-tab="advanced">고급 전개</button><button data-sr-tab="conflict">갈등용 진행</button><button data-sr-tab="characters">인물 판정</button></nav>

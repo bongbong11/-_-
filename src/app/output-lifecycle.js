@@ -1,3 +1,4 @@
+import { notifySceneReaderToast } from '../ui/toasts.js';
 import { selectedStateSwipe } from '../characters/state-contract.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createOutputLifecycle(deps) {
@@ -135,7 +136,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
         rec.pendingPlan = null; rec.lastJudgment = null; rec.lastVerification = null;
         await deps.saveSession(chatKey, rec, []);
         await clearInjection(); deps.renderAll();
-        deps.window.toastr?.info?.('복원 기록보다 이전 메시지가 바뀌어 누적 판정을 비웠습니다. 시트와 설정은 유지하며 다음 RP에서 다시 판독합니다.', '씬판독기', {timeOut:3000});
+        notifySceneReaderToast(deps.window, 'info', '복원 기록보다 이전 메시지가 바뀌어 누적 판정을 비웠습니다. 시트와 설정은 유지하며 다음 RP에서 다시 판독합니다.', '씬판독기', {timeOut:3000});
         return;
     }
     const affected = history.findIndex((entry) => Number(entry.assistantIndex) >= index);
@@ -174,7 +175,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
         if (['swiped','regenerated'].includes(kind)) await applyStoredInjection();
         deps.renderAll();
         const labels = { edited: '수정', deleted: '삭제' };
-        deps.window.toastr?.info?.(`출력 ${labels[kind] || '변경'} 감지 · 대기 중인 이행 검증을 갱신했습니다.`, '씬판독기', { timeOut: 1800 });
+        notifySceneReaderToast(deps.window, 'info', `출력 ${labels[kind] || '변경'} 감지 · 대기 중인 이행 검증을 갱신했습니다.`, '씬판독기', { timeOut: 1800 });
         return;
     }
     const entry = history[affected];
@@ -203,7 +204,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     deps.renderAll();
     const labels = { swiped: '리롤', regenerated: '재생성', edited: '수정', deleted: '삭제' };
     const suffix = canReuseSwipe ? '직전 누적을 되돌리고 같은 판정·추첨을 재사용합니다.' : '직전 저장 상태를 복원했습니다.';
-    deps.window.toastr?.info?.(`출력 ${labels[kind] || '변경'} 감지 · ${suffix}`, '씬판독기', { timeOut: 1800 });
+    notifySceneReaderToast(deps.window, 'info', `출력 ${labels[kind] || '변경'} 감지 · ${suffix}`, '씬판독기', { timeOut: 1800 });
 }
 
 async function onAssistantOutputChanged(messageId, kind) {
