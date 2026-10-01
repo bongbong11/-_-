@@ -9,7 +9,7 @@ export function normalizeCharacterStore(value) {
         const result = { ...entry, id: String(entry.id || `${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}`), kind,
             name: String(entry.name).trim(), source: String(entry.source || ''), aliases: [...new Set((Array.isArray(entry.aliases) ? entry.aliases : String(entry.aliases || '').split(',')).map(v => String(v).trim()).filter(Boolean))],
             sourceVisibleToMain: Object.hasOwn(entry, 'sourceVisibleToMain') ? Boolean(entry.sourceVisibleToMain) : kind !== 'npc', sourceHash: String(entry.sourceHash || ''),
-            npcRole: kind === 'npc' ? npcRole : '', antagonist: kind === 'npc' && npcRole === 'villain', provenance: entry.provenance && typeof entry.provenance === 'object' ? entry.provenance : null,
+            npcRole: kind === 'npc' ? npcRole : '', antagonist: kind === 'npc' && npcRole === 'villain', trackArousal: kind === 'npc' && Boolean(entry.trackArousal), provenance: entry.provenance && typeof entry.provenance === 'object' ? entry.provenance : null,
             coreEnglish: kind === 'npc' ? String(entry.coreEnglish || '').trim() : '' };
         // Legacy analyses stay in the record for backup/recovery, but never become verified items.
         result.core = buildCore(result);

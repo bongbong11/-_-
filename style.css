@@ -271,6 +271,7 @@
 #scene-reader-dialog .sr-record-person { padding: 10px 0; border-bottom: 1px solid var(--SmartThemeBorderColor); }
 #scene-reader-dialog .sr-record-person-name { padding: 0; border: 0; background: transparent; color: inherit; font-size: 1rem; font-weight: 700; text-align: left; cursor: pointer; }
 #scene-reader-dialog .sr-record-person > small { display: block; opacity: .7; }
+#scene-reader-dialog .sr-npc-affect-toggle { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: .82rem; cursor: pointer; }
 #scene-reader-dialog .sr-record-person-versions { margin: 5px 0 0 10px; padding-left: 9px; border-left: 2px solid var(--SmartThemeBorderColor); }
 #scene-reader-dialog .sr-record-version { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
 #scene-reader-dialog .sr-version-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }

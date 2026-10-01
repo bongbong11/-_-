@@ -112,4 +112,34 @@ for(const mode of ['legacy','stale','version']) {
     assert.equal(seen.length,3);
     assert.doesNotMatch(f.run('record().lastJudgment.payload'),/Hunter suspects/);
 }
-console.log(`Current character runtime passed: ${runs} style/event/persona combinations, all actor kinds, canonical-only requests, selected-rule injection, legacy/stale/unknown rejection and cache invalidation.`);
+for (const style of ['static','dynamic']) for (const intensity of [0.5,1.5]) {
+    const {f,seen}=setup({style,advanced:true,impersonate:false});
+    f.ctx.chat.unshift({is_user:false,mes:'Hunter and Lucas remain in conversation.'});
+    f.sandbox.intensity=intensity;
+    f.run(`record().preferences.progressIntensity=intensity; characterStore.npcs[0].trackArousal=true;
+        storeStateEvent(record(),{outputIndex:0,fingerprint:stableFingerprint(getContext().chat[0].mes),states:people.map(person=>({id:person.id,values:{a:35,c:70,anger:25,joy:0,fear:0,sadness:0},targets:{}}))});`);
+    const original=f.sandbox.mockJev;
+    let calls=0;
+    f.sandbox.affectJev=async body=>{
+        calls++;
+        const result=await original(body);
+        for(const key of Object.keys(body.questions)) {
+            if(key.endsWith('_affect_a'))result.answers[key]={choice:'active',confidence:0.95};
+            if(key.endsWith('_affect_anger'))result.answers[key]={choice:'inward',confidence:0.95};
+        }
+        return result;
+    };
+    f.run('callJev=affectJev');
+    await f.run('runJudge({force:true})');
+    assert.equal(calls,2,'state choices do not add a Jev call');
+    const judgment=JSON.parse(f.run('JSON.stringify(record().lastJudgment)'));
+    assert.match(judgment.payload,/Prior state sexual arousal 35%/,'ordinary progression does not consume the character-state allowance');
+    assert.match(judgment.payload,/Prior state anger 25%/,'different feelings coexist');
+    assert.ok(seen[0].state.prior_output_character_states.every(person=>person.id!=='persona'),'persona state stays private when impersonation is off');
+    f.run('characterStore.npcs[0].trackArousal=false;');
+    await f.run('runJudge()');
+    const npcState=seen.at(-1).state.prior_output_character_states.find(person=>person.id==='npc');
+    assert.equal(npcState.values.a,undefined,'NPC opt-out removes the old value before Jev sees it');
+    assert.equal(npcState.values.anger,25,'NPC ordinary emotion remains available');
+}
+console.log(`Current character runtime passed: ${runs} style/event/persona combinations, scoped prior states at both intensity limits, two Jev calls, canonical-only requests, selected-rule injection, legacy/stale/unknown rejection and cache invalidation.`);

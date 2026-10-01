@@ -9,6 +9,21 @@ import { characterVolume } from './volume.js';
 const DIRECTIONS = { none: 'No separate direction is needed.', speak: 'Let a direct line lead.', act: 'Let concrete conduct lead.', selective: 'Respond only to what matters to this person.', withhold: 'Withhold information for an established motive.', evade: 'Evade for an established motive.', deceive: 'Deceive only if the person has an established motive and knows what is being concealed.', withdraw: 'Withdraw when the person can actually do so.', confront: 'Confront a supported live issue.' };
 const ACCESS_LABELS = { observed: 'Directly perceived', reported: 'Was told', public: 'Publicly available', stored_knowledge: 'Previously established for this person', profile_supported: 'Within supported lived or role knowledge', private_access: 'Has established private access' };
 const CHARACTER_INJECTION_PREAMBLE='Scoped character constraints, not scripted actions. Preserve belief, report, ignorance and time scope; expertise does not require a lecture.';
+const AFFECT_CHOICES = {
+    none: 'The previous output state does not affect this person in the next response.',
+    inward: 'Carry the relevant feeling in viewpoint thought or restraint, if this viewpoint is available.',
+    visible: 'Let the relevant feeling color speech, attention, or a small action in the ongoing scene.',
+    active: 'Let the relevant feeling contribute to a character-led action that fits the current scene and established limits.',
+};
+function affectSummary(state, selectedFields = null) {
+    if (!state?.values) return '';
+    const labels = { a: 'sexual arousal', c: 'self-control', anger: 'anger', joy: 'joy', fear: 'fear', sadness: 'sadness' };
+    return Object.entries(labels).filter(([key]) => (!selectedFields || selectedFields.includes(key) || (key === 'c' && selectedFields.includes('a'))) && Number.isFinite(state.values[key]) && (['a','c'].includes(key) || state.values[key] > 0))
+        .map(([key, label]) => `${label} ${state.values[key]}%${state.targets?.[key] ? ` toward ${state.targets[key]}` : ''}`).join(', ');
+}
+function affectFields(state) {
+    return ['a', 'anger', 'joy', 'fear', 'sadness'].filter(key => Number.isFinite(state?.values?.[key]) && (key === 'a' || state.values[key] > 0));
+}
 const NEED_GROUPS = {
     identity: ['fact','core','value','boundary','capability'],
     relationship: ['relationship'],
@@ -88,6 +103,11 @@ export function buildCharacterTurnQuestions(plan = []) {
     for (const person of plan) {
         const prefix = `character_${person.index}`;
         questions[`${prefix}_presence`] = { type: 'choice', instructions: `Judge ${person.name}'s role in the next response from actual RP. A previously active person may remain present without being named again, but registration or model visibility alone does not make someone a participant. In an NPC-only exchange, mark an uninvolved main character absent or background.${person.mainSillyTavernName ? ` This is the registered main character for SillyTavern character ${person.mainSillyTavernName}; differing sheet language or spelling alone is not evidence of absence.` : ''}`, criteria: PRESENCE_CHOICES };
+        for (const field of affectFields(person.priorState)) questions[`${prefix}_affect_${field}`] = {
+            type: 'choice',
+            instructions: `${person.name}'s prior completed RP output carried ${affectSummary(person.priorState, [field])}. Choose its expression in the NEXT response, or none if no longer relevant. Use the new input, current scene, and this person's stored limits. Ordinary conversation and other feelings may coexist with it; no new event or relationship milestone is required. It is not proof of an action, consent, relationship change, or another person's knowledge. Answer independently of presence and record choices; code will suppress this if the person is not active.`,
+            criteria: AFFECT_CHOICES,
+        };
         if (person.recordMode) {
             for (const [ordinal,item] of person.profileCandidates.entries()) questions[`${prefix}_record_${ordinal}`] = {
                 type: 'noul',
@@ -136,6 +156,7 @@ export function resolveLiveCharacterPlan(plan, decisions, details = {}) {
             else accepted.push({ ...item, access });
         }
         let direction = !person.recordMode && presence === 'active' && Object.hasOwn(DIRECTIONS, decisions[`${prefix}_response_direction`]) ? decisions[`${prefix}_response_direction`] : 'none';
+        const affectSelections = presence === 'active' ? affectFields(person.priorState).map(field => ({field, expression: decisions[`${prefix}_affect_${field}`]})).filter(item => item.expression !== 'none' && Object.hasOwn(AFFECT_CHOICES, item.expression)) : [];
         // The Jev questions are parallel; validate the chosen action against access here.
         const basis = decisions[`${prefix}_response_basis`] || 'none';
         const basisItem = person.contextCandidates.find(item => item.id === basis);
@@ -143,7 +164,7 @@ export function resolveLiveCharacterPlan(plan, decisions, details = {}) {
             (basisItem && !accepted.some(item => item.id === basis)) ||
             (denied.length && !accepted.length && ['deceive', 'withhold'].includes(direction))) direction = 'none';
         return { ...person, presence, profileIds, profileItems: profileIds.map(id => person.profileCandidates.find(item => item.id === id)), contextIds,
-            contextItems: accepted, denied, direction, excludedReason: denied.length ? '접근 근거 없는 정보는 제외 · 독립적인 직접 반응은 유지' : '' };
+            contextItems: accepted, denied, direction, affectSelections, excludedReason: denied.length ? '접근 근거 없는 정보는 제외 · 독립적인 직접 반응은 유지' : '' };
     });
 }
 function contextLine(person, item) {
@@ -163,7 +184,7 @@ export function buildCharacterInjection(plan = [], { conflictActive = false, vol
     const selections = [], traces = [];
     for (const person of plan) {
         traces.push({ index: person.index, id: person.id, name: person.name, kind: person.kind, presence: person.presence,
-            profileIds: person.profileIds, contextIds: person.contextIds, deniedIds: person.denied.map(item => item.id), direction: person.direction, recordMode:person.recordMode,
+            profileIds: person.profileIds, contextIds: person.contextIds, deniedIds: person.denied.map(item => item.id), direction: person.direction, affectSelections: person.affectSelections || [], priorAffect: person.priorState || null, recordMode:person.recordMode,
             recordStatus:person.recordStatus, storedRecordCount:person.storedRecordCount || 0, candidateCount:person.profileCandidates?.length || 0, prefilterStats:person.prefilterStats || {},
             recordSelections:person.profileItems.map(item=>({id:item.id,type:item.type,rule:item.rule,source_ids:item.source_ids,knowledge_state:item.knowledge_state})), excludedReason: person.excludedReason });
         if (person.presence !== 'active') continue;
@@ -177,6 +198,12 @@ export function buildCharacterInjection(plan = [], { conflictActive = false, vol
         if (person.kind === 'npc' && person.antagonist && conflictActive) chosen.push({ priority: 85, text: `${person.name}: Opposition follows established motives and limits.` });
         if (person.denied.length) chosen.push({ priority: 90, mandatory: true, text: `${person.name}: Do not treat unshared scene or reference material as this person's knowledge.` });
         for (const item of person.profileItems) chosen.push({ priority: 70, personIndex: person.index, ruleId: item.id, text: person.recordMode ? scopedRecordLine(person.name,item) : `${person.name}: ${item.rule}` });
+        for (const expression of ['inward', 'visible', 'active']) {
+            const fields = (person.affectSelections || []).filter(item => item.expression === expression).map(item => item.field);
+            if (!fields.length) continue;
+            const phrasing = { inward: 'through available viewpoint thought or restraint', visible: 'through speech, attention, or a small action', active: 'through a fitting character-led action' }[expression];
+            chosen.push({ priority: 68, text: `${person.name}: Prior state ${affectSummary(person.priorState, fields)}. Let it register ${phrasing} within the current interaction; respect established limits and do not turn a feeling into automatic consent or relationship change.` });
+        }
         if (person.kind === 'npc') {
             const role = {ally:'ally',villain:'villain',mixed:'mixed'}[person.npcRole] || 'mixed';
             chosen.push({priority:65,text:`${person.name} · ${role} role: let established motives and limits color relevant conduct; the label supplies no new knowledge.`});

@@ -853,7 +853,7 @@ Within the selected scene or event, answer the current interaction through a con
 </DIRECT_SCENE_EXECUTION>`);
 
     const relationshipMoves = {
-        hold: 'Preserve the current relationship state in this response. Do not convert attraction, sex, proximity, jealousy, protection, conflict, or vulnerability into unearned trust, intimacy, romance, reconciliation, or rupture.',
+        hold: 'Preserve the current relationship state in this response. Do not convert attraction, sex, proximity, jealousy, protection, conflict, or vulnerability into unearned trust, intimacy, romance, reconciliation, or rupture. This limits relationship change, not desire or physical approach within existing character limits.',
         closer_incremental: 'Permit one small move toward closeness supported by concrete reciprocal conduct. Express it through an actual choice, disclosure, reliance, cooperation, or changed behavior; do not jump to a new relationship status.',
         closer_significant: 'Permit a clear move toward closeness only through the decisive or strongly reciprocal cause present now. Carry the resulting change into conduct and consequences without inventing unsupported feelings for {{user}}.',
         distant_incremental: 'Permit one small move toward distance supported by concrete conduct. Express it through guardedness, distrust, refusal, friction, withdrawal, or changed priorities without turning it into an unsupported rupture.',

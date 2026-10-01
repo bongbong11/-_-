@@ -3,11 +3,32 @@ export function createOutputLifecycle(deps) {
 async function onCharacterMessageReceived(messageId) {
     const rec = deps.record();
     const cycleMode = deps.activeGenerationCycle?.mode || deps.generationMode || 'rp';
+    const outputIndex = Number.isInteger(Number(messageId)) ? Number(messageId) : (deps.getContext().chat || []).length - 1;
+    const output = (deps.getContext().chat || [])[outputIndex];
+    const roster = deps.activeGenerationCycle?.stateRoster || [];
+    // Remove recognizable metadata even if a generation was stopped or its roster
+    // was cleared while the completed response was arriving.
+    const collected = output && !output.is_user && !output.is_system ? deps.collectMainOutputState(output.mes, roster) : null;
+    if (collected?.found) output.mes = collected.text;
+    let captureChanged = false;
+    if (rec && cycleMode === 'rp' && (!deps.activeGenerationCycle?.chatKey || deps.activeGenerationCycle.chatKey === deps.stateChatKey()) && output && !output.is_user && !output.is_system && roster.length) {
+        if (deps.STATE_COLLECTOR_MODE === 'main-output' && deps.activeGenerationCycle?.stateCaptureEnabled) {
+            const result = collected;
+            if (!String(output.mes || '').trim()) { result.states = []; result.error = 'empty_output'; }
+            rec.characterStateCapture = { outputIndex, status: result.error || 'collected', count: result.states.length, source: 'main-output' };
+            captureChanged = true;
+            if (!result.error && result.states.length) {
+                const fingerprint = deps.stableFingerprint(output.mes || '');
+                deps.storeStateEvent(rec, { outputIndex, fingerprint, states: result.states, source: 'main-output' }, 12, deps.latestStateForChat(rec, deps.getContext().chat.slice(0, outputIndex), deps.stableFingerprint));
+            }
+        } else if (deps.STATE_COLLECTOR_MODE === 'profile-output') {
+            deps.scheduleProfileStateCollection({ chatKey: deps.stateChatKey(), outputIndex, text: String(output.mes || ''), roster });
+        }
+    }
     deps.messageSnapshots.set(deps.stateChatKey(), deps.messageSnapshot(deps.getContext().chat));
-    if (!deps.settings.enabled || cycleMode === 'disabled') { deps.pendingGenerationType = ''; return; }
-    if (deps.activeGenerationCycle?.chatKey && deps.activeGenerationCycle.chatKey !== deps.stateChatKey()) return;
+    if (!deps.settings.enabled || cycleMode === 'disabled') { deps.pendingGenerationType = ''; if (captureChanged) await deps.persistChat(); return; }
+    if (deps.activeGenerationCycle?.chatKey && deps.activeGenerationCycle.chatKey !== deps.stateChatKey()) { if (captureChanged) await deps.persistChat(); return; }
     if (cycleMode !== 'rp') {
-        const outputIndex = Number.isInteger(Number(messageId)) ? Number(messageId) : (deps.getContext().chat || []).length - 1;
         if (rec && outputIndex >= 0) {
             rec.nonRpOutputIndices ||= [];
             if (!rec.nonRpOutputIndices.includes(outputIndex)) rec.nonRpOutputIndices.push(outputIndex);
@@ -24,15 +45,16 @@ async function onCharacterMessageReceived(messageId) {
         }
         return;
     }
-    if (!rec?.pendingPlan) { deps.pendingGenerationType = ''; return; }
+    if (!rec?.pendingPlan) { deps.pendingGenerationType = ''; if (captureChanged) await deps.persistChat(); return; }
     if (deps.activeGenerationCycle?.inputKey && deps.activeGenerationCycle.inputKey !== rec.pendingPlan.inputKey) {
         deps.pendingGenerationType = '';
         deps.activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
+        if (captureChanged) await deps.persistChat();
         return;
     }
-    const index = Number.isInteger(Number(messageId)) ? Number(messageId) : (deps.getContext().chat || []).length - 1;
+    const index = outputIndex;
     const message = (deps.getContext().chat || [])[index];
-    if (!message || message.is_user || message.is_system) { deps.pendingGenerationType = ''; return; }
+    if (!message || message.is_user || message.is_system) { deps.pendingGenerationType = ''; if (captureChanged) await deps.persistChat(); return; }
     rec.pendingPlan.outputIndex = index;
     rec.pendingPlan.outputText = String(message.mes || '');
     rec.pendingPlan.outputFingerprint = deps.stableFingerprint(rec.pendingPlan.outputText);
@@ -68,6 +90,11 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     const index = deletion ? (changedIndex < 0 ? Math.min(Number(messageId) || 0, currentMessages.length) : changedIndex) : Number(messageId);
     deps.messageSnapshots.set(chatKey, currentMessages);
     if (!Number.isInteger(index)) return;
+    const previousStateCount = rec.characterStateEvents?.length || 0;
+    const preservedSwipeStates = ['swiped', 'regenerated'].includes(kind) ? (rec.characterStateEvents || []).filter(item => item.outputIndex === index) : [];
+    if (!['swiped', 'regenerated'].includes(kind)) deps.dropStateEventsFrom(rec, index);
+    if (!['swiped', 'regenerated'].includes(kind) && rec.characterStateCapture?.outputIndex >= index) rec.characterStateCapture = null;
+    const stateEventsChanged = (rec.characterStateEvents?.length || 0) !== previousStateCount;
     if ((rec.nonRpOutputIndices || []).includes(index)) {
         if (kind === 'deleted') {
             rec.nonRpOutputIndices = rec.nonRpOutputIndices.filter((value) => value !== index).map((value) => value > index ? value - 1 : value);
@@ -99,7 +126,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     if (affected < 0) {
         const pendingAffected = rec.pendingPlan && Number(rec.pendingPlan.outputIndex ?? rec.pendingPlan.chatCount) >= index;
         if (!pendingAffected) {
-            if (kind === 'edited' || sceneGateAffected) { rec.lastJudgment = null; await clearInjection(); await deps.saveSession(chatKey, rec, history); deps.renderAll(); }
+            if (kind === 'edited' || sceneGateAffected || stateEventsChanged) { rec.lastJudgment = null; await clearInjection(); await deps.saveSession(chatKey, rec, history); deps.renderAll(); }
             return;
         }
         if (['swiped', 'regenerated'].includes(kind)) {
@@ -136,6 +163,7 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     const entry = history[affected];
     const canReuseSwipe = !sceneGateAffected && ['swiped', 'regenerated'].includes(kind) && entry.plan && entry.judgment;
     deps.restoreReversibleState(rec, entry.before);
+    for (const stateEvent of preservedSwipeStates) deps.storeStateEvent(rec, stateEvent);
     if(sceneGateAffected)rec.sceneIntimacy=null;
     history = history.slice(0, affected);
     rec.lastVerification = null;
@@ -180,6 +208,12 @@ async function applyStoredInjection({ exactSnapshot = false } = {}) {
     deps.activeWorldMacroPayload = worldMacroMode ? worldPayload : '';
     await deps.setExtensionPrompt(deps.INJECT_KEY, macroMode ? '' : payload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     await deps.setExtensionPrompt(deps.WORLD_INJECT_KEY, worldMacroMode ? '' : worldPayload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
+    const roster = deps.settings.enabled ? deps.stateRoster(deps.characterStore, rec?.preferences, rec?.lastJudgment) : [];
+    const context = deps.getContext();
+    const multipleOutputs = context.mainApi === 'openai' && Number(context.chatCompletionSettings?.n) > 1;
+    const mainCapture = deps.STATE_COLLECTOR_MODE === 'main-output' && !deps.isStreamingEnabled() && !multipleOutputs;
+    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: roster, stateCaptureEnabled: mainCapture && roster.length > 0 };
+    await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, mainCapture ? deps.mainOutputStatePrompt(roster) : '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = payload || '현재 주입문 없음';
 }
@@ -190,6 +224,8 @@ async function clearInjection() {
     deps.activeWorldMacroPayload = '';
     await deps.setExtensionPrompt(deps.INJECT_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     await deps.setExtensionPrompt(deps.WORLD_INJECT_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
+    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: [], stateCaptureEnabled: false };
+    await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = '현재 주입문 없음';
 }

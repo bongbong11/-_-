@@ -22,7 +22,7 @@ export function archiveRecordVersion(store, entry, saveName) {
     store.recordGroups ||= [];
     let group=store.recordGroups.find(g=>g.kind===entry.kind && normalized(g.name)===normalized(name));
     if (!group) { group={id:uid(),kind:entry.kind,name,versions:[]}; store.recordGroups.push(group); }
-    const entrySnapshot=Object.fromEntries(['id','kind','name','aliases','source','sourceHash','selectedLore','sourceVisibleToMain','npcRole','antagonist','provenance'].filter(key=>Object.hasOwn(entry,key)).map(key=>[key,structuredClone(entry[key])]));
+    const entrySnapshot=Object.fromEntries(['id','kind','name','aliases','source','sourceHash','selectedLore','sourceVisibleToMain','npcRole','antagonist','trackArousal','provenance'].filter(key=>Object.hasOwn(entry,key)).map(key=>[key,structuredClone(entry[key])]));
     const version={id:uid(),savedAt:new Date().toISOString(),entryId:entry.id,entityName:entry.name,entrySnapshot,bank:structuredClone(entry.recordBank)};
     group.versions.unshift(version);
     entry.appliedRecordVersion=version.id;

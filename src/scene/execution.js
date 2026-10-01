@@ -5,6 +5,7 @@ import { sceneGateRequest, resolveSceneGate } from './intimacy-gate.js';
 import { currentRecords, recordBankIsCurrent } from '../characters/records.js';
 import { addWorldQuestions, selectedWorldRecords, worldPayload as buildWorldPayload } from '../world/advanced.js';
 import { seasonalWorldNote } from '../world/seasonal.js';
+import { stateForEntry } from '../characters/state-contract.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
@@ -15,7 +16,8 @@ function sourceRevisionKey(rec, world) {
         retrieval: [deps.settings.retrievalProvider, deps.settings.retrievalModel, deps.settings.retrievalVertexAuth, deps.settings.retrievalVertexRegion, deps.settings.retrievalVertexProject],
         memoryReferenceEnabled: MEMORY_REFERENCE_ENABLED,
         characterSelectorContract: 3,
-        injectionAssemblyContract: 2,
+        injectionAssemblyContract: 3,
+        characterStateContract: 1,
         sceneGateContract: 2,
         characterCore: CORE_SHA256,
         characterEnabled: Boolean(deps.characterStore.enabled),
@@ -26,7 +28,7 @@ function sourceRevisionKey(rec, world) {
             wholeWords: deps.worldInfoModule?.world_info_match_whole_words,
         } : null,
         characters: [...deps.characterStore.characters, deps.characterStore.persona, ...deps.characterStore.npcs].filter(Boolean).map((entry) => ({ id: entry.id, name: entry.name, aliases: entry.aliases,
-            ...(deps.characterStore.enabled ? { source: entry.source, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, npcRole: entry.npcRole, antagonist: entry.antagonist, recordBank: entry.recordBank, selectedLore: entry.selectedLore } : {}) })),
+            ...(deps.characterStore.enabled ? { source: entry.source, sourceHash: entry.sourceHash, sourceVisibleToMain: entry.sourceVisibleToMain, npcRole: entry.npcRole, antagonist: entry.antagonist, trackArousal: entry.trackArousal, recordBank: entry.recordBank, selectedLore: entry.selectedLore } : {}) })),
     });
 }
 
@@ -286,6 +288,12 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const carriedGateIds = [...new Set([...previousParticipantIds,...(rec.lastJudgment?.characterTrace || []).filter(item=>(item?.presence||item?.final?.presence)==='active').map(item=>item.id)])];
     const gatePeople = deps.characterStore.enabled ? deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedGateIds, {allowUserImpersonation:prefs.allowUserImpersonation}).slice(0,6) : [];
     const gateRequest = sceneGateRequest({model:deps.JEV_MODEL,transcript,previous:previousSceneRoute,people:gatePeople,previousParticipantIds});
+    const rawPriorStates = new Map(deps.latestStateForChat(rec, deps.getContext().chat, deps.stableFingerprint).map(item => [item.id, item]));
+    gateRequest.state.prior_output_character_states = gatePeople.map(entry => {
+        const state = stateForEntry(rawPriorStates.get(entry.id), entry);
+        return state ? { ...state, name: entry.name } : null;
+    }).filter(Boolean);
+    if (gateRequest.state.prior_output_character_states.length) gateRequest.state.scope += ' Prior output feelings may guide character-record retrieval. They are not evidence that sexual activity has begun, a conditional world state is active, or anyone knows another person’s feelings.';
     const worldRecords = world?.advanced?.records || [];
     const worldRetrieval = world?.advanced && worldRecords.length
         ? await deps.vectorRetrieval.search({kind:'world',bankId:world.id,items:worldRecords,transcript,limit:10,signal:run.controller.signal})
@@ -393,16 +401,20 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         .filter((item) => (item?.presence || item?.final?.presence) && (item.presence || item.final.presence) !== 'absent')
         .map((item) => item.id)])];
     const activeCharacters = deps.selectActiveEntries(deps.characterStore, transcript, deps.getContext().name2 || '', carriedCharacterIds, { allowUserImpersonation: prefs.allowUserImpersonation });
+    const priorStates = new Map(activeCharacters.map(entry => [entry.id, stateForEntry(rawPriorStates.get(entry.id), entry)]).filter(([, state]) => state));
     const npcTargets = activeCharacters.filter((entry) => entry.kind === 'npc').slice(0, 2);
     const categoryHints = deps.characterCategoryHints(worldRecordAnswers);
-    const retrievalResults = new Map(await Promise.all((deps.characterStore.enabled ? activeCharacters.filter(recordBankIsCurrent) : []).map(async entry => [entry.id,
-        await deps.vectorRetrieval.search({kind:'character',bankId:`${run.identity}:${entry.id}`,items:currentRecords(entry),transcript,limit:12,signal:run.controller.signal})
-    ])));
+    const retrievalResults = new Map(await Promise.all((deps.characterStore.enabled ? activeCharacters.filter(recordBankIsCurrent) : []).map(async entry => {
+        const values = priorStates.get(entry.id)?.values || {};
+        const cue = [values.a > 0 ? 'sexual desire restraint boundary' : '', ...['anger','joy','fear','sadness'].filter(key => values[key] > 0)].filter(Boolean).join(' ');
+        return [entry.id, await deps.vectorRetrieval.search({kind:'character',bankId:`${run.identity}:${entry.id}`,items:currentRecords(entry),transcript:cue ? `${transcript}\n${cue}` : transcript,limit:12,signal:run.controller.signal})];
+    })));
     run.assert();
     const liveCharacters = deps.characterStore.enabled ? deps.buildLiveCharacterPlan(activeCharacters, {
         selected: context.selected.map((message) => ({ ...message, _sceneReaderIndex: deps.getContext().chat?.indexOf(message) ?? -1 })),
         transcript, knowledge: continuityContext.knowledge, memory, persona: deps.characterStore.persona, canonicalOnly: true, volume:prefs.characterVolume, retrievalResults, categoryHints,
     }) : [];
+    for (const person of liveCharacters) person.priorState = priorStates.get(person.id) || null;
     if (deps.characterStore.characters.length === 1) {
         const primary = liveCharacters.find((person) => person.id === deps.characterStore.characters[0].id);
         if (primary) primary.mainSillyTavernName = deps.getContext().name2 || '';
@@ -459,12 +471,16 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
                 stored_profiles: { antagonist: rec.villainProfile || null, genre_npc: rec.npcProfile || null, primary_event: rec.eventProfile || null },
                 accumulated_state: { pacing: rec.pacingState, progression_pressure: rec.progressionState, relationship: rec.relationshipState, latest_observation: rec.observationState, background_events: rec.backgroundEvents },
                 character_profiles: structuredCharacterContext,
+                prior_output_character_states: liveCharacters.filter(person => person.priorState).map(person => ({
+                    id: person.id, name: person.name, values: person.priorState.values, targets: person.priorState.targets,
+                    scope: 'Previous completed assistant output only; not proof of a current action or another person’s knowledge.',
+                })),
                 registered_sheet_cast: [...deps.characterStore.characters, ...deps.characterStore.npcs, ...[deps.characterStore.persona].filter(Boolean)].map(entry => ({ name: entry.name, aliases: entry.aliases || [], ...(entry.kind === 'npc' ? { npc_role_hint: entry.npcRole || (entry.antagonist ? 'villain' : 'mixed') } : {}) })),
                 pending_verification: rec.pendingPlan?.outputText ? { plan: { effects: rec.pendingPlan.effects, decisions: rec.pendingPlan.decisions }, source_user_rp: sourceUserRpForOutput(rec.pendingPlan.outputIndex), character_output: rec.pendingPlan.outputText } : null,
                 continuity_context: deps.settings.continuityEnabled ? { items: continuityContext.items, knowledge: continuityContext.knowledge, dependencies: continuityContext.dependencies } : null,
                 pending_continuity_candidates: pendingCandidates.map((candidate) => ({ id: candidate.id, type: candidate.type, label: candidate.label, evidence: candidate.evidence, data: candidate.data, sourceIdentity: candidate.sourceIdentity })),
                 priority: prefs.negativePriority ? 'Enabled negative-bias constraints govern world and event routing without rewriting a registered person\'s established knowledge, relationships, or characterization.' : 'Normal scene-reader priority.',
-                safety_policy: prefs.settingsContract >= 3 ? 'Do not confuse uncertainty about hidden facts with inability to respond. Ordinary dialogue, feelings, attempts, and small consequences can move in every style. Preserve genuine user decisions and hard constraints. No forced resolution or new incident is required. Sexual activity is not a scene-progression axis.' : prefs.judgmentStyle === 'active' ? 'Uncertainty blocks unsupported major invention, but it does not require passive holding when an established thread can move by one concrete genre-compatible beat. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.' : 'Uncertainty defaults to no unsupported new event, NPC, or escalation and continued current interaction. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.',
+                safety_policy: prefs.settingsContract >= 3 ? 'Do not confuse uncertainty about hidden facts with inability to respond. Ordinary dialogue, feelings, attempts, and small consequences can move in every style. Preserve genuine user decisions and hard constraints. No forced resolution or new incident is required. Do not count sexual activity as required plot progress. Character feelings may coexist with every progression style; judge their expression through the character questions independently of event budgets.' : prefs.judgmentStyle === 'active' ? 'Uncertainty blocks unsupported major invention, but it does not require passive holding when an established thread can move by one concrete genre-compatible beat. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.' : 'Uncertainty defaults to no unsupported new event, NPC, or escalation and continued current interaction. Sexual activity is not a scene-progression axis and must not be used to decide whether an NSFW scene should continue, slow, or end.',
             },
             questions,
         };

@@ -34,7 +34,7 @@ window.eventSource={on(name,fn){if(!listeners.has(name))listeners.set(name,[]);l
 const server=http.createServer(async(req,res)=>{try{
     if(req.url==='/favicon.ico'){res.statusCode=204;res.end();return;}
     if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end(host);return;}
-    if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}}`);return;}
+    if(req.url==='/script.js'){res.setHeader('Content-Type','application/javascript');res.end(`export const eventSource=window.eventSource;export const event_types=new Proxy({},{get:(_,key)=>key});export const chat_metadata={};export function saveSettingsDebounced(){};export function setExtensionPrompt(key,value){window.mock.prompts[key]=value};export function getRequestHeaders(){return {}};export function isStreamingEnabled(){return Boolean(window.mock.streamingEnabled)}`);return;}
     if(req.url==='/scripts/extensions.js'){res.setHeader('Content-Type','application/javascript');res.end('export const extension_settings={};');return;}
     if(req.url==='/scripts/world-info.js'){res.setHeader('Content-Type','application/javascript');res.end("export const world_info={charLore:[{name:'Hunter',extraBooks:['Hunter Extra']}]};export async function loadWorldInfo(name){if(window.mock.loreReady)await window.mock.loreReady;return window.mock.worldBooks[name]||null}");return;}
     if(req.url==='/scripts/personas.js'){res.setHeader('Content-Type','application/javascript');res.end("export const user_avatar='User.png'");return;}
@@ -66,7 +66,7 @@ const server=http.createServer(async(req,res)=>{try{
         else if(req.url.endsWith('/characters')) { if(failCharacterWrite){failCharacterWrite=false;res.statusCode=500;res.end(JSON.stringify({error:'Simulated failed save'}));return;} store.characters=body.value; }
         else if(req.url.endsWith('/chat'))store.chat=body.value;
         else if(req.url.endsWith('/history'))store.history=body.value;
-        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,q.type==='noul'?{type:'noul',noul:0.9}:{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
+        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,q.type==='noul'?{type:'noul',noul:0.9}:{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_affect_')?'visible':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
         res.end(JSON.stringify(result));return;
     }
     if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'application/javascript');res.end(await readFile(file));return;}
@@ -134,6 +134,12 @@ try{
     await page.locator('[data-character-view-id="wade"]').click();
     await page.locator('#sr-character-analysis-result').getByText('Wade tends to control his son on family matters.').waitFor();
     await page.locator('#sr-character-record-close').click();
+    const wadeToggle=page.locator('[data-npc-affect-id="wade"]');
+    assert.equal(await wadeToggle.isChecked(),false,'NPC arousal collection defaults off');
+    await Promise.all([page.waitForResponse(response=>response.url().endsWith('/characters')),wadeToggle.check()]);
+    assert.equal(store.characters.npcs.find(entry=>entry.id==='wade').trackArousal,true,'NPC choice is stored without regenerating its record bank');
+    await Promise.all([page.waitForResponse(response=>response.url().endsWith('/characters')),wadeToggle.uncheck()]);
+    assert.equal(store.characters.npcs.find(entry=>entry.id==='wade').trackArousal,false);
     await page.locator('#sr-npc-sheet-new').click();
     assert.equal(await page.locator('#sr-character-npc-role').inputValue(),'mixed');
     await page.waitForFunction(()=>document.querySelectorAll('#sr-character-lore-options input').length===5);
@@ -197,6 +203,7 @@ try{
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Extra:3')),'reserved auxiliary lore stays off');
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Lore:2')),'irrelevant lore must not reach Jev');
     assert.ok(await page.evaluate(()=>mock.prompts['scene-reader-router']?.length>0),'prompt slot receives injection');
+    assert.match(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']||''),/Hunter/,'main-model state request reaches the same generation');
     await page.context().grantPermissions(['clipboard-read','clipboard-write']);
     await page.locator('#sr-copy-debug').click();
     const debugReport=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));
@@ -207,11 +214,16 @@ try{
     assert.match(await page.locator('#sr-debug-preview').inputValue(),/Open the door\./,'reviewable full debug includes original RP evidence');
     await page.locator('#sr-debug-copy').click();
     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/rawJevAnswers/);
-    await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter opens the door.'});await mock.emit('MESSAGE_RECEIVED',1);mock.chat.push({is_user:true,mes:'(oOc: Explain.)',extra:{ooc_chat:true,ooc_instruction:'fixed wrapper'}});await mock.emit('MESSAGE_SENT',2);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter opens the door.\n[[SR_STATE]]\nC0|a38|c60|anger25\n[[/SR_STATE]]'});await mock.emit('MESSAGE_RECEIVED',1);mock.chat.push({is_user:true,mes:'(oOc: Explain.)',extra:{ooc_chat:true,ooc_instruction:'fixed wrapper'}});await mock.emit('MESSAGE_SENT',2);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.equal(await page.evaluate(()=>mock.chat[1].mes),'Hunter opens the door.','internal state removed before the RP render point');
+    assert.equal(store.chat.characterStateEvents?.[0]?.states?.[0]?.values?.a,38,'state stored outside the chat message');
     assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-router']), '');
     await page.locator('#sr-settings-button').click();await page.locator('#sr-injection-mode').selectOption('macro');
     const beforeMacro=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door again.'});await mock.emit('MESSAGE_SENT',3);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.ok(requests.some(r=>r.body.questions?.character_0_affect_a),'prior output state becomes a next-turn Jev question');
+    assert.ok(requests.some(r=>r.body.questions?.character_0_affect_a),'Jev checks the specific feeling before carrying it forward');
+    assert.ok(store.chat.lastJudgment?.payload?.includes('Prior state sexual arousal 38%'),'selected state reaches the final character injection');
     assert.ok(!requests.filter(r=>r.url.endsWith('/systemone')).slice(beforeMacro).some(r=>r.body.state?.memory_reference?.entries?.length),'reserved memory stays off in macro mode');
     const beforeLoreEdit=requests.filter(r=>r.url.endsWith('/systemone')).length;
     await page.evaluate(async()=>{
@@ -531,6 +543,12 @@ try{
     assert.equal(requests.filter(request=>request.url.endsWith('/systemone')).length-jevBefore,2,'normal scene still uses only the gate and main Jev calls');
     assert.ok(requests.some(request=>request.url==='/api/vector/query'),'native vector search is used from the existing runtime');
     assert.ok(store.chat.lastJudgment.characterTrace.some(person=>person.prefilterStats?.retrievalStatus==='ready'));
+    await page.evaluate(async()=>{mock.streamingEnabled=true;await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','streaming suppresses the internal state request');
+    await page.evaluate(async()=>{mock.streamingEnabled=false;ctx.mainApi='openai';ctx.chatCompletionSettings={n:2};await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','multiple completions do not receive unsupported metadata requests');
+    await page.evaluate(async()=>{ctx.chatCompletionSettings.n=1;await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    assert.ok(await page.evaluate(()=>mock.prompts['scene-reader-state-capture'].length>0),'single nonstream output resumes state collection');
     for(const width of [320,390]) {
         await page.setViewportSize({width,height:850});
         assert.equal(await page.locator('#scene-reader-dialog').evaluate(e=>e.scrollWidth>e.clientWidth+2),false,'search settings overflow at '+width);
@@ -541,6 +559,7 @@ try{
     await page.locator('#sr-enabled').uncheck();
     await page.waitForFunction(()=>!JSON.stringify(mock.prompts).includes('Halloween week'));
     assert.equal(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),'','disabled extension removes world macro');
+    assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','disabled extension also removes state collection');
     assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>mock.errors),[]);
     console.log('Browser passed: 4 viewport sizes × 4 tabs, character/world save, native vector retrieval, integrated key settings, two Jev calls, seasonal context, NSFW pause/resume, OOC, delete, clipboard.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

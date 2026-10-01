@@ -649,7 +649,8 @@ function bindForm() {
             rawJevAnswers: frame?.answers || judgment.rawChoices,
             worldSelection: judgment.worldSelection, worldGate: frame?.worldGate,
             decisions: judgment.details, actionPlan: judgment.actionPlan, rolls: judgment.rolls,
-            verification: judgment.priorVerification, finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
+            verification: judgment.priorVerification, characterStateCapture: deps.record()?.characterStateCapture || null,
+            finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
         }, deps.ownerPrompt());
         preview.hidden = false;
     });
@@ -675,7 +676,8 @@ function bindForm() {
         }]));
         const report = { tab, judgedAt: judgment.judgedAt, model: judgment.model,
             jevOriginalChoices: Object.fromEntries(Object.entries(judgment.rawChoices || {}).filter(([key]) => related(key))), decisions: details,
-            actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification };
+            actionPlan: judgment.actionPlan, rolls: judgment.rolls, verification: judgment.priorVerification,
+            ...(tab==='characters'?{characterStateCapture:deps.record()?.characterStateCapture||null}:{}), };
         await deps.copyText(JSON.stringify(report, null, 2));
         deps.window.toastr?.success?.('판정 원선택과 최종 조정 결과를 복사했습니다.', '씬판독기');
     })()));
@@ -985,6 +987,8 @@ function bindForm() {
         rec.advancedEntities = [];
         rec.continuity = deps.normalizeContinuity(null);
         rec.characterState = {knowledge:[],revision:0};
+        rec.characterStateEvents = [];
+        rec.characterStateCapture = null;
         rec.progressionState = {turnsSinceMeaningfulProgress:0,lastOutputFingerprint:""};
         rec.observedOpportunityKeys = []; rec.sceneOpportunity = 1;
         rec.lastVerification = null; rec.lastStateInput = null;
@@ -1063,6 +1067,21 @@ function bindForm() {
         deps.renderCharacterStore();
         deps.document.getElementById('sr-character-preview').hidden=true;
     }));
+    deps.document.getElementById('sr-character-versions')?.addEventListener('change',event=>{
+        const input=event.target.closest('[data-npc-affect-id]');
+        if(!input)return;
+        deps.runUiTask((async()=>{
+            const old=deps.characterStore;
+            const next=deps.normalizeCharacterStore(old);
+            const npc=next.npcs.find(item=>item.id===input.dataset.npcAffectId);
+            if(!npc)throw new Error('NPC 등록을 찾지 못했습니다.');
+            npc.trackArousal=input.checked;
+            await deps.saveCharacterStore(deps.stateChatKey(),next);
+            deps.characterStore=next;
+            invalidatePreparedJudgment();
+            await deps.clearInjection();await deps.persistChat();deps.renderAll();
+        })(),'NPC 충동 판독 설정을 저장하지 못했습니다.');
+    });
     deps.document.getElementById('sr-character-record-close')?.addEventListener('click',()=>{deps.document.getElementById('sr-character-preview').hidden=true;});
     for(const [tab,panel,other] of [['source','sr-character-preview-source','sr-character-analysis-result'],['record','sr-character-analysis-result','sr-character-preview-source']])deps.document.getElementById(`sr-character-preview-${tab}-tab`)?.addEventListener('click',()=>{
         deps.document.getElementById(panel).hidden=false;deps.document.getElementById(other).hidden=true;

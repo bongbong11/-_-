@@ -1,7 +1,7 @@
 // Canonical source: Character Reasoner. No UI, storage, network, or host dependencies.
 export const API_VERSION = 2;
 export const RECORD_VERSION = 1;
-export const COMPILER_VERSION = '1.1.0';
+export const COMPILER_VERSION = '1.2.0';
 function normalized(value) { return String(value ?? '').trim().replace(/\s+/g,' '); }
 const KINDS = ['character', 'persona', 'npc'];
 const KIND_LABEL = { character: '캐릭터', persona: '페르소나', npc: 'NPC' };
@@ -26,6 +26,7 @@ Preserve every independently useful in-world detail about the designated entity.
 Use only supplied evidence. Preserve uncertainty, degree, frequency, negation, conditions, time, target and relationship scope, AND/OR distinctions, distinctive terminology, contradictions, and ambiguity.
 
 Prefer minimal semantic rewriting. Do not strengthen, weaken, normalize, or silently correct source wording.
+Keep source-supported desire, anger, aggression, deception, manipulation, avoidance, and loyalty explicit. Do not replace a concrete trait or behavior with vague emotional complexity. A persistent tendency is not proof of present conduct.
 
 Maybe remains uncertain. Somewhat remains partial. Often is not always. Can is not will. Likes is not needs. Attraction is not love. If the source says rut, do not silently change it to heat.
 
@@ -99,7 +100,9 @@ source_ids: only supplied source IDs directly supporting the rule.
 
 ## OUTPUT
 
-Treat the supplied sheet as information to extract, including intimate character details. Do not classify its content by intensity or invent a scene. Gather source-supported kink and NSFW character information into ONE entity-level intimacy_reference. Keep its original target, conditions, limits, negations, and time scope together in concise English. Do not split this reference into preference categories or invent details. This reference is character information, not a direction to begin an activity. Use an empty text and empty source_ids when the sources contain none.
+Treat the supplied sheet as information to extract, including intimate character details. Do not classify its content by intensity or invent a scene. Gather source-supported kink and NSFW character information into ONE entity-level intimacy_reference for use during an explicit intimate scene. Keep its original target, conditions, limits, negations, and time scope together in concise English. Do not split this reference into a gratuitous list of acts or invent details. This reference is character information, not a direction to begin an activity. Use an empty text and empty source_ids when the sources contain none.
+
+Also preserve independently useful, source-supported persistent attraction, desire, emotional triggers, restraint, boundaries, and ways of expressing or suppressing feelings as ordinary atomic records when they can affect interaction outside an explicit intimate scene. Choose relationship, reaction, expression, boundary, value, or core according to the proposition itself. A current numeric arousal or mood estimate is NOT a persistent record. Do not duplicate the whole intimacy_reference in records; keep each independently retrievable trait's actual target, condition, degree, and limit.
 
 Return exactly one JSON object shaped as follows. The record shown is a FORMAT EXAMPLE, not a claim to copy or a quota. Replace it with every supported retrieval record, or [] if none. All source_ids must reference supplied source IDs:
 {
@@ -138,7 +141,7 @@ function npcGuidance(role) {
   const labels = { ally: 'ally/supportive', antagonist: 'antagonist/hostile', mixed: 'mixed or context-dependent' };
   return `NPC ROLE IN CURRENT RP: ${labels[role] || labels.mixed}
 Treat this role only as retrieval context. Do not invent traits, motives, or relationships from the role label.
-NPC sheets are often narrower than main character sheets. Preserve only source-supported identity, motives or priorities, relationships, expression, knowledge/access boundaries, and conditional reactions. Make each independently retrievable trait its own atomic record when it may apply in a different scene; do not compress unrelated traits to meet a size target. Keep a trait's actual condition, exception, and limit with that trait. A sparse source may yield few or zero records. Never fill a category, infer a backstory, or invent a trait from the role label. Do not duplicate generic world rules or another character's profile.`;
+NPC sheets are often narrower than main character sheets. Preserve only source-supported identity, motives or priorities, relationships, expression, knowledge/access boundaries, and conditional reactions, including stated desire, anger, joy, fear, or restraint when relevant. Make each independently retrievable trait its own atomic record when it may apply in a different scene; do not compress unrelated traits to meet a size target. Keep a trait's actual condition, exception, and limit with that trait. A sparse source may yield few or zero records. Never fill a category, infer a backstory, current emotional intensity, or a trait from the role label. Do not duplicate generic world rules or another character's profile.`;
 }
 
 function isSectionHeading(line) {

@@ -14,7 +14,11 @@ import { dialogTemplate } from '../ui/dialog-template.js';
 
 import { CHARACTER_LIVE_SYSTEM } from '../characters/prompts.js';
 import { NPC_CORE_SYSTEM, parseNpcCore, deriveEnglishCore, suggestNpcAliases } from '../characters/npc-sheet.js';
-import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders } from '../../st-adapter.js';
+import { STATE_COLLECTOR_MODE, stateRoster } from '../characters/state-collector.js';
+import { mainOutputStatePrompt, collectMainOutputState } from '../characters/state-main-output.js';
+import { collectProfileOutputState } from '../characters/state-profile-output.js';
+import { latestStateForChat, storeStateEvent, dropStateEventsFrom } from '../characters/state-contract.js';
+import { eventSource, event_types, saveSettingsDebounced, setExtensionPrompt, chat_metadata, getRequestHeaders, isStreamingEnabled } from '../../st-adapter.js';
 import { extension_settings } from '../../st-adapter.js';
 import { WORLD_DIRECTIONS, RELATIONSHIP_DIRECTIONS, PROGRESSION_MODES, JUDGMENT_STYLES, DEVELOPMENT_STYLES, normalizeDevelopmentPreferences, PACE_OPTIONS, buildQuestions, buildInjection, buildPausedInjection } from '../../prompt-library.js';
 import { SEASONAL_OPTIONS } from '../world/seasonal.js';
@@ -44,6 +48,7 @@ let hydrateSequence = 0;
 const MODULE = 'sceneReader';
 const INJECT_KEY = 'scene-reader-router';
 const WORLD_INJECT_KEY = 'scene-reader-world';
+const STATE_CAPTURE_KEY = 'scene-reader-state-capture';
 const IN_CHAT = 1;
 const SYSTEM_ROLE = 0;
 const JEV_KEY_STORAGE = 'sceneReader.jevApiKey';
@@ -133,6 +138,29 @@ let reasonerProfileError = '';
 let connectionRequestService = null;
 const reasonerJobs = new Map();
 let reasonerGeneration = 0;
+let pendingProfileStateCollection = Promise.resolve();
+
+function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) {
+    if (STATE_COLLECTOR_MODE !== 'profile-output' || !roster?.length || !text.trim()) return;
+    const fingerprint = stableFingerprint(text);
+    const profileId = settings.reasonerProfileId;
+    const task = (async () => {
+        if (!connectionRequestService) await loadReasonerProfiles();
+        const result = await collectProfileOutputState({
+            request: requestWithConnectionProfile, service: connectionRequestService,
+            profileId, output: text, roster,
+        });
+        if (chatKey !== stateChatKey()) return;
+        const message = getContext().chat?.[outputIndex];
+        if (!message || stableFingerprint(message.mes || '') !== fingerprint) return;
+        const rec = record(true);
+        rec.characterStateCapture = { outputIndex, status: result.error || (result.states.length ? 'collected' : 'empty'), count: result.states.length, source: 'profile-output' };
+        if (result.states.length) storeStateEvent(rec, { outputIndex, fingerprint, states: result.states, source: 'profile-output' }, STATE_HISTORY_LIMIT, latestStateForChat(rec, getContext().chat.slice(0, outputIndex), stableFingerprint));
+        await persistChat();
+        if (chatKey === stateChatKey()) renderAll();
+    })().catch(error => console.warn('[씬판독기] 출력 상태 판독 실패', error?.message || error));
+    pendingProfileStateCollection = task;
+}
 
 const {prepareProfiles, prepareStandardProfiles, prepareConflictProfiles} = createDraws(selectedWorld);
 let {decisionTitle, resultLabel, characterTurnLabel, renderCharacterTurnResults, renderJudgment, renderProfiles, renderStoredState, renderCharacterStore, renderCharacterAnalysisBrowser, renderBackups, renderReasonerProfiles, renderContinuity, renderAll} = createResults({document, getContext, record, ownerPrompt, escapeHtml,
@@ -474,6 +502,8 @@ function reversibleStateSnapshot(rec) {
         observationState: rec.observationState,
         sceneState: rec.sceneState,
         sceneIntimacy: rec.sceneIntimacy || null,
+        characterStateEvents: rec.characterStateEvents || [],
+        characterStateCapture: rec.characterStateCapture || null,
         eventProfile: rec.eventProfile || null,
         npcProfile: rec.npcProfile || null,
         villainProfile: rec.villainProfile || null,
@@ -499,9 +529,23 @@ function restoreReversibleState(rec, snapshot) {
     if (!snapshot) return;
     Object.assign(rec, JSON.parse(JSON.stringify(snapshot)));
     rec.sceneIntimacy = snapshot.sceneIntimacy ? structuredClone(snapshot.sceneIntimacy) : null;
+    rec.characterStateEvents = structuredClone(snapshot.characterStateEvents || []);
+    rec.characterStateCapture = snapshot.characterStateCapture ? structuredClone(snapshot.characterStateCapture) : null;
 }
 
 let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAssistantOutputChanged, applyStoredInjection, clearInjection} = createOutputLifecycle({
+    get STATE_CAPTURE_KEY() { return STATE_CAPTURE_KEY; },
+    get STATE_COLLECTOR_MODE() { return STATE_COLLECTOR_MODE; },
+    get stateRoster() { return stateRoster; },
+    get mainOutputStatePrompt() { return mainOutputStatePrompt; },
+    get collectMainOutputState() { return collectMainOutputState; },
+    get latestStateForChat() { return latestStateForChat; },
+    get storeStateEvent() { return storeStateEvent; },
+    get dropStateEventsFrom() { return dropStateEventsFrom; },
+    get scheduleProfileStateCollection() { return scheduleProfileStateCollection; },
+    get isStreamingEnabled() { return isStreamingEnabled; },
+    get characterStore() { return characterStore; },
+    get preferences() { return preferences; },
     get saveSession() { return saveSession; },
     get reversibleStateSnapshot() { return reversibleStateSnapshot; },
     get INJECT_KEY() { return INJECT_KEY; },
@@ -542,6 +586,7 @@ let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAss
 });
 
 let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalCandidates, sourceUserRpForOutput, postVerifiedCharacterOutput, registerSceneOpportunity, commitPriorVerification, commitContinuityCandidates, runJudge, executeJudge} = createSceneExecution({
+    get latestStateForChat() { return latestStateForChat; },
     get vectorRetrieval() { return vectorRetrieval; },
     get addCharacterNeedsQuestions() { return addCharacterNeedsQuestions; },
     get characterCategoryHints() { return characterCategoryHints; },
@@ -942,6 +987,7 @@ async function onBeforeGeneration(type, data, dryRun) {
     }
     generationMode = 'rp';
     activeGenerationCycle = { mode: 'rp', chatKey: stateChatKey(), inputKey: generationInputKey, startedAt: new Date().toISOString() };
+    if (STATE_COLLECTOR_MODE === 'profile-output') await pendingProfileStateCollection;
     if (!settings.autoJudge) {
         const rec = record();
         if (cachedJudgmentMatches(rec, context, generationInputKey)) {

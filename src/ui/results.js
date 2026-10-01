@@ -40,10 +40,20 @@ function renderCharacterTurnResults() {
     const root = document.getElementById('sr-character-turn-results');
     if (!root) return;
     if (!characterStore.enabled) { root.innerHTML = '<div class="sr-empty-small">인물 판정을 켜면 이번 턴 결과를 표시합니다.</div>'; return; }
-    const judgment = record()?.lastJudgment;
+    const currentRecord=record();
+    const judgment = currentRecord?.lastJudgment;
+    const capture=currentRecord?.characterStateCapture;
+    const captureFailures={missing:'응답에 상태 정보 없음',opening:'상태 형식 확인 필요',closing:'상태 정보가 중간에 끊김',trailing:'상태 형식 확인 필요',format:'상태 형식 확인 필요',empty_output:'완성된 답변 없음',timeout:'응답 시간 초과',request:'연결 요청 실패',unavailable:'연결 설정 확인 필요'};
+    const captureNote=capture?`<p class="sr-help">직전 출력 상태 · ${escapeHtml(capture.status==='collected'?`${capture.count}명 수집`:capture.status==='empty'?'대상 인물 없음':captureFailures[capture.status]||'수집 실패')}</p>`:'';
     const trace = judgment?.characterTrace || [];
-    if (!trace.length) { root.innerHTML = '<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
-    root.innerHTML = `<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
+    if (!trace.length) { root.innerHTML = captureNote+'<div class="sr-empty-small">이번 판독 범위에서 개별 판정할 저장 인물이 없었습니다.</div>'; return; }
+    const stateLabel=state=>{
+        if(!state?.values)return '';
+        const names={a:'충동',c:'자제',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'};
+        return Object.entries(names).filter(([key])=>Number.isFinite(state.values[key])&&(['a','c'].includes(key)||state.values[key]>0))
+            .map(([key,name])=>`${name} ${state.values[key]}%${({rising:' ↑',falling:' ↓'})[state.changes?.[key]]||''}${state.targets?.[key]?` → ${state.targets[key]}`:''}`).join(' · ');
+    };
+    root.innerHTML = captureNote+`<p class="sr-help">인물 주입 ${Number(judgment.characterInjectionChars)||0} / ${Number(judgment.characterInjectionLimit)||5000}자 · 갈등·세계관은 별도</p>` + trace.map((person) => {
         const prefix = 'character_' + person.index + '_';
         const presence = judgment.details?.[prefix + 'presence'];
         const direction = judgment.details?.[prefix + 'response_direction'];
@@ -59,6 +69,7 @@ function renderCharacterTurnResults() {
             ['사용한 시트 기준', profileNames.join(' / ') || '특별히 강조한 항목 없음'],
             ...((person.omittedRuleIds || []).length ? [['길이 제한으로 제외', `${person.omittedRuleIds.length}개 규칙 · 문장 중간을 자르지 않고 항목 전체 제외`]] : []),
             ['이번 정보 참고', (person.contextIds || []).length ? person.contextIds.length + '개 후보 중 접근이 확인된 항목만 사용' : '별도 정보 선택 없음'],
+            ...(person.priorAffect?[['직전 출력 상태',stateLabel(person.priorAffect)||'기록 없음'],['상태 표현 판정',(person.affectSelections||[]).map(item=>`${({a:'충동',anger:'분노',joy:'기쁨',fear:'두려움',sadness:'슬픔'})[item.field]} · ${({inward:'속마음·억제',visible:'대사·작은 행동',active:'인물에 맞는 직접 행동'})[item.expression]}`).join(' / ')||'이번 응답에 별도 반영 없음']]:[]),
             ['지식 접근 제외', (person.deniedIds || []).length ? person.deniedIds.length + '개 · 해당 정보만 제외' : '없음'],
             ...(!person.recordMode ? [['반응 방향', characterTurnLabel('direction',person.direction)]] : []),
         ].map(([label,value]) => '<div class="sr-decision-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>').join('');

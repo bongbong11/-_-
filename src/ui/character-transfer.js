@@ -9,6 +9,7 @@ export function renderRecordVersions(document, store, esc) {
     const kind=root.dataset.kind||'character';
     document.querySelectorAll('[data-record-kind]').forEach(button=>{button.classList.toggle('active',button.dataset.recordKind===kind);button.setAttribute('aria-selected',String(button.dataset.recordKind===kind));});
     const groups=(store.recordGroups||[]).filter(group=>group.kind===kind);
+    const npcToggle=entry=>kind==='npc'&&entry?`<label class="sr-npc-affect-toggle"><input type="checkbox" data-npc-affect-id="${esc(entry.id)}" ${entry.trackArousal?'checked':''}><span>성적 충동 판독</span></label>`:'';
     const covered=new Set(groups.flatMap(group=>group.versions.map(version=>version.entryId)));
     const rows=groups.map(group=>{
         const entry=entries.find(item=>item.id===group.versions[0]?.entryId && item.kind===kind);
@@ -20,9 +21,9 @@ export function renderRecordVersions(document, store, esc) {
             return `<div class="sr-record-version"><span>${esc(date)}${applied?' · 적용 중':''}</span><div class="sr-version-actions">${actions.map(([action,label])=>`<button type="button" class="menu_button" data-record-action="${action}" data-record-group="${esc(group.id)}" data-record-version="${esc(version.id)}">${label}</button>`).join('')}</div></div>`;
         }).join('');
         const nameAction=entry?`data-character-view-kind="${esc(kind)}" data-character-view-id="${esc(entry.id)}"`:`data-record-action="view" data-record-group="${esc(group.id)}" data-record-version="${esc(group.versions[0].id)}"`;
-        return `<div class="sr-record-person"><button type="button" class="sr-record-person-name" ${nameAction}>${esc(name)}</button><small>${group.versions.length}개 저장본</small><div class="sr-record-person-versions">${versions}</div></div>`;
+        return `<div class="sr-record-person"><button type="button" class="sr-record-person-name" ${nameAction}>${esc(name)}</button><small>${group.versions.length}개 저장본</small>${npcToggle(entry)}<div class="sr-record-person-versions">${versions}</div></div>`;
     });
-    for(const entry of entries.filter(item=>item.kind===kind&&!covered.has(item.id)))rows.push(`<div class="sr-record-person"><button type="button" class="sr-record-person-name" data-character-view-kind="${esc(kind)}" data-character-view-id="${esc(entry.id)}">${esc(entry.name)}</button><small>저장된 판독시트 없음</small></div>`);
+    for(const entry of entries.filter(item=>item.kind===kind&&!covered.has(item.id)))rows.push(`<div class="sr-record-person"><button type="button" class="sr-record-person-name" data-character-view-kind="${esc(kind)}" data-character-view-id="${esc(entry.id)}">${esc(entry.name)}</button><small>저장된 판독시트 없음</small>${npcToggle(entry)}</div>`);
     root.innerHTML=rows.join('')||'<p class="sr-help">저장된 인물이 없습니다.</p>';
 }
 
@@ -49,7 +50,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
             deps.renderCharacterStore();
         } catch(error){error.characterSaved=saved;error.characterApplied=applied;error.characterStage=saved?'apply':'save';throw error;} finally {job.finish();}
     }
-    const npcSheet=`NPC 시트\n이름: \n역할·소속: \n주요 관계: \n원하는 것과 우선순위: \n평소 행동·대사: \n확인된 지식·능력·접근 범위: \n조건별 반응과 제한: `;
+    const npcSheet=`NPC 시트\n이름: \n역할·소속: \n주요 관계: \n원하는 것과 우선순위: \n평소 행동·대사: \n확인된 지식·능력·접근 범위: \n조건별 반응과 제한: \n지속적인 감정·충동 경향과 자제 방식(있는 경우만): `;
     el('sr-character-npc-template')?.addEventListener('click',()=>task(async()=>{await deps.copyText(npcSheet);status('NPC 시트 서식을 복사했습니다.');},'template'));
     el('sr-character-copy-prompt')?.addEventListener('click',()=>task(async()=>{
         await ensureLoreLoaded();
