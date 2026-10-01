@@ -54,7 +54,7 @@ function setFormValues() {
     setValue('sr-retrieval-provider', provider);
     setValue('sr-retrieval-model', deps.settings.retrievalModel || deps.RETRIEVAL_PROVIDERS[provider].model);
     setValue('sr-retrieval-vertex-auth', deps.settings.retrievalVertexAuth || 'express');
-    setValue('sr-retrieval-vertex-region', deps.settings.retrievalVertexRegion || 'us-central1');
+    setValue('sr-retrieval-vertex-region', deps.settings.retrievalVertexRegion || 'global');
     setValue('sr-retrieval-vertex-project', deps.settings.retrievalVertexProject || '');
     const modelRow=deps.document.getElementById('sr-retrieval-model-row');
     const vertexRow=deps.document.getElementById('sr-retrieval-vertex-row');

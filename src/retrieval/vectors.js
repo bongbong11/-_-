@@ -38,7 +38,7 @@ export function createVectorRetrieval({ fetch, getRequestHeaders, getSettings, o
         const source = RETRIEVAL_PROVIDERS[settings.retrievalProvider] ? settings.retrievalProvider : 'transformers';
         const model = source === 'transformers' ? '' : String(settings.retrievalModel || RETRIEVAL_PROVIDERS[source].model).trim();
         if (source !== 'transformers' && !model) throw new Error('검색 모델 이름을 설정하세요.');
-        return { source, model, ...(source === 'vertexai' ? { api: 'vertexai', vertexai_auth_mode: settings.retrievalVertexAuth === 'full' ? 'full' : 'express', vertexai_region: settings.retrievalVertexRegion || 'us-central1', vertexai_express_project_id: settings.retrievalVertexProject || '' } : {}) };
+        return { source, model, ...(source === 'vertexai' ? { api: 'vertexai', vertexai_auth_mode: settings.retrievalVertexAuth === 'full' ? 'full' : 'express', vertexai_region: settings.retrievalVertexRegion || 'global', vertexai_express_project_id: settings.retrievalVertexProject || '' } : {}) };
     }
     function entryMap(kind, items) {
         const map = new Map();

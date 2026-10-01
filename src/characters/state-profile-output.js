@@ -12,7 +12,7 @@ export async function collectProfileOutputState({ request, service, profileId, o
             request(service, profileId, PROFILE_STATE_SYSTEM, {
                 people: roster.map(({ code, name, trackArousal }) => ({ code, name, trackArousal })),
                 output: String(output || '').slice(-12000),
-            }, { maxTokens: 350 }),
+            }, { maxTokens: 1200 }),
             new Promise(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); }),
         ]);
         if (!response) return { states: [], error: 'timeout' };

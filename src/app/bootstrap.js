@@ -77,7 +77,7 @@ const DEFAULTS = {
     retrievalProvider: 'transformers',
     retrievalModel: '',
     retrievalVertexAuth: 'express',
-    retrievalVertexRegion: 'us-central1',
+    retrievalVertexRegion: 'global',
     retrievalVertexProject: '',
 };
 
@@ -159,6 +159,14 @@ async function waitForProfileState() {
     if (task) await task;
 }
 
+function notifyEmotionCapture(status, count=0, selected=true) {
+    const messages={timeout:'감정 수집 시간 초과 · 다시 판독해 주세요.',request:'감정 수집 실패 · 확장 연결모델의 응답을 확인하세요.',format:'감정값 형식 확인 필요 · 인물의 감정값 탭을 확인하세요.',unavailable:'감정 수집 실패 · 확장 연결모델 설정을 확인하세요.',save_failed:'감정값을 저장하지 못했습니다. 다시 판독해 주세요.'};
+    const message=status==='collecting'?'감정 수집 중…':status==='collected'?`${selected?'감정 수집 완료':'다른 스와이프 감정 저장 완료'} · ${count}명`:status==='partial'?`감정 ${count}명 수집 · 일부 값은 형식 확인 필요`:status==='empty'?'감정 수집 완료 · 이번 답변에서 수집할 값 없음':messages[status];
+    if(!message)return;
+    const level=status==='collecting'||status==='empty'?'info':status==='collected'?'success':'warning';
+    window.toastr?.[level]?.(message,'씬판독기',{timeOut:status==='collecting'?1800:3000});
+}
+
 function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) {
     if (stateCollectorMode(record()?.preferences) !== 'profile-output' || !settings.enabled || !characterStore.enabled || !roster?.length || !text.trim()) return;
     const owner = record();
@@ -190,10 +198,17 @@ function scheduleProfileStateCollection({ chatKey, outputIndex, text, roster }) 
         if (selected) rec.characterStateCapture = completed;
         storeStateEvent(rec,{outputIndex,swipeId,fingerprint,states:result.states,source:'profile-output',capture:completed},STATE_HISTORY_LIMIT,latestStateForChat(rec,getContext().chat.slice(0,outputIndex),stableFingerprint));
         await persistChat();
-        if (chatKey === stateChatKey()) renderAll();
-    })().catch(error => console.warn('[씬판독기] 출력 상태 판독 실패', error?.message || error)).finally(()=>{ pendingProfileStateRequests.delete(requestId); if (chatKey===stateChatKey()) renderCharacterTurnResults(); });
+        if (chatKey === stateChatKey() && pendingProfileStateRequests.has(requestId)) {
+            renderAll();
+            notifyEmotionCapture(completed.status,completed.count,selected);
+        }
+    })().catch(error => {
+        console.warn('[씬판독기] 출력 상태 판독 실패', error?.message || error);
+        if(chatKey===stateChatKey() && pendingProfileStateRequests.has(requestId)) notifyEmotionCapture('save_failed');
+    }).finally(()=>{ pendingProfileStateRequests.delete(requestId); if (chatKey===stateChatKey()) renderCharacterTurnResults(); });
     pendingProfileStateCollection = task;
     pendingProfileStateRequests.set(requestId,task);
+    notifyEmotionCapture('collecting');
     renderCharacterTurnResults();
     return task;
 }

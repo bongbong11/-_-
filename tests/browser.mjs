@@ -28,7 +28,7 @@ const listeners=new Map(), prompts={},macros={};
 window.mock={chat:[],prompts,macros,errors:[],worldBooks:{'Hunter Lore':{entries:{1:{uid:1,key:['door'],content:'The council meets tomorrow.'},2:{uid:2,key:['unrelated'],content:'Not relevant.'}}},'Hunter Extra':{entries:{3:{uid:3,constant:true,content:'Hunter owns the house.'}}},'Persona Lore':{entries:{4:{uid:4,key:['friend'],content:'Rosa is a friend of the user persona.'}}},'Persona Specific':{entries:{5:{uid:5,key:['neighbor'],content:'Rosa knows the user persona as a neighbor.'}}}},async emit(name,...args){for(const fn of listeners.get(name)||[])await fn(...args)}};
 window.ctx={characterId:1,characters:[null,{avatar:'Hunter.png',data:{description:'Sawyer Valentine is Hunter’s colleague.',personality:'Hunter speaks carefully under pressure.',extensions:{world:'Hunter Lore'}}}],powerUserSettings:{persona_description_lorebook:'Persona Lore',persona_descriptions:{'User.png':{lorebook:'Persona Specific'}}},chatId:'test-room',name1:'User',name2:'Hunter',chat:mock.chat,extensionPrompts:prompts,saveMetadata:async()=>{},macros:{register(name,value){macros[name]=value.handler},category:{MISC:'misc'}}};
 window.SillyTavern={getContext:()=>ctx};window.jQuery=fn=>fn();
-window.toastr=Object.fromEntries(['info','success','error','warning'].map(name=>[name,(message)=>{if(name==='error')mock.errors.push(message);let container=document.getElementById('toast-container');if(!container){container=document.createElement('div');container.id='toast-container';document.body.append(container)}const item={find(){return {text(){}}},toggleClass(){},remove(){},fadeOut(_ms,callback){callback?.call(item)}};return item}]));
+window.toastr=Object.fromEntries(['info','success','error','warning'].map(name=>[name,(message)=>{(mock.toasts ||= []).push({level:name,message});if(name==='error')mock.errors.push(message);let container=document.getElementById('toast-container');if(!container){container=document.createElement('div');container.id='toast-container';document.body.append(container)}const item={find(){return {text(){}}},toggleClass(){},remove(){},fadeOut(_ms,callback){callback?.call(item)}};return item}]));
 window.eventSource={on(name,fn){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn)}};
 </script><script type="module" src="${prefix}index.js"></script></html>`;
 const server=http.createServer(async(req,res)=>{try{
@@ -547,6 +547,18 @@ try{
     assert.equal(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),'','depth mode leaves no duplicate world macro');
     await page.locator('.sr-connection-card > summary').click();
     await page.locator('.sr-retrieval-panel > summary').click();
+    assert.equal(await page.locator('#sr-retrieval-vertex-region').inputValue(),'global','fresh settings show the global Vertex region');
+    await Promise.all([
+        page.waitForResponse(response=>response.url().endsWith('/settings')),
+        page.locator('#sr-retrieval-provider').selectOption('vertexai'),
+    ]);
+    await page.locator('#sr-retrieval-vertex-region').fill('us-central1');
+    await Promise.all([
+        page.waitForResponse(response=>response.url().endsWith('/settings')),
+        page.locator('#sr-retrieval-vertex-region').dispatchEvent('change'),
+    ]);
+    assert.equal(store.settings.global.retrievalVertexRegion,'us-central1','an existing Vertex region remains saved');
+    assert.equal(await page.locator('#sr-retrieval-vertex-region').inputValue(),'us-central1','saved Vertex region stays visible');
     await page.locator('#sr-retrieval-provider').selectOption('nanogpt');
     await page.waitForFunction(()=>document.getElementById('sr-retrieval-model').value==='Qwen/Qwen3-Embedding-0.6B');
     assert.equal(store.settings.global.retrievalProvider,'nanogpt');
@@ -594,16 +606,18 @@ try{
     assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','profile mode never asks the RP model for metadata, including streaming');
     await page.evaluate(async()=>{mock.chat.push({is_user:false,mes:'Hunter closes the door, angry about the delay.'});await mock.emit('MESSAGE_RECEIVED',mock.chat.length-1);});
     assert.equal(await page.evaluate(()=>mock.profileStateRequests.length),1);
+    assert.ok(await page.evaluate(()=>mock.toasts.some(item=>item.message==='감정 수집 중…')),'automatic collection shows its start toast');
     assert.match(await page.locator('#sr-character-turn-results').textContent(),/수집 중/,'output hook finishes and updates the UI before the profile model replies');
     const profileRequest=await page.evaluate(()=>{const {messages,maxTokens,options}=mock.profileStateRequests[0];return {messages,maxTokens,options}});
     assert.equal(profileRequest.messages.length,2);
     assert.equal(JSON.parse(profileRequest.messages[1].content).output,'Hunter closes the door, angry about the delay.');
     assert.equal(profileRequest.options.includePreset,false);
-    assert.equal(profileRequest.maxTokens,350);
+    assert.equal(profileRequest.maxTokens,1200);
     const profileOutputIndex=await page.evaluate(()=>mock.chat.length-1);
     await page.evaluate(()=>mock.profileStateRequests[0].resolve({content:JSON.stringify({states:[{code:'C0',a:20,c:80,anger:45}]})}));
     await page.waitForFunction(()=>document.querySelector('#sr-character-turn-results')?.textContent.includes('45%'));
     assert.equal(store.chat.characterStateCapture.status,'collected');
+    assert.ok(await page.evaluate(()=>mock.toasts.some(item=>item.level==='success' && item.message.includes('감정 수집 완료'))),'successful background collection shows completion');
     assert.ok(store.chat.characterStateEvents.some(event=>event.outputIndex===profileOutputIndex&&event.states[0].values.anger===45));
     // The manual button reuses a pending request and replaces this reply's values.
     const jevBeforeEmotion=requests.filter(request=>request.url.endsWith('/systemone')).length;

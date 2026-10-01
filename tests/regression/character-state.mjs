@@ -127,7 +127,7 @@ const alternate = await collectProfileOutputState({
         assert.equal(profileId, 'profile-1');
         assert.deepEqual(Object.keys(state).sort(), ['output', 'people']);
         assert.equal(state.output, 'Lucas speaks.');
-        assert.equal(options.maxTokens, 350);
+        assert.equal(options.maxTokens, 1200);
         return { result: { states: [{ code: 'C0', a: 35, c: 70, anger: 10, targets: { anger: 'Dante' } }] } };
     },
     service: {}, profileId: 'profile-1', output: 'Lucas speaks.', roster,
@@ -177,6 +177,20 @@ resolveLate({result:{states:[{code:'C0',a:90,c:10}]}});
 await validWait;
 assert.equal(fallback.run('record().characterStateEvents.some(event=>event.states.some(state=>state.values.a===90))'),false,'a cancelled capture cannot restore state even when the text is unchanged');
 
+const cancelledToasts=fixture();
+const cancelNotices=[];
+let finishCancelled;
+cancelledToasts.sandbox.window.toastr=Object.fromEntries(['info','success','warning'].map(level=>[level,message=>cancelNotices.push({level,message})]));
+cancelledToasts.sandbox.roster=roster;
+cancelledToasts.sandbox.requestPending=()=>new Promise(resolve=>{finishCancelled=resolve;});
+cancelledToasts.ctx.chat=[{is_user:false,mes:'Reply awaiting collection.'}];
+cancelledToasts.run('record(true).preferences.profileEmotionJudgment=true; characterStore.enabled=true; settings.reasonerProfileId="p"; connectionRequestService={}; requestWithConnectionProfile=requestPending; scheduleProfileStateCollection({chatKey:stateChatKey(),outputIndex:0,text:"Reply awaiting collection.",roster});');
+cancelledToasts.run('invalidateReasonerJobs(); record().characterStateEvents=[];');
+finishCancelled({result:{states:[{code:'C0',a:10,c:90}]}});
+await cancelledToasts.run('pendingProfileStateCollection');
+assert.equal(cancelNotices.length,1,'cancelled requests never announce completion after their start notice');
+assert.equal(cancelledToasts.run('record().characterStateEvents.length'),0);
+
 const optInRoster=stateRoster(store,{allowUserImpersonation:true},{characterTrace:[{id:'vivienne',presence:'active'},{id:'dominic',presence:'active'}]});
 assert.deepEqual(optInRoster.map(item=>item.id),['dominic','vivienne']);
 assert.ok(optInRoster.every(item=>item.trackArousal));
@@ -214,6 +228,8 @@ assert.match(mainOutputStatePrompt(remoteCandidates),/incoming texts and phone-c
 assert.match(mainOutputStatePrompt(remoteCandidates),/predicted feeling/);
 
 const swipeFixture=fixture();
+const swipeNotices=[];
+swipeFixture.sandbox.window.toastr=Object.fromEntries(['info','success','warning'].map(level=>[level,message=>swipeNotices.push({level,message})]));
 const pending=[];
 swipeFixture.sandbox.roster=roster;
 swipeFixture.sandbox.mockRequest=()=>new Promise(resolve=>pending.push(resolve));
@@ -225,6 +241,7 @@ await swipeFixture.run('onAssistantOutputChanged(0,"swiped")');
 swipeFixture.run('scheduleProfileStateCollection({chatKey:stateChatKey(),outputIndex:0,text:"Reply B",roster}); globalThis.jobB=pendingProfileStateCollection;');
 pending[0]({result:{states:[{code:'C0',a:20,c:80,joy:30}]}});
 await swipeFixture.run('jobA');
+assert.match(swipeNotices.at(-1).message,/다른 스와이프 감정 저장 완료/,'unselected completion is identified without confusing current values');
 assert.equal(swipeFixture.run('record().characterStateEvents.find(event=>event.swipeId===0).states[0].values.joy'),30,'unselected swipe completion is retained after record restoration');
 assert.equal(swipeFixture.run('latestStateForChat(record(),getContext().chat,stableFingerprint).length'),0,'unselected completion never appears in the selected swipe');
 pending[1]({result:{states:[{code:'C0',a:10,c:90,anger:40}]}});
@@ -238,6 +255,8 @@ assert.equal(pending.length,2);
 
 // Manual collection needs no additional Jev call, handles old replies, and joins an in-flight call.
 const manual=fixture();
+const emotionNotices=[];
+manual.sandbox.window.toastr=Object.fromEntries(['info','success','warning'].map(level=>[level,message=>emotionNotices.push({level,message})]));
 manual.sandbox.testStore=store;
 const manualJobs=[];
 manual.sandbox.mockRequest=()=>new Promise(resolve=>manualJobs.push(resolve));
@@ -248,11 +267,19 @@ const manualA=manual.run('collectCurrentEmotion()');
 const manualB=manual.run('collectCurrentEmotion()');
 await new Promise(resolve=>setTimeout(resolve,0));
 assert.equal(manualJobs.length,1,'manual and pending collection share one request');
+assert.equal(emotionNotices.filter(item=>item.message==='감정 수집 중…').length,1,'joined requests show one start toast');
 assert.notEqual(manual.run('sourceRevisionKey(record(),null)'),stateRevisionBefore,'manual refresh invalidates judgments prepared with the previous state');
 manualJobs[0]({result:{states:[{code:'C0',a:10,c:90},{code:'C1'}]}});
 await Promise.all([manualA,manualB]);
+assert.equal(emotionNotices.filter(item=>item.level==='success').length,1,'one completion notification follows the stored result');
+assert.match(emotionNotices.at(-1).message,/2명/);
 assert.equal(manual.run('record().characterStateEvents.length'),1);
 assert.equal(manual.run('latestStateForChat(record(),getContext().chat,stableFingerprint)[1].values.anger'),0,'neutral NPC states are collected with zero moods');
+manual.sandbox.mockFailure=async()=>{throw new Error('MAX_TOKENS');};
+manual.run('requestWithConnectionProfile=mockFailure');
+await manual.run('collectCurrentEmotion()');
+assert.equal(emotionNotices.at(-1).level,'warning','failed collection displays a warning');
+assert.match(emotionNotices.at(-1).message,/감정 수집 실패/);
 manual.run('record().sceneIntimacy={route:"paused"}');
 await assert.rejects(manual.run('collectCurrentEmotion()'),/쉬고/);
 assert.equal(manualJobs.length,1,'manual collection respects the scene pause');

@@ -26,6 +26,14 @@ async function fetch(url,{body}) {
 }
 const progress=[];
 const retrieval=createVectorRetrieval({fetch,getRequestHeaders:()=>({'Content-Type':'application/json'}),getSettings:()=>settings,onProgress:event=>progress.push(event)});
+settings.retrievalProvider='vertexai';
+assert.equal(retrieval.config().vertexai_region,'global','new Vertex connection uses the global region');
+settings.retrievalVertexRegion='us-central1';
+assert.equal(retrieval.config().vertexai_region,'us-central1','a saved region takes priority');
+settings.retrievalVertexRegion='';
+assert.equal(retrieval.config().vertexai_region,'global','an empty region falls back to global');
+settings.retrievalProvider='nanogpt';
+delete settings.retrievalVertexRegion;
 const rules=Array.from({length:69},(_,index)=>({type:'core',target:'self',when:['general'],rule:index===42?'Lucas chooses careful words when Dominic texts about the investigation.':`Lucas has ordinary established habit number ${index}.`,modality:'habit',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}));
 const entry={id:'lucas',kind:'npc',name:'Lucas',source:'Lucas has documented habits and speaks with Dominic.',selectedLore:[],sourceVisibleToMain:true};
 entry.recordBank=createRecordBank({entity_type:'npc',entity_name:'Lucas',records:rules},entry,'audit');
