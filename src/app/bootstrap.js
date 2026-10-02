@@ -164,6 +164,16 @@ function diagnosticSnapshot() {
         injection:{judgmentChars:judgment?.payload?.length||0,activeChars:activeInjectionPayload.length,worldChars:judgment?.worldPayload?.length||0,macroChars:activeMacroPayload.length,worldMacroChars:activeWorldMacroPayload.length,activeMatchesJudgment:judgment?activeInjectionPayload===String(judgment.payload||''):activeInjectionPayload.length===0},
     };
 }
+async function reconcileInjection({report=true}={}) {
+    if (record()?.lastJudgment || !activeInjectionPayload) return false;
+    const chatKey = stateChatKey(), payloadChars = activeInjectionPayload.length;
+    const cleared = await clearInjection({chatKey,onlyIfOrphaned:true});
+    if (cleared && chatKey === stateChatKey()) {
+        noteDiagnostic('orphaned_injection_cleared',{payloadChars});
+        if (report) updateActivity('저장 판정 없이 남은 주입문을 정리했습니다. 다시 판독해 주세요.',{error:true});
+    }
+    return cleared;
+}
 function diagnosticChecks(snapshot=diagnosticSnapshot()) {
     const check=(ok,detail)=>({result:ok?'pass':'check',detail});
     return {
@@ -270,6 +280,7 @@ async function collectCurrentEmotion() {
 
 const {prepareProfiles, prepareStandardProfiles, prepareConflictProfiles} = createDraws(selectedWorld);
 let {decisionTitle, resultLabel, characterTurnLabel, renderCharacterTurnResults, renderJudgment, renderProfiles, renderStoredState, renderCharacterStore, renderCharacterAnalysisBrowser, renderBackups, renderReasonerProfiles, renderContinuity, renderAll} = createResults({document, getContext, record, ownerPrompt, escapeHtml,
+    onBeforeRender: () => { if (!record()?.lastJudgment && activeInjectionPayload) runEventTask(reconcileInjection,'남은 주입문을 정리하지 못했습니다.'); },
     stableFingerprint,
     isStateCapturePending: requestId => pendingProfileStateRequests.has(requestId),
     readState: () => ({settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload}),
@@ -437,26 +448,21 @@ async function copyText(value) {
 
 function record(create = false) {
     const key = stateChatKey();
-    if (!chatRecords.has(key) && create) chatRecords.set(key, {});
+    if (!chatRecords.has(key) && create) chatRecords.set(key, {lastJudgment:null,pendingPlan:null});
     const value = chatRecords.get(key) || null;
-    if (value) migrateKnowledge(value);
     if (value && create) {
+        migrateKnowledge(value);
         const saved = value.preferences || {};
         value.preferences = Object.fromEntries(Object.entries(CHAT_DEFAULTS).map(([key, fallback]) => [key, Object.hasOwn(saved, key) ? saved[key] : Array.isArray(fallback) ? [...fallback] : fallback]));
         if (!Object.hasOwn(saved, 'relationshipDirection')) value.preferences.relationshipDirection = saved.characterToUser ? 'hostile' : 'dynamic';
         const validValue = (valueToCheck, choices, fallback) => Object.hasOwn(choices, valueToCheck) ? valueToCheck : fallback;
         value.preferences.worldDirection = validValue(value.preferences.worldDirection, WORLD_DIRECTIONS, CHAT_DEFAULTS.worldDirection);
         value.preferences.relationshipDirection = validValue(value.preferences.relationshipDirection, RELATIONSHIP_DIRECTIONS, CHAT_DEFAULTS.relationshipDirection);
-        if (saved.settingsContract !== 4) {
-            value.lastJudgment = null;
-            if (!value.pendingPlan?.outputText) value.pendingPlan = null;
-        }
         const migratedDevelopment = normalizeDevelopmentPreferences(saved);
         value.preferences = normalizeDevelopmentPreferences({...value.preferences, developmentStyle:migratedDevelopment.developmentStyle});
         value.preferences.advancedStyle = validValue(value.preferences.advancedStyle, ADVANCED_STYLES, CHAT_DEFAULTS.advancedStyle);
         value.preferences.characterVolume = ['basic','generous','detailed'].includes(value.preferences.characterVolume) ? value.preferences.characterVolume : CHAT_DEFAULTS.characterVolume;
         value.preferences.npcRecordLimit = [2,3,4].includes(Number(value.preferences.npcRecordLimit)) ? Number(value.preferences.npcRecordLimit) : CHAT_DEFAULTS.npcRecordLimit;
-        if (!Object.hasOwn(saved,'characterVolume')) { value.lastJudgment=null; if (!value.pendingPlan?.outputText) value.pendingPlan=null; }
         for (const key of ['relationshipPace', 'resolutionPace']) value.preferences[key] = validValue(value.preferences[key], PACE_OPTIONS, CHAT_DEFAULTS[key]);
         value.preferences.physicalIntimacyPace = normalizePhysicalPace(value.preferences.physicalIntimacyPace);
         for (const key of ['injectionMode', 'worldInjectionMode']) value.preferences[key] = ['depth', 'macro'].includes(value.preferences[key]) ? value.preferences[key] : CHAT_DEFAULTS[key];
@@ -520,7 +526,8 @@ function preferences() {
 
 async function persistChat(chatKey = stateChatKey(), value = record()) {
     const snapshot = structuredClone(value);
-    await saveServerChat(chatKey, snapshot);
+    const saving = saveServerChat(chatKey, snapshot);
+    await Promise.all([saving, chatKey === stateChatKey() ? reconcileInjection({report:false}) : null]);
 }
 
 function getSavedKey() {
@@ -732,6 +739,7 @@ let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalC
     get applyContinuityVerdicts() { return applyContinuityVerdicts; },
     get applyPolicy() { return applyPolicy; },
     get applyStoredInjection() { return applyStoredInjection; }, set applyStoredInjection(value) { applyStoredInjection = value; },
+    get activeInjectionPayload() { return activeInjectionPayload; },
     get assignContinuity() { return assignContinuity; },
     get buildCharacterInjection() { return buildCharacterInjection; },
     get buildLiveCharacterPlan() { return buildLiveCharacterPlan; },
@@ -901,12 +909,15 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get characterStore() { return characterStore; }, set characterStore(value) { characterStore = value; },
     get clearInjection() { return clearInjection; }, set clearInjection(value) { clearInjection = value; },
     get clearStateHistory() { return clearStateHistory; }, set clearStateHistory(value) { clearStateHistory = value; },
+    get chatRecords() { return chatRecords; },
+    get queueWrite() { return queueWrite; },
     get connectionRequestService() { return connectionRequestService; }, set connectionRequestService(value) { connectionRequestService = value; },
     get copyText() { return copyText; }, set copyText(value) { copyText = value; },
     get debugInjectionArmed() { return debugInjectionArmed; }, set debugInjectionArmed(value) { debugInjectionArmed = value; },
     get lastDebugFrame() { return lastDebugFrame; },
     get diagnosticEvents() { return diagnosticEvents; },
     get diagnosticSnapshot() { return diagnosticSnapshot; },
+    get reconcileInjection() { return reconcileInjection; },
     get diagnosticChecks() { return diagnosticChecks; },
     get dialog() { return dialog; }, set dialog(value) { dialog = value; },
     get document() { return document; },
@@ -1077,6 +1088,7 @@ async function onLorebookUpdated(name, data) {
 async function onBeforeGeneration(type, data, dryRun) {
     if (dryRun || data?.quiet_prompt || type === 'quiet') return;
     const startedChatKey = stateChatKey();
+    await reconcileInjection();
     await waitForOutputChanges();
     if (startedChatKey !== stateChatKey()) return;
     if (chatReadyKey !== null && chatReadyKey !== startedChatKey) {

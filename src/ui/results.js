@@ -9,7 +9,7 @@ import { normalizeContinuity } from '../../continuity-engine.js';
 import { displayValue, verificationText } from './presentation.js';
 import { renderRecordVersions } from './character-transfer.js';
 import { latestStateForChat, latestStateEventForChat, stateForEntry } from '../characters/state-contract.js';
-export function createResults({readState, document, getContext, record, ownerPrompt, escapeHtml, selectCharacter, stableFingerprint, isStateCapturePending = () => true}) {
+export function createResults({readState, document, getContext, record, ownerPrompt, escapeHtml, selectCharacter, stableFingerprint, isStateCapturePending = () => true, onBeforeRender = () => {}}) {
 const characterCardViews = new Map();
 const characterCardOpen = new Map();
 function decisionTitle(key) {
@@ -345,6 +345,7 @@ function renderContinuity() {
 }
 
 function renderAll() {
+    onBeforeRender();
     const memoryNode = document.getElementById('sr-memory-status');
     if (memoryNode) memoryNode.textContent = MEMORY_REFERENCE_ENABLED ? memoryStatusText(record()?.preferences, record()?.lastJudgment?.memoryStatus) : '준비 중 · 현재 RP 판독에서는 사용하지 않습니다.';
     const {settings, characterStore, backupList, reasonerProfiles, reasonerProfileError, characterAnalysisSelection, activeInjectionPayload} = readState();

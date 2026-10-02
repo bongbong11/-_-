@@ -230,18 +230,23 @@ async function onAssistantOutputChanged(messageId, kind) {
 
 async function applyStoredInjection({ exactSnapshot = false, validate = null } = {}) {
     return queueInjectionWrite(async () => {
+    let wrotePrompt = false;
+    try {
     validate?.();
     const rec = deps.record();
+    const judgment = rec?.lastJudgment;
     const chatKey=deps.stateChatKey();
     const world = deps.selectedWorld(rec);
-    const sourceCurrent=!rec?.lastJudgment?.sourceKey || rec.lastJudgment.sourceKey===deps.sourceRevisionKey(rec,world);
-    const payload = deps.settings.enabled && sourceCurrent && rec?.lastJudgment?.payload ? rec.lastJudgment.payload : '';
-    const assertOwner=()=>{validate?.();if(chatKey!==deps.stateChatKey() || rec!==deps.record() || rec?.lastJudgment!==deps.record()?.lastJudgment)throw new StaleRunError();};
+    const sourceCurrent=!judgment?.sourceKey || judgment.sourceKey===deps.sourceRevisionKey(rec,world);
+    const payload = deps.settings.enabled && sourceCurrent && judgment?.payload ? judgment.payload : '';
+    const judgmentPayload = judgment?.payload;
+    const assertOwner=()=>{validate?.();if(chatKey!==deps.stateChatKey() || rec!==deps.record() || judgment!==deps.record()?.lastJudgment || judgment?.payload!==judgmentPayload)throw new StaleRunError();};
     const worldPayload = deps.settings.enabled
         ? String(exactSnapshot ? rec?.lastJudgment?.worldPayload || '' : sourceCurrent && rec?.lastJudgment?.worldId === world?.id ? rec.lastJudgment.worldPayload || '' : world?.prompt || '')
         : '';
     const macroMode = rec?.preferences?.injectionMode === 'macro' && deps.macroAvailable;
     const worldMacroMode = rec?.preferences?.worldInjectionMode === 'macro' && deps.macroAvailable;
+    wrotePrompt = true;
     await deps.setExtensionPrompt(deps.INJECT_KEY, macroMode ? '' : payload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     assertOwner();
     await deps.setExtensionPrompt(deps.WORLD_INJECT_KEY, worldMacroMode ? '' : worldPayload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
@@ -260,12 +265,16 @@ async function applyStoredInjection({ exactSnapshot = false, validate = null } =
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = payload || '현재 주입문 없음';
     return { applied: true, chatKey, inputKey: rec?.lastJudgment?.inputKey || '', sourceKey: rec?.lastJudgment?.sourceKey || '', sourceCurrent, payloadChars: payload.length, worldChars: worldPayload.length, macroMode, worldMacroMode };
+    } catch (error) {
+        // This still owns the serialized prompt write. Clear a partial apply
+        // before a later chat/turn is allowed to install its own injection.
+        if (wrotePrompt) await resetInjection();
+        throw error;
+    }
     });
 }
 
-async function clearInjection({chatKey=null}={}) {
-    return queueInjectionWrite(async () => {
-    if(chatKey!==null && chatKey!==deps.stateChatKey())return;
+async function resetInjection() {
     deps.activeInjectionPayload = '';
     deps.activeMacroPayload = '';
     deps.activeWorldMacroPayload = '';
@@ -275,6 +284,14 @@ async function clearInjection({chatKey=null}={}) {
     await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = '현재 주입문 없음';
+}
+
+async function clearInjection({chatKey=null,onlyIfOrphaned=false}={}) {
+    return queueInjectionWrite(async () => {
+    if(chatKey!==null && chatKey!==deps.stateChatKey())return false;
+    if(onlyIfOrphaned && (deps.record()?.lastJudgment || !deps.activeInjectionPayload))return false;
+    await resetInjection();
+    return true;
     });
 }
 

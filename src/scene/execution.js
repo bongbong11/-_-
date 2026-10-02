@@ -41,6 +41,25 @@ function stagedRecord(rec) {
     return JSON.parse(JSON.stringify(rec));
 }
 
+async function verifyAppliedJudgment(run, expected, receipt) {
+    run.assert();
+    const expectedJson = JSON.stringify(expected);
+    const memory = deps.record()?.lastJudgment;
+    if (!memory || JSON.stringify(memory) !== expectedJson
+        || deps.activeInjectionPayload !== expected.payload || receipt?.payloadChars !== expected.payload.length) {
+        throw new Error('판독 저장 상태와 활성 주입문이 일치하지 않습니다.');
+    }
+    if (deps.storageVersion < 3) return;
+    const saved = await deps.storagePost('bootstrap', {chatKey:run.identity});
+    run.assert();
+    if (JSON.stringify(saved?.chat?.lastJudgment) !== expectedJson
+        || JSON.stringify(deps.record()?.lastJudgment) !== expectedJson
+        || deps.activeInjectionPayload !== expected.payload) {
+        throw new Error('서버에 저장된 판정과 활성 주입문이 일치하지 않습니다.');
+    }
+    deps.noteDiagnostic?.('judgment_verified',{inputKey:expected.inputKey,payloadChars:expected.payload.length,serverReadback:true});
+}
+
 function sourceIdentityForPending(pending) {
     return {
         chatKey: deps.stateChatKey(),
@@ -215,15 +234,16 @@ async function commitContinuityCandidates(rec, candidates, decisions, details, r
 }
 
 async function runJudge(options = {}) {
-    const key = deps.stableFingerprint({ chatKey: deps.stateChatKey(), inputKey: deps.currentInputKey(options.pendingUserText || '', options.cycleSalt || ''), force: Boolean(options.force) });
-    if (activeJudge?.key === key) return activeJudge.promise;
+    const inputKey = deps.currentInputKey(options.pendingUserText || '', options.cycleSalt || '');
+    const key = deps.stableFingerprint({ chatKey: deps.stateChatKey(), inputKey, force: Boolean(options.force) });
+    if (activeJudge?.key === key && activeJudge.run.valid()) return activeJudge.promise;
     const run = deps.jobs.begin('judge');
-    deps.noteDiagnostic?.('judge_started',{inputKey:key,force:Boolean(options.force)});
+    deps.noteDiagnostic?.('judge_started',{runKey:key,inputKey,force:Boolean(options.force)});
     const promise = (async () => {
-        try { const result=await executeJudge(run, options); deps.noteDiagnostic?.(result?'judge_finished':'judge_skipped',{inputKey:key}); return result; }
+        try { const result=await executeJudge(run, options); deps.noteDiagnostic?.(result?'judge_finished':'judge_skipped',{runKey:key,inputKey}); return result; }
         catch (error) {
-            if (error instanceof deps.StaleRunError || !run.valid()) {deps.noteDiagnostic?.('judge_cancelled',{inputKey:key});return null;}
-            deps.noteDiagnostic?.('judge_failed',{inputKey:key,error:String(error?.message||error).slice(0,240)});
+            if (error instanceof deps.StaleRunError || !run.valid()) {deps.noteDiagnostic?.('judge_cancelled',{runKey:key,inputKey});return null;}
+            deps.noteDiagnostic?.('judge_failed',{runKey:key,inputKey,error:String(error?.message||error).slice(0,240)});
             if (!error.activityReported) {
                 await deps.clearInjection();
                 deps.updateActivity(`판독 실패 · ${error.message}`, {error:true});
@@ -233,7 +253,7 @@ async function runJudge(options = {}) {
         }
         finally { run.finish(); if (activeJudge?.promise === promise) activeJudge = null; }
     })();
-    activeJudge = {key,promise};
+    activeJudge = {key,promise,run};
     return promise;
 }
 async function executeJudge(run, { force = false, pendingUserText = '', cycleSalt = '' } = {}) {
@@ -301,6 +321,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const receipt = await deps.applyStoredInjection({validate:assertCurrentSnapshot});
         assertCurrentSnapshot();
         if (!receipt?.applied || receipt.inputKey!==inputKey || receipt.sourceKey!==sourceKey) throw new deps.StaleRunError();
+        await verifyAppliedJudgment(run, rec.lastJudgment, receipt);
+        assertCurrentSnapshot();
         deps.updateStatus('같은 입력 · 기존 판정과 추첨 재사용');
         deps.updateActivity(receipt.macroMode||receipt.worldMacroMode?'기존 판정 재사용 · 매크로용 주입문 준비':'기존 판정 재사용 · 주입 적용 완료', { done: true });
         return rec.lastJudgment;
@@ -394,6 +416,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const receipt=await deps.applyStoredInjection({validate:assertCurrentSnapshot});
         assertCurrentSnapshot();
         if(!receipt?.applied || receipt.inputKey!==inputKey || receipt.sourceKey!==sourceKey)throw new deps.StaleRunError();
+        await verifyAppliedJudgment(run, rec.lastJudgment, receipt);
+        assertCurrentSnapshot();
         deps.noteDiagnostic?.('injection_applied',{inputKey,payloadChars:receipt.payloadChars,worldChars:receipt.worldChars,macroMode:receipt.macroMode,worldMacroMode:receipt.worldMacroMode});
         deps.renderAll();
         if(sceneGate.transition==='entered')notifySceneReaderToast(deps.window, 'info', '잠깐 비켜드릴게요♡','앗, 둘만의 시간이네요!',{sceneState:'paused'});
@@ -721,6 +745,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         const receipt=await deps.applyStoredInjection({validate:assertCurrentSnapshot});
         assertCurrentSnapshot();
         if(!receipt?.applied || receipt.inputKey!==inputKey || receipt.sourceKey!==sourceKey)throw new deps.StaleRunError();
+        await verifyAppliedJudgment(run, rec.lastJudgment, receipt);
+        assertCurrentSnapshot();
         deps.noteDiagnostic?.('injection_applied',{inputKey,payloadChars:receipt.payloadChars,worldChars:receipt.worldChars,macroMode:receipt.macroMode,worldMacroMode:receipt.worldMacroMode});
         deps.renderAll();
         if(sceneGate.transition==='exited')notifySceneReaderToast(deps.window, 'info', '일반 판독·주입을 다시 시작합니다.','다시 왔어요!',{sceneState:'resumed'});
