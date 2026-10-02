@@ -2,7 +2,7 @@ import { notifySceneReaderToast } from '../ui/toasts.js';
 import { makeAppearanceOffer, addAppearanceQuestions, applyAppearanceOffer } from './appearance.js';
 import { MEMORY_REFERENCE_ENABLED } from '../memory/context.js';
 import { CORE_SHA256 } from '../vendor/character-reasoner/version.js';
-import { sceneGateRequest, resolveSceneGate } from './intimacy-gate.js';
+import { sceneGateRequest, resolveSceneGate, sceneGateAnswersConflict, sceneGateConflictRequest, resolveSceneGateConflict } from './intimacy-gate.js';
 import { currentRecords, recordBankIsCurrent } from '../characters/records.js';
 import { addWorldQuestions, selectedWorldRecords, worldPayload as buildWorldPayload } from '../world/advanced.js';
 import { seasonalWorldNote } from '../world/seasonal.js';
@@ -12,6 +12,7 @@ import { applySexualChoice, buildSexualInjection, buildSexualQuestions, resolveS
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createSceneExecution(deps) {
 const appearanceOffers = new Map();
+let activeJudge = null;
 function sourceRevisionKey(rec, world) {
     return deps.stableFingerprint({
         world: { id: world?.id || '', name: world?.name || '', hint: world?.hint || '', prompt: world?.prompt || '', franchise: Boolean(world?.franchise), calendarTopics: world?.calendarTopics || [], advanced: world?.advanced || null },
@@ -214,20 +215,29 @@ async function commitContinuityCandidates(rec, candidates, decisions, details, r
 }
 
 async function runJudge(options = {}) {
+    const key = deps.stableFingerprint({ chatKey: deps.stateChatKey(), inputKey: deps.currentInputKey(options.pendingUserText || '', options.cycleSalt || ''), force: Boolean(options.force) });
+    if (activeJudge?.key === key) return activeJudge.promise;
     const run = deps.jobs.begin('judge');
-    try { return await executeJudge(run, options); }
-    catch (error) {
-        if (error instanceof deps.StaleRunError || !run.valid()) return null;
-        if (!error.activityReported) {
-            await deps.clearInjection();
-            deps.updateActivity(`판독 실패 · ${error.message}`, {error:true});
-            error.activityReported = true;
+    deps.noteDiagnostic?.('judge_started',{inputKey:key,force:Boolean(options.force)});
+    const promise = (async () => {
+        try { const result=await executeJudge(run, options); deps.noteDiagnostic?.(result?'judge_finished':'judge_skipped',{inputKey:key}); return result; }
+        catch (error) {
+            if (error instanceof deps.StaleRunError || !run.valid()) {deps.noteDiagnostic?.('judge_cancelled',{inputKey:key});return null;}
+            deps.noteDiagnostic?.('judge_failed',{inputKey:key,error:String(error?.message||error).slice(0,240)});
+            if (!error.activityReported) {
+                await deps.clearInjection();
+                deps.updateActivity(`판독 실패 · ${error.message}`, {error:true});
+                error.activityReported = true;
+            }
+            throw error;
         }
-        throw error;
-    }
-    finally { run.finish(); }
+        finally { run.finish(); if (activeJudge?.promise === promise) activeJudge = null; }
+    })();
+    activeJudge = {key,promise};
+    return promise;
 }
 async function executeJudge(run, { force = false, pendingUserText = '', cycleSalt = '' } = {}) {
+    await deps.waitForOutputChanges?.();
     if (deps.judgeInFlight) await deps.judgeCompletionPromise;
     run.assert();
     if (!deps.settings.enabled) throw new Error('씬판독기가 꺼져 있습니다.');
@@ -262,6 +272,12 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const inputKey = deps.currentInputKey(pendingUserText, cycleSalt);
     const world = deps.selectedWorld(rec);
     const sourceKey = sourceRevisionKey(rec, world);
+    const assertCurrentSnapshot = () => {
+        run.assert();
+        if (!deps.settings.enabled || deps.currentInputKey(pendingUserText,cycleSalt)!==inputKey
+            || deps.recentContext(pendingUserText).contextKey!==context.contextKey
+            || sourceRevisionKey(deps.record(),deps.selectedWorld())!==sourceKey) throw new deps.StaleRunError();
+    };
     const continuityCacheKey = deps.settings.continuityEnabled
         ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
         : '';
@@ -281,10 +297,12 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const memory = deps.mergeMemory(charm, lore, memoryIdentity);
     if (!run.valid() || sourceRevisionKey(deps.record(), deps.selectedWorld()) !== sourceKey || deps.recentContext(pendingUserText).contextKey !== context.contextKey) throw new deps.StaleRunError();
     const memoryKey = deps.stableFingerprint({ status: memory.status, entries: memory.entries.map(entry => [entry.sourceId, entry.contentHash]) });
-    if (!force && rec.lastJudgment?.inputKey === inputKey && rec.lastJudgment?.contextKey === context.contextKey && rec.lastJudgment?.sourceKey === sourceKey && rec.lastJudgment?.continuityCacheKey === continuityCacheKey && rec.lastJudgment?.memoryKey === memoryKey) {
-        await deps.applyStoredInjection();
+    if (!force && rec.lastJudgment?.inputKey === inputKey && rec.lastJudgment?.contextKey === context.contextKey && rec.lastJudgment?.sourceKey === sourceKey && rec.lastJudgment?.continuityCacheKey === continuityCacheKey && rec.lastJudgment?.memoryKey === memoryKey && !rec.lastJudgment?.sceneIntimacy?.error) {
+        const receipt = await deps.applyStoredInjection({validate:assertCurrentSnapshot});
+        assertCurrentSnapshot();
+        if (!receipt?.applied || receipt.inputKey!==inputKey || receipt.sourceKey!==sourceKey) throw new deps.StaleRunError();
         deps.updateStatus('같은 입력 · 기존 판정과 추첨 재사용');
-        deps.updateActivity('기존 판정 재사용 · 주입 적용 완료', { done: true });
+        deps.updateActivity(receipt.macroMode||receipt.worldMacroMode?'기존 판정 재사용 · 매크로용 주입문 준비':'기존 판정 재사용 · 주입 적용 완료', { done: true });
         return rec.lastJudgment;
     }
     const memoryNode = deps.document.getElementById('sr-memory-status');
@@ -310,6 +328,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
     const worldRecordCandidates = addWorldQuestions(gateRequest, world, transcript, worldRetrieval.indices);
     if (deps.characterStore.enabled) deps.addCharacterNeedsQuestions(gateRequest, gatePeople);
     let sceneGate;
+    let sceneGateError = '';
     let worldRecordAnswers = {};
     let worldSelectionFailed = false;
     let worldInvalidCount = 0;
@@ -325,18 +344,33 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         worldInvalidCount = worldRecordCandidates.filter((_, index) => !['yes', 'no'].includes(worldRecordAnswers[`world_record_${index}`]?.choice)).length;
         worldSelectionFailed = worldRecordCandidates.length > 0 && worldInvalidCount === worldRecordCandidates.length;
         sceneGate=resolveSceneGate(gateData.answers,gateRequest,previousSceneRoute);
+        if(sceneGateAnswersConflict(gateData.answers)) {
+            try {
+                const confirmation=await deps.callJev(sceneGateConflictRequest(gateRequest,gateData.answers),15000,run.controller.signal);
+                run.assert();
+                assertCurrentSnapshot();
+                sceneGate=resolveSceneGateConflict(sceneGate,confirmation.answers,gateRequest,previousSceneRoute);
+                if(sceneGate.confirmation!=='resolved')sceneGateError='서로 다른 장면 답변을 확인하지 못했습니다.';
+            } catch(error) {
+                if(error instanceof deps.StaleRunError || !run.valid())throw error;
+                sceneGateError=`장면 답변 재확인 실패: ${String(error?.message||error)}`;
+                sceneGate={...sceneGate,confirmation:'unresolved'};
+            }
+        }
     } catch(error) {
         if(error instanceof deps.StaleRunError || !run.valid())throw error;
+        sceneGateError = String(error?.message || error);
         sceneGate=resolveSceneGate({},gateRequest,previousSceneRoute);
         worldSelectionFailed = true;
-        deps.updateActivity(`장면 상태 확인 실패 · 기존 상태 유지: ${error.message}`,{error:true});
+        deps.updateActivity(`장면 상태 확인 실패 · 기존 상태 유지: ${sceneGateError}`,{error:true});
     } finally {
         deps.judgeInFlight=false;
         deps.resolveJudgeCompletion?.();deps.resolveJudgeCompletion=null;
         deps.setBusy(false);
     }
     const sceneContextEndIndex=Math.max(-1,...context.selected.map(message=>(deps.getContext().chat||[]).indexOf(message)),String(pendingUserText||'').trim()?(deps.getContext().chat||[]).length:-1);
-    rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey,contextEndIndex:sceneContextEndIndex};
+    rec.sceneIntimacy={route:sceneGate.route,level:sceneGate.level,phase:sceneGate.phase,evidence:sceneGate.evidence,participantIds:sceneGate.participantIds,inputKey,contextEndIndex:sceneContextEndIndex,...(sceneGate.confirmation?{confirmation:sceneGate.confirmation}:{}),...(sceneGateError?{error:sceneGateError}:{})};
+    deps.noteDiagnostic?.('scene_gate',{route:sceneGate.route,transition:sceneGate.transition||'',phase:sceneGate.phase||'',confirmation:sceneGate.confirmation||'',error:sceneGateError||''});
     const seasonalContext = seasonalWorldNote(prefs, transcript, world);
     const appliedWorldRecords = selectedWorldRecords(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed);
     const selectedWorldPayload = [buildWorldPayload(world, worldRecordCandidates, worldRecordAnswers, worldSelectionFailed), seasonalContext].filter(Boolean).join('\n\n');
@@ -357,13 +391,16 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         if(deps.storageVersion>=2)await deps.queueWrite('session:'+run.identity,()=>{run.assert();return deps.storagePost('transaction',{chatKey:run.identity,chat:structuredClone(rec),history:run.history.slice(-deps.STATE_HISTORY_LIMIT)});});
         else await deps.persistChat(run.identity,rec);
         run.assert();deps.chatRecords.set(run.identity,rec);
-        await deps.applyStoredInjection();deps.renderAll();
+        const receipt=await deps.applyStoredInjection({validate:assertCurrentSnapshot});
+        assertCurrentSnapshot();
+        if(!receipt?.applied || receipt.inputKey!==inputKey || receipt.sourceKey!==sourceKey)throw new deps.StaleRunError();
+        deps.noteDiagnostic?.('injection_applied',{inputKey,payloadChars:receipt.payloadChars,worldChars:receipt.worldChars,macroMode:receipt.macroMode,worldMacroMode:receipt.worldMacroMode});
+        deps.renderAll();
         if(sceneGate.transition==='entered')notifySceneReaderToast(deps.window, 'info', '잠깐 비켜드릴게요♡','앗, 둘만의 시간이네요!',{sceneState:'paused'});
-        deps.updateStatus('현재 장면 · 고정 지침 적용');
-        deps.updateActivity('현재 장면 · 고정 지침과 저장된 인물 참고문만 적용',{done:true});
+        deps.updateStatus(sceneGateError?'장면 확인 실패 · 기존 중단 상태 유지':'현재 장면 · 고정 지침 적용');
+        deps.updateActivity(sceneGateError?'장면 확인 실패 · 기존 중단 상태를 유지하고 고정 지침만 적용했습니다.':receipt.macroMode||receipt.worldMacroMode?'현재 장면 · 고정 지침 적용·매크로 준비':'현재 장면 · 고정 지침과 저장된 인물 참고문만 적용',sceneGateError?{error:true}:{done:true});
         return rec.lastJudgment;
     }
-    if(sceneGate.transition==='exited')notifySceneReaderToast(deps.window, 'info', '일반 판독·주입을 다시 시작합니다.','다시 왔어요!',{sceneState:'resumed'});
     if (prefs.settingsContract >= 3) {
         const offerKey = deps.stableFingerprint({identity:run.identity,users:context.selected.filter(message=>message.is_user).map(message=>({text:message.mes,index:deps.getContext().chat?.indexOf(message)}))});
         const cached = appearanceOffers.get(offerKey);
@@ -497,6 +534,8 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         };
         const data = await deps.callJev(jevRequest, 30000, run.controller.signal);
         run.assert();
+        const missingAnswerCount=data.answerDiagnostics?.invalidKeys?.length||0;
+        if(missingAnswerCount)deps.noteDiagnostic?.('jev_partial',{requested:data.answerDiagnostics.requested,missing:missingAnswerCount,keys:data.answerDiagnostics.invalidKeys.slice(0,20)});
         if (!deps.settings.enabled || deps.currentInputKey(pendingUserText, cycleSalt) !== inputKey || deps.recentContext(pendingUserText).contextKey !== context.contextKey || sourceRevisionKey(deps.record(), deps.selectedWorld()) !== sourceKey) throw new deps.StaleRunError();
         deps.lastDebugFrame = { chatKey: run.identity, inputKey, request: jevRequest, answers: data.answers || {}, worldGate: worldGateFrame, model: String(data.model || deps.JEV_MODEL) };
         deps.updateStatus('판독 완료 · 주입문 조립 중…');
@@ -650,7 +689,7 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
             ? deps.stableFingerprint({ revision: rec.continuity?.revision || 0, candidates: (rec.pendingContinuityCandidates || []).map((item) => item.id) })
             : '';
         const rawChoices = Object.fromEntries(Object.entries(data.answers || {}).map(([key, answer]) => [key, { choice: answer?.choice, confidence: answer?.confidence, probabilities: answer?.probabilities, noul: answer?.noul }]));
-        rec.lastJudgment = { details, decisions, rawChoices, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, characterInjectionChars:characterExecution.charCount, characterInjectionLimit:characterExecution.charLimit, sexualInjectionChars:sexualExecution.charCount, sexualTrace:sexualExecution.traces, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
+        rec.lastJudgment = { details, decisions, rawChoices, jevDiagnostics:data.answerDiagnostics||null, npcTargetName: selectedSheetNpc?.name || '', memoryStatus: memory.status, memoryKey, characterTrace, characterInjectionChars:characterExecution.charCount, characterInjectionLimit:characterExecution.charLimit, sexualInjectionChars:sexualExecution.charCount, sexualTrace:sexualExecution.traces, actionPlan: deps.actionPlanSummary(finalPlan), payload, worldSelection, worldId:world?.id||'', worldPayload: selectedWorldPayload, sceneIntimacy:rec.sceneIntimacy, inputKey, contextKey: context.contextKey, sourceKey, continuityCacheKey: finalContinuityCacheKey, priorVerification, rolls: { event: staged.lastEventRoll || null, npc: staged.lastNpcRoll || null, villain: staged.lastVillainRoll || null }, judgedAt: new Date().toISOString(), model: String(data.model || deps.JEV_MODEL) };
         rec.lastJudgment.correctionSelection = correctionSelection;
         if (rec.lastStateInput !== inputKey) {
             const pendingOffset = String(pendingUserText || '').trim() ? 1 : 0;
@@ -679,10 +718,15 @@ async function executeJudge(run, { force = false, pendingUserText = '', cycleSal
         deps.chatRecords.set(run.identity,rec);
         deps.stateHistoryCache.set(run.identity,run.history.slice(-deps.STATE_HISTORY_LIMIT));
         if (run.postOutput) await postVerifiedCharacterOutput(rec,run.postOutput.pending,run.postOutput.verification,run.postOutput.trigger);
-        await deps.applyStoredInjection();
+        const receipt=await deps.applyStoredInjection({validate:assertCurrentSnapshot});
+        assertCurrentSnapshot();
+        if(!receipt?.applied || receipt.inputKey!==inputKey || receipt.sourceKey!==sourceKey)throw new deps.StaleRunError();
+        deps.noteDiagnostic?.('injection_applied',{inputKey,payloadChars:receipt.payloadChars,worldChars:receipt.worldChars,macroMode:receipt.macroMode,worldMacroMode:receipt.worldMacroMode});
         deps.renderAll();
+        if(sceneGate.transition==='exited')notifySceneReaderToast(deps.window, 'info', '일반 판독·주입을 다시 시작합니다.','다시 왔어요!',{sceneState:'resumed'});
         deps.updateStatus('판독 완료 · 이번 응답에 적용');
-        deps.updateActivity(mixedOoc ? 'OOC 지시 반영 · 판독·주입 적용 완료' : '판독·주입 적용 완료', { done: true });
+        const incompleteAnswers=missingAnswerCount>Math.max(2,Math.floor((data.answerDiagnostics?.requested||0)/4));
+        deps.updateActivity(sceneGateError?'장면 확인 실패 · 기존 상태를 유지한 채 일반 판독만 적용했습니다.':incompleteAnswers?`Jev 응답 ${missingAnswerCount}개 항목 확인 필요 · 유효한 판정만 적용했습니다.`:receipt.macroMode||receipt.worldMacroMode?'판독 완료 · 직접 주입 적용·매크로 준비':mixedOoc ? 'OOC 지시 반영 · 판독·주입 적용 완료' : '판독·주입 적용 완료', sceneGateError||incompleteAnswers?{error:true}:{done:true});
         return rec.lastJudgment;
     } catch (error) {
         if (error instanceof deps.StaleRunError || !run.valid()) return null;

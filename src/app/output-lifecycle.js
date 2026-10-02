@@ -1,10 +1,18 @@
 import { notifySceneReaderToast } from '../ui/toasts.js';
 import { selectedStateSwipe } from '../characters/state-contract.js';
+import { StaleRunError } from './jobs.js';
 // Runtime coordination; dependencies are explicit and supplied by the application.
 export function createOutputLifecycle(deps) {
 let outputChangePromise = Promise.resolve();
+let injectionWrite = Promise.resolve();
+function queueInjectionWrite(task) {
+    const result = injectionWrite.catch(() => {}).then(task);
+    injectionWrite = result.catch(() => {});
+    return result;
+}
 async function waitForOutputChanges() { await outputChangePromise; }
 async function onCharacterMessageReceived(messageId) {
+    const chatKey=deps.stateChatKey();
     const rec = deps.record();
     const cycleMode = deps.activeGenerationCycle?.mode || deps.generationMode || 'rp';
     const outputIndex = Number.isInteger(Number(messageId)) ? Number(messageId) : (deps.getContext().chat || []).length - 1;
@@ -52,11 +60,13 @@ async function onCharacterMessageReceived(messageId) {
             rec.nonRpOutputIndices = rec.nonRpOutputIndices.slice(-20);
             await deps.persistChat();
         }
+        if(chatKey!==deps.stateChatKey())return;
         deps.pendingGenerationType = '';
         deps.generationMode = 'rp';
         deps.activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
         if (cycleMode === 'ooc_debug') {
-            await clearInjection();
+            await clearInjection({chatKey});
+            if(chatKey!==deps.stateChatKey())return;
             deps.updateStatus('검사용 OOC 완료 · 직전 주입문 다시 비움');
             deps.updateActivity('검사용 OOC 완료 · 다음 RP부터 정상 판독합니다.', { done: true });
         }
@@ -79,6 +89,7 @@ async function onCharacterMessageReceived(messageId) {
     deps.pendingGenerationType = '';
     deps.activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
     await deps.persistChat();
+    if(chatKey!==deps.stateChatKey())return;
     deps.renderAll();
 }
 
@@ -128,14 +139,14 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     if(sceneGateAffected) {
         rec.sceneIntimacy=null;
         rec.lastJudgment=null;
-        await clearInjection();
+        await clearInjection({chatKey});
     }
     const earliest = history.length ? Number(history[0].plan?.chatCount ?? history[0].assistantIndex) - 1 : null;
     if (earliest !== null && index < earliest) {
         for (const key of Object.keys(deps.reversibleStateSnapshot(rec))) delete rec[key];
         rec.pendingPlan = null; rec.lastJudgment = null; rec.lastVerification = null;
         await deps.saveSession(chatKey, rec, []);
-        await clearInjection(); deps.renderAll();
+        await clearInjection({chatKey}); if(chatKey!==deps.stateChatKey())return; deps.renderAll();
         notifySceneReaderToast(deps.window, 'info', '복원 기록보다 이전 메시지가 바뀌어 누적 판정을 비웠습니다. 시트와 설정은 유지하며 다음 RP에서 다시 판독합니다.', '씬판독기', {timeOut:3000});
         return;
     }
@@ -143,8 +154,8 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     if (affected < 0) {
         const pendingAffected = rec.pendingPlan && Number(rec.pendingPlan.outputIndex ?? rec.pendingPlan.chatCount) >= index;
         if (!pendingAffected) {
-            if (kind === 'swiped') { await deps.saveSession(chatKey, rec, history); deps.renderAll(); return; }
-            if (kind === 'edited' || sceneGateAffected || stateEventsChanged) { rec.lastJudgment = null; await clearInjection(); await deps.saveSession(chatKey, rec, history); deps.renderAll(); }
+            if (kind === 'swiped') { await deps.saveSession(chatKey, rec, history); if(chatKey===deps.stateChatKey())deps.renderAll(); return; }
+            if (kind === 'edited' || sceneGateAffected || stateEventsChanged) { rec.lastJudgment = null; await clearInjection({chatKey}); await deps.saveSession(chatKey, rec, history); if(chatKey===deps.stateChatKey())deps.renderAll(); }
             return;
         }
         if (['swiped', 'regenerated'].includes(kind)) {
@@ -164,15 +175,17 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
             } else {
                 rec.pendingPlan = null;
                 rec.lastJudgment = null;
-                await clearInjection();
+                await clearInjection({chatKey});
             }
         } else {
             rec.pendingPlan = null;
             rec.lastJudgment = null;
-            await clearInjection();
+            await clearInjection({chatKey});
         }
         await deps.saveSession(chatKey, rec, history);
+        if(chatKey!==deps.stateChatKey())return;
         if (['swiped','regenerated'].includes(kind)) await applyStoredInjection();
+        if(chatKey!==deps.stateChatKey())return;
         deps.renderAll();
         const labels = { edited: '수정', deleted: '삭제' };
         notifySceneReaderToast(deps.window, 'info', `출력 ${labels[kind] || '변경'} 감지 · 대기 중인 이행 검증을 갱신했습니다.`, '씬판독기', { timeOut: 1800 });
@@ -197,10 +210,12 @@ async function rollbackChangedOutput(messageId, kind = 'changed') {
     } else {
         rec.pendingPlan = null;
         rec.lastJudgment = null;
-        await clearInjection();
+        await clearInjection({chatKey});
     }
     await deps.saveSession(chatKey, rec, history);
+    if(chatKey!==deps.stateChatKey())return;
     if (canReuseSwipe) await applyStoredInjection();
+    if(chatKey!==deps.stateChatKey())return;
     deps.renderAll();
     const labels = { swiped: '리롤', regenerated: '재생성', edited: '수정', deleted: '삭제' };
     const suffix = canReuseSwipe ? '직전 누적을 되돌리고 같은 판정·추첨을 재사용합니다.' : '직전 저장 상태를 복원했습니다.';
@@ -213,32 +228,44 @@ async function onAssistantOutputChanged(messageId, kind) {
     await task;
 }
 
-async function applyStoredInjection({ exactSnapshot = false } = {}) {
+async function applyStoredInjection({ exactSnapshot = false, validate = null } = {}) {
+    return queueInjectionWrite(async () => {
+    validate?.();
     const rec = deps.record();
-    const payload = deps.settings.enabled && rec?.lastJudgment?.payload ? rec.lastJudgment.payload : '';
+    const chatKey=deps.stateChatKey();
     const world = deps.selectedWorld(rec);
+    const sourceCurrent=!rec?.lastJudgment?.sourceKey || rec.lastJudgment.sourceKey===deps.sourceRevisionKey(rec,world);
+    const payload = deps.settings.enabled && sourceCurrent && rec?.lastJudgment?.payload ? rec.lastJudgment.payload : '';
+    const assertOwner=()=>{validate?.();if(chatKey!==deps.stateChatKey() || rec!==deps.record() || rec?.lastJudgment!==deps.record()?.lastJudgment)throw new StaleRunError();};
     const worldPayload = deps.settings.enabled
-        ? String(exactSnapshot ? rec?.lastJudgment?.worldPayload || '' : rec?.lastJudgment?.worldId === world?.id ? rec.lastJudgment.worldPayload || '' : world?.prompt || '')
+        ? String(exactSnapshot ? rec?.lastJudgment?.worldPayload || '' : sourceCurrent && rec?.lastJudgment?.worldId === world?.id ? rec.lastJudgment.worldPayload || '' : world?.prompt || '')
         : '';
     const macroMode = rec?.preferences?.injectionMode === 'macro' && deps.macroAvailable;
     const worldMacroMode = rec?.preferences?.worldInjectionMode === 'macro' && deps.macroAvailable;
-    deps.activeInjectionPayload = payload;
-    deps.activeMacroPayload = macroMode ? payload : '';
-    deps.activeWorldMacroPayload = worldMacroMode ? worldPayload : '';
     await deps.setExtensionPrompt(deps.INJECT_KEY, macroMode ? '' : payload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
+    assertOwner();
     await deps.setExtensionPrompt(deps.WORLD_INJECT_KEY, worldMacroMode ? '' : worldPayload, deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
+    assertOwner();
     const roster = deps.settings.enabled ? deps.stateRoster(deps.characterStore, rec?.preferences, rec?.lastJudgment) : [];
     const stateCollectionPaused = rec?.lastJudgment?.sceneIntimacy?.route === 'paused';
     const context = deps.getContext();
     const multipleOutputs = context.mainApi === 'openai' && Number(context.chatCompletionSettings?.n) > 1;
     const mainCapture = !stateCollectionPaused && deps.STATE_COLLECTOR_MODE === 'main-output' && !deps.isStreamingEnabled() && !multipleOutputs;
-    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: roster, stateCollectorMode: deps.STATE_COLLECTOR_MODE, stateCollectionPaused, stateCaptureEnabled: mainCapture && roster.length > 0 };
     await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, mainCapture ? deps.mainOutputStatePrompt(roster) : '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
+    assertOwner();
+    deps.activeInjectionPayload = payload;
+    deps.activeMacroPayload = macroMode ? payload : '';
+    deps.activeWorldMacroPayload = worldMacroMode ? worldPayload : '';
+    deps.activeGenerationCycle = { ...deps.activeGenerationCycle, stateRoster: roster, stateCollectorMode: deps.STATE_COLLECTOR_MODE, stateCollectionPaused, stateCaptureEnabled: mainCapture && roster.length > 0 };
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = payload || '현재 주입문 없음';
+    return { applied: true, chatKey, inputKey: rec?.lastJudgment?.inputKey || '', sourceKey: rec?.lastJudgment?.sourceKey || '', sourceCurrent, payloadChars: payload.length, worldChars: worldPayload.length, macroMode, worldMacroMode };
+    });
 }
 
-async function clearInjection() {
+async function clearInjection({chatKey=null}={}) {
+    return queueInjectionWrite(async () => {
+    if(chatKey!==null && chatKey!==deps.stateChatKey())return;
     deps.activeInjectionPayload = '';
     deps.activeMacroPayload = '';
     deps.activeWorldMacroPayload = '';
@@ -248,6 +275,7 @@ async function clearInjection() {
     await deps.setExtensionPrompt(deps.STATE_CAPTURE_KEY, '', deps.IN_CHAT, 0, false, deps.SYSTEM_ROLE);
     const preview = deps.document.getElementById('sr-prompt-preview');
     if (preview) preview.textContent = '현재 주입문 없음';
+    });
 }
 
 

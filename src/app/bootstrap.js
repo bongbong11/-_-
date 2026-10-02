@@ -144,6 +144,37 @@ let generationMode = 'rp';
 let debugInjectionArmed = false;
 let lastDebugFrame = null;
 let activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
+let chatReadyKey = null;
+const diagnosticEvents = [];
+function noteDiagnostic(stage, detail = {}) {
+    diagnosticEvents.push({ at: new Date().toISOString(), stage, chat: stableFingerprint(stateChatKey()), ...detail });
+    if (diagnosticEvents.length > 80) diagnosticEvents.splice(0, diagnosticEvents.length - 80);
+}
+function diagnosticSnapshot() {
+    const rec=record();
+    const judgment=rec?.lastJudgment;
+    const route=judgment?.sceneIntimacy?.route || rec?.sceneIntimacy?.route || 'normal';
+    const sourceCurrent=judgment ? judgment.sourceKey===sourceRevisionKey(rec,selectedWorld(rec)) : null;
+    return {
+        automatic:{chatReady:chatReadyKey===stateChatKey(),enabled:Boolean(settings?.enabled),autoJudge:Boolean(settings?.autoJudge),cycleMode:activeGenerationCycle?.mode||'',cycleInputMatches:judgment&&activeGenerationCycle?.inputKey?judgment.inputKey===activeGenerationCycle.inputKey:null,lastJudgmentAt:judgment?.judgedAt||null,sourceCurrent},
+        scene:{route,phase:judgment?.sceneIntimacy?.phase||rec?.sceneIntimacy?.phase||'',level:judgment?.sceneIntimacy?.level??rec?.sceneIntimacy?.level??null,error:judgment?.sceneIntimacy?.error||rec?.sceneIntimacy?.error||'',evidenceId:judgment?.sceneIntimacy?.evidence||null},
+        storage:{available:serverStoreAvailable,version:storageVersion,chatReady:chatReadyKey===stateChatKey(),savedJudgment:Boolean(judgment)},
+        retrieval:{provider:settings?.retrievalProvider||'',worldStatus:judgment?.worldSelection?.retrievalStatus||'',worldCandidates:judgment?.worldSelection?.candidateIds?.length||0,worldApplied:judgment?.worldSelection?.appliedIds?.length||0,characterCandidates:(judgment?.characterTrace||[]).reduce((count,person)=>count+(person.candidateCount||0),0)},
+        characters:{enabled:Boolean(characterStore.enabled),characters:characterStore.characters.length,npcs:characterStore.npcs.length,persona:Boolean(characterStore.persona),selectedRecords:(judgment?.characterTrace||[]).reduce((count,person)=>count+(person.injectedRuleIds?.length||0),0)},
+        injection:{judgmentChars:judgment?.payload?.length||0,activeChars:activeInjectionPayload.length,worldChars:judgment?.worldPayload?.length||0,macroChars:activeMacroPayload.length,worldMacroChars:activeWorldMacroPayload.length,activeMatchesJudgment:judgment?activeInjectionPayload===String(judgment.payload||''):activeInjectionPayload.length===0},
+    };
+}
+function diagnosticChecks(snapshot=diagnosticSnapshot()) {
+    const check=(ok,detail)=>({result:ok?'pass':'check',detail});
+    return {
+        automatic:[check(snapshot.automatic.chatReady,'현재 채팅의 저장 상태를 읽었는지'),check(snapshot.automatic.sourceCurrent!==false,'마지막 판정이 현재 설정·시트와 일치하는지')],
+        scene:[check(!snapshot.scene.error,'장면 중단·복귀 판정에 확인 실패가 없는지')],
+        storage:[check(snapshot.storage.available,'서버 저장소가 응답하는지'),check(snapshot.storage.version>=2,'저장소 버전이 지원 범위인지')],
+        retrieval:[check(Boolean(RETRIEVAL_PROVIDERS[snapshot.retrieval.provider]),'선택한 검색 방식이 지원되는지')],
+        characters:[check(Number.isInteger(snapshot.characters.characters)&&Number.isInteger(snapshot.characters.npcs),'인물 목록을 읽을 수 있는지')],
+        injection:[check(snapshot.automatic.sourceCurrent!==false || snapshot.injection.activeChars===0,'오래된 인물·세계관 판정문이 활성 주입으로 남지 않았는지'),check(snapshot.injection.activeChars===0 || snapshot.injection.activeMatchesJudgment,'활성 주입문이 마지막 판정과 일치하는지')],
+    };
+}
 const handledOocMarkers = [];
 let serverStoreAvailable = false;
 let serverKeyStatus = '확인 전';
@@ -340,8 +371,10 @@ function ownerPrompt() {
 function renderOwnerMode() {
     const unlocked = ownerUnlocked();
     const ownerCard = document.getElementById('sr-owner-card');
+    const diagnosticPanel = document.getElementById('sr-owner-diagnostic-panel');
     const ownerStatus = document.getElementById('sr-owner-status');
     if (ownerCard) ownerCard.hidden = !unlocked;
+    if (diagnosticPanel) diagnosticPanel.hidden = !unlocked;
     if (ownerStatus) ownerStatus.textContent = unlocked ? '열림' : '잠금 상태';
     const promptInput = document.getElementById('sr-owner-prompt');
     if (promptInput && unlocked) promptInput.value = ownerPrompt();
@@ -363,6 +396,7 @@ function showActivity(message, { owner = 'scene' } = {}) {
 }
 
 function updateActivity(message, { done = false, error = false, owner = 'scene' } = {}) {
+    noteDiagnostic(error?'error':done?'complete':'working',{message:String(message).slice(0,240),owner});
     let item = activityToasts.get(owner);
     if (!item) {
         const method = error ? 'error' : done ? 'success' : 'info';
@@ -558,7 +592,22 @@ async function callJev(body, timeoutMs = 30000, signal = null) {
             if ([401, 403].includes(response.status)) throw new Error(`Jev 키 인증 실패 (${response.status})`);
             throw new Error(pluginError(response.status, data, `Jev API 응답 오류 (${response.status})`));
         }
-        if (!data?.answers || typeof data.answers !== 'object') throw new Error('Jev 응답에 판정 결과가 없습니다.');
+        if (!data?.answers || typeof data.answers !== 'object' || Array.isArray(data.answers) || !Object.keys(data.answers).length) throw new Error('Jev 응답에 판정 결과가 없습니다.');
+        if (body?.questions?.scene_level) {
+            for (const key of ['scene_level','scene_phase','scene_evidence']) {
+                const selected=String(data.answers[key]?.choice ?? '');
+                if (!Object.hasOwn(body.questions[key]?.criteria || {},selected)) throw new Error(`Jev 장면 판정 형식 오류: ${key}`);
+            }
+        }
+        const requested=Object.entries(body?.questions||{});
+        const invalidKeys=requested.filter(([name,question])=>{
+            const answer=data.answers[name];
+            if(!answer || typeof answer!=='object' || Array.isArray(answer))return true;
+            if(question?.type==='noul')return !Number.isFinite(Number(answer.noul)) && !Object.hasOwn(question?.criteria||{},String(answer.choice??''));
+            return !Object.hasOwn(question?.criteria||{},String(answer.choice??''));
+        }).map(([name])=>name);
+        if(requested.length && invalidKeys.length===requested.length)throw new Error('Jev가 요청한 판정 항목에 유효하게 답하지 않았습니다.');
+        data.answerDiagnostics={requested:requested.length,valid:requested.length-invalidKeys.length,invalidKeys};
         return data;
     } catch (error) {
         if (signal?.aborted) throw new StaleRunError();
@@ -652,6 +701,7 @@ let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAss
     get restoreReversibleState() { return restoreReversibleState; }, set restoreReversibleState(value) { restoreReversibleState = value; },
     get saveStateHistory() { return saveStateHistory; }, set saveStateHistory(value) { saveStateHistory = value; },
     get selectedWorld() { return selectedWorld; }, set selectedWorld(value) { selectedWorld = value; },
+    get sourceRevisionKey() { return sourceRevisionKey; },
     get setExtensionPrompt() { return setExtensionPrompt; },
     get settings() { return settings; }, set settings(value) { settings = value; },
     get stableFingerprint() { return stableFingerprint; },
@@ -663,6 +713,8 @@ let {onCharacterMessageReceived, onUserMessageSent, rollbackChangedOutput, onAss
 
 let {sourceRevisionKey, stagedRecord, sourceIdentityForPending, pendingExternalCandidates, sourceUserRpForOutput, postVerifiedCharacterOutput, registerSceneOpportunity, commitPriorVerification, commitContinuityCandidates, runJudge, executeJudge} = createSceneExecution({
     waitForProfileState,
+    waitForOutputChanges,
+    noteDiagnostic,
     get latestStateForChat() { return latestStateForChat; },
     get vectorRetrieval() { return vectorRetrieval; },
     get addCharacterNeedsQuestions() { return addCharacterNeedsQuestions; },
@@ -853,6 +905,9 @@ let {setFormValues, renderWorldControls, showWorldEditor, showWorldList, charact
     get copyText() { return copyText; }, set copyText(value) { copyText = value; },
     get debugInjectionArmed() { return debugInjectionArmed; }, set debugInjectionArmed(value) { debugInjectionArmed = value; },
     get lastDebugFrame() { return lastDebugFrame; },
+    get diagnosticEvents() { return diagnosticEvents; },
+    get diagnosticSnapshot() { return diagnosticSnapshot; },
+    get diagnosticChecks() { return diagnosticChecks; },
     get dialog() { return dialog; }, set dialog(value) { dialog = value; },
     get document() { return document; },
     get escapeHtml() { return escapeHtml; }, set escapeHtml(value) { escapeHtml = value; },
@@ -1021,6 +1076,14 @@ async function onLorebookUpdated(name, data) {
 
 async function onBeforeGeneration(type, data, dryRun) {
     if (dryRun || data?.quiet_prompt || type === 'quiet') return;
+    const startedChatKey = stateChatKey();
+    await waitForOutputChanges();
+    if (startedChatKey !== stateChatKey()) return;
+    if (chatReadyKey !== null && chatReadyKey !== startedChatKey) {
+        await clearInjection();
+        updateActivity('현재 채팅의 저장 상태를 읽지 못했습니다. 채팅을 다시 열고 판독해 주세요.',{error:true});
+        return;
+    }
     if (!settings.enabled) {
         jobs.invalidate();
         generationMode = 'disabled';
@@ -1072,11 +1135,21 @@ async function onBeforeGeneration(type, data, dryRun) {
     generationMode = 'rp';
     activeGenerationCycle = { mode: 'rp', chatKey: stateChatKey(), inputKey: generationInputKey, startedAt: new Date().toISOString() };
     await waitForProfileState();
+    if (startedChatKey !== stateChatKey() || currentInputKey(pendingUserText,cycleSalt)!==generationInputKey) return;
     if (!settings.autoJudge) {
         const rec = record();
         if (cachedJudgmentMatches(rec, context, generationInputKey)) {
-            await applyStoredInjection();
-            updateStatus('수동 판독 결과 적용');
+            try {
+                const receipt=await applyStoredInjection({validate:()=>{
+                    if(startedChatKey!==stateChatKey() || currentInputKey(pendingUserText,cycleSalt)!==generationInputKey
+                        || !cachedJudgmentMatches(record(),recentContext(pendingUserText),generationInputKey))throw new StaleRunError();
+                }});
+                updateStatus(receipt.sourceCurrent&&receipt.payloadChars?'수동 판독 결과 적용':'현재 입력에 적용할 판독 결과 없음');
+            } catch(error) {
+                if(!(error instanceof StaleRunError))throw error;
+                await clearInjection();
+                updateStatus('수동 판독 결과가 바뀌어 이번 주입을 건너뜁니다.');
+            }
         } else {
             await clearInjection();
             updateStatus('자동 판독 꺼짐 · 현재 입력은 수동 판독 필요');
@@ -1084,12 +1157,40 @@ async function onBeforeGeneration(type, data, dryRun) {
         return;
     }
     if (['swipe', 'regenerate'].includes(pendingGenerationType) && cachedJudgmentMatches(record(), context, generationInputKey, true)) {
-        await applyStoredInjection();
-        updateStatus('리롤·재생성 · 기존 판정과 추첨 재사용');
-        updateActivity('기존 판정 재사용 · 주입 적용 완료', { done: true });
-        return;
+        try {
+            const receipt=await applyStoredInjection({validate:()=>{
+                if(startedChatKey!==stateChatKey() || currentInputKey(pendingUserText,cycleSalt)!==generationInputKey
+                    || !cachedJudgmentMatches(record(),recentContext(pendingUserText),generationInputKey,true))throw new StaleRunError();
+            }});
+            if(!receipt.sourceCurrent || !receipt.payloadChars)throw new StaleRunError();
+            updateStatus('리롤·재생성 · 기존 판정과 추첨 재사용');
+            updateActivity(receipt.macroMode||receipt.worldMacroMode?'기존 판정 재사용 · 매크로용 주입문 준비':'기존 판정 재사용 · 주입 적용 완료', { done: true });
+            return;
+        } catch(error) {
+            if(!(error instanceof StaleRunError))throw error;
+            updateActivity('기존 판정이 바뀌어 현재 입력을 다시 판독합니다.');
+        }
     }
-    try { await runJudge({ pendingUserText, cycleSalt }); }
+    const startingSourceKey=sourceRevisionKey(record(),selectedWorld());
+    const startingContextKey=context?.contextKey||'';
+    try {
+        let result=await runJudge({ pendingUserText, cycleSalt });
+        if (!result && settings.enabled && settings.autoJudge && startedChatKey===stateChatKey()
+            && activeGenerationCycle?.inputKey===generationInputKey
+            && currentInputKey(pendingUserText,cycleSalt)===generationInputKey) {
+            let currentContextKey='';
+            try { currentContextKey=recentContext(pendingUserText).contextKey; } catch { /* input changed */ }
+            const changed=startingSourceKey!==sourceRevisionKey(record(),selectedWorld()) || startingContextKey!==currentContextKey;
+            if(changed) {
+                updateActivity('판독 중 기록이 바뀌어 현재 상태로 한 번 다시 판독합니다.');
+                result=await runJudge({ pendingUserText, cycleSalt });
+            }
+            if(!result && !cachedJudgmentMatches(record(),recentContext(pendingUserText),generationInputKey)) {
+                await clearInjection();
+                updateActivity('이번 판독이 취소되어 주입하지 않았습니다. 다시 실행해 주세요.',{error:true});
+            }
+        }
+    }
     catch (error) {
         console.error('[씬판독기] 자동 판독 실패', error);
         if (!error.activityReported) updateActivity(`자동 판독 실패 · ${error.message}`, { error: true });
@@ -1097,15 +1198,28 @@ async function onBeforeGeneration(type, data, dryRun) {
 }
 
 async function onChatChanged() {
+    const chatKey=stateChatKey();
     invalidateReasonerJobs();
+    chatReadyKey = '';
+    characterStore = normalizeCharacterStore(null);
     updateActivity('채팅 전환 · 이전 작업을 정리했습니다.', { done: true });
     handledOocMarkers.length = 0;
     debugInjectionArmed = false;
     generationMode = 'rp';
     activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
     await clearInjection();
-    await hydrateServerState();
+    if(chatKey!==stateChatKey())return;
+    const loaded = await hydrateServerState();
+    if(chatKey!==stateChatKey())return;
+    if (!loaded) {
+        noteDiagnostic('chat_hydration_failed');
+        updateActivity('현재 채팅의 저장 상태를 읽지 못했습니다. 이전 채팅의 인물 기록을 사용하지 않습니다.',{error:true});
+        renderAll();
+        return;
+    }
+    chatReadyKey = stateChatKey();
     await loadStateHistory();
+    if(chatKey!==stateChatKey())return;
     setFormValues();
     renderAll();
 }
@@ -1117,7 +1231,9 @@ async function init() {
     settings.recentTurns = Math.max(1, Math.min(5, Number(settings.recentTurns) || DEFAULTS.recentTurns));
     extension_settings[MODULE] = settings;
     saveSettingsDebounced();
-    await hydrateServerState();
+    chatReadyKey = '';
+    if (await hydrateServerState()) chatReadyKey = stateChatKey();
+    else noteDiagnostic('startup_hydration_failed');
     const macros = getContext().macros;
     if (typeof macros?.register === 'function') {
         try {
@@ -1177,7 +1293,7 @@ async function init() {
         generationMode = 'rp';
         activeGenerationCycle = { mode: 'rp', inputKey: '', startedAt: '' };
         if (debugInjectionArmed) debugInjectionArmed = false;
-        if (wasDebug) runEventTask(clearInjection, '중단된 검사용 주입을 비우지 못했습니다.');
+        runEventTask(clearInjection, wasDebug ? '중단된 검사용 주입을 비우지 못했습니다.' : '중단된 생성의 주입을 비우지 못했습니다.');
     });
     if (event_types.GENERATION_ENDED) eventSource.on(event_types.GENERATION_ENDED, () => { pendingGenerationType = ''; });
     await clearInjection();

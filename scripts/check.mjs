@@ -16,7 +16,7 @@ for(const file of await files(root)){
     const result=spawnSync(process.execPath,['--check',file],{cwd:root,stdio:'inherit'});
     if(result.status!==0)process.exit(result.status||1);
 }
-for(const test of ['test.mjs','tests/regression/world-bank.mjs','tests/regression/unified.mjs','tests/regression/storage-lifecycle.mjs','tests/regression/character-phase1.mjs','tests/regression/retrieval-core.mjs','tests/regression/vector-retrieval.mjs','tests/regression/character-volume.mjs','tests/regression/injection-limits.mjs','tests/regression/progress-intensity.mjs','tests/regression/jev-assembly.mjs','tests/regression/character-live-current.mjs','tests/regression/character-transfer.mjs','tests/regression/character-state.mjs','tests/regression/scene-gate.mjs','tests/regression/scene-gate-runtime.mjs','tests/regression/sexual-conduct.mjs','tests/regression/release-integration.mjs']){
+for(const test of ['test.mjs','tests/regression/world-bank.mjs','tests/regression/unified.mjs','tests/regression/storage-lifecycle.mjs','tests/regression/character-phase1.mjs','tests/regression/retrieval-core.mjs','tests/regression/vector-retrieval.mjs','tests/regression/character-volume.mjs','tests/regression/injection-limits.mjs','tests/regression/progress-intensity.mjs','tests/regression/jev-assembly.mjs','tests/regression/character-live-current.mjs','tests/regression/character-transfer.mjs','tests/regression/character-state.mjs','tests/regression/scene-gate.mjs','tests/regression/scene-gate-runtime.mjs','tests/regression/lifecycle-races.mjs','tests/regression/sexual-conduct.mjs','tests/regression/release-integration.mjs']){
     const result=spawnSync(process.execPath,[test],{cwd:root,stdio:'inherit'});
     if(result.status!==0)process.exit(result.status||1);
 }

@@ -7,6 +7,19 @@ const PEEK = poseUrl('peek');
 const DURATIONS = Object.freeze({ info: 4000, success: 4000, warning: 7000, error: 8000, paused: 6000, resumed: 5000 });
 
 function toastNode(toast) { return toast?.[0] || (toast?.nodeType === 1 ? toast : null); }
+function placeContainer(container) {
+    const document=container.ownerDocument;
+    const dialog=document.getElementById('scene-reader-dialog');
+    if(dialog && !dialog.dataset.srToastCloseBound) {
+        dialog.dataset.srToastCloseBound='true';
+        dialog.addEventListener('close',()=>{
+            const current=document.getElementById('scene-reader-toast-container');
+            if(current?.parentElement===dialog)document.body.append(current);
+        });
+    }
+    const target=dialog?.open?dialog:document.body;
+    if(container.parentElement!==target)target.append(container);
+}
 
 function decorate(toast, message, { level = 'info', title = '씬판독기', sceneState } = {}) {
     const node = toastNode(toast);
@@ -73,8 +86,7 @@ export function notifySceneReaderToast(host, level, message, title = '씬판독�
         container.setAttribute('aria-live', 'polite');
         container.setAttribute('aria-relevant', 'additions text');
     }
-    const target = document.querySelector('#scene-reader-dialog[open]') || document.body;
-    if (container.parentElement !== target) target.append(container);
+    placeContainer(container);
     const node = document.createElement('div');
     let timer;
     const toast = { 0: node, remove() {
@@ -89,5 +101,9 @@ export function notifySceneReaderToast(host, level, message, title = '씬판독�
 }
 
 export function updateSceneReaderToast(toast, message, options) {
+    const node = toastNode(toast);
+    const document = node?.ownerDocument;
+    const container = document?.getElementById('scene-reader-toast-container');
+    if (container) placeContainer(container);
     decorate(toast, message, options);
 }

@@ -127,6 +127,12 @@ function renderJudgment() {
         for (const id of ['sr-caption-scene', 'sr-caption-event', 'sr-caption-advanced', 'sr-caption-quality']) { const node = document.getElementById(id); if (node) node.textContent = '판독 대기'; }
         return;
     }
+    if (judgment.sceneIntimacy?.route === 'paused') {
+        summary.innerHTML = `<div class="sr-empty-small">${judgment.sceneIntimacy.error ? '장면 확인 실패 · 이전 중단 상태 유지' : '현재 장면 · 일반 판독 주입 쉬는 중'} · 고정 지침과 저장된 인물 참고문만 적용했습니다.</div>`;
+        for (const root of Object.values(roots)) root.innerHTML = '<div class="sr-empty-small">현재 장면에서는 이 항목의 판독을 쉬고 있습니다.</div>';
+        for (const id of ['sr-caption-scene', 'sr-caption-event', 'sr-caption-advanced', 'sr-caption-quality']) { const node = document.getElementById(id); if (node) node.textContent = '판독 쉬는 중'; }
+        return;
+    }
     const card = ([key, value]) => {
         const targetLabel = (choice) => key === 'npc_target' ? choice === 'none' ? '이번 턴 지정 없음' : choice === 'stored_generated' ? '저장된 생성 NPC' : choice === 'scene_existing' ? '기존 RP 인물' : /^sheet_\d+$/.test(choice || '') ? (judgment.npcTargetName || '등록 인물') : resultLabel(key, choice) : resultLabel(key, choice);
         const label = targetLabel(value.effective);

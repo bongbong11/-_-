@@ -20,6 +20,14 @@ let loreLoadingPromise = null;
 let lastCharacterError = null;
 let worldBusy = false;
 let worldEditorRevision = 0;
+const mutationSequences = new WeakMap();
+function nextMutation(target,key) {
+    let byKey=mutationSequences.get(target);
+    if(!byKey) { byKey=new Map(); mutationSequences.set(target,byKey); }
+    const sequence=(byKey.get(key)||0)+1;
+    byKey.set(key,sequence);
+    return () => byKey.get(key)===sequence;
+}
 async function worldTask(action) {
     if (worldBusy) return;
     worldBusy = true;
@@ -347,7 +355,9 @@ function taskStatus(message, error = false) {
     if (node) { node.textContent = message; node.dataset.error = error ? 'true' : 'false'; }
 }
 async function saveCharacterEntry() {
+    const chatKey = deps.stateChatKey();
     await ensureLoreLoaded();
+    if(chatKey!==deps.stateChatKey())return null;
     const form = characterForm();
     const targetId = deps.characterEditorId;
     const current = characterEntries(form.kind).find(item => item.id === targetId);
@@ -358,6 +368,7 @@ async function saveCharacterEntry() {
         deps.document.getElementById('sr-character-aliases').value = form.aliases.join(', ');
     }
     const sourceHash = form.source ? await deps.sha256Hex(form.source) : '';
+    if(chatKey!==deps.stateChatKey())return null;
     const entry = { ...current, ...form, id: targetId || `${form.kind}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, sourceHash, updatedAt: new Date().toISOString(),
         coreEnglish: form.kind === 'npc' && current?.source === form.source ? current.coreEnglish || '' : form.kind === 'npc' ? deps.deriveEnglishCore(form.source, form.name) : '',
         provenance: current?.provenance || null };
@@ -368,12 +379,15 @@ async function saveCharacterEntry() {
         const index = next[key].findIndex(item => item.id === entry.id);
         if (index < 0) next[key].push(entry); else next[key][index] = entry;
     }
-    await deps.saveCharacterStore(deps.stateChatKey(), next);
+    await deps.saveCharacterStore(chatKey, next);
+    if(chatKey!==deps.stateChatKey())return null;
     deps.characterStore = deps.normalizeCharacterStore(next);
     deps.characterEditorId = entry.id;
     characterEditorRevision++;
     invalidatePreparedJudgment();
-    await deps.persistChat(); await deps.clearInjection();
+    const rec=deps.record(true);
+    await deps.persistChat(chatKey,rec); await deps.clearInjection({chatKey});
+    if(chatKey!==deps.stateChatKey())return entry;
     deps.renderCharacterStore();
     taskStatus(deps.profileStatus(entry));
     notifySceneReaderToast(deps.window, 'success', '시트를 저장했습니다.', '씬판독기');
@@ -440,9 +454,12 @@ async function analyzeAndSaveCharacter() {
     job.assert();
     deps.characterStore = next;
     applied=true;
+    job.finish();
     invalidatePreparedJudgment();
-    await deps.persistChat();
-    await deps.clearInjection();
+    const rec=deps.record(true);
+    await deps.persistChat(chatKey,rec);
+    await deps.clearInjection({chatKey});
+    if(chatKey!==deps.stateChatKey())return;
     if (deps.characterEditorId === targetId && deps.characterEditorKind === kind) closeCharacterEditor();
     deps.characterAnalysisSelection = { kind, id: entry.id };
     deps.renderCharacterStore();
@@ -457,22 +474,25 @@ async function analyzeAndSaveCharacter() {
 }
 
 async function deleteCharacterEntry(kind=deps.characterEditorKind,id=deps.characterEditorId) {
+    const chatKey=deps.stateChatKey();
     if (!kind || !id) return;
     const entry=characterEntries(kind).find(item=>item.id===id);
     if(!entry)return;
     if(!deps.window.confirm(`“${entry.name}” 인물 등록을 삭제할까요? 날짜별 저장본은 남고, 다시 적용하면 인물이 복원될 수 있습니다.`))return;
-    const old = deps.characterStore;
-    deps.characterStore = deps.normalizeCharacterStore(deps.characterStore);
-    if (kind === 'persona') deps.characterStore.persona = null;
+    const next = deps.normalizeCharacterStore(deps.characterStore);
+    if (kind === 'persona') next.persona = null;
     else {
         const key = kind === 'npc' ? 'npcs' : 'characters';
-        deps.characterStore[key] = deps.characterStore[key].filter((item) => item.id !== id);
+        next[key] = next[key].filter((item) => item.id !== id);
     }
-    try { await deps.saveCharacterStore(); }
-    catch (error) { deps.characterStore = old; throw error; }
+    await deps.saveCharacterStore(chatKey,next);
+    if(chatKey!==deps.stateChatKey())return;
+    deps.characterStore=next;
     invalidatePreparedJudgment();
-    await deps.persistChat();
-    await deps.clearInjection();
+    const rec=deps.record(true);
+    await deps.persistChat(chatKey,rec);
+    await deps.clearInjection({chatKey});
+    if(chatKey!==deps.stateChatKey())return;
     closeCharacterEditor();
     deps.renderCharacterStore();
     notifySceneReaderToast(deps.window, 'success', '인물 시트를 삭제했습니다.', '씬판독기');
@@ -488,28 +508,35 @@ function downloadJson(filename, value) {
 }
 
 async function saveGlobal(key, value) {
-    const previous = deps.settings[key];
-    deps.settings[key] = value;
+    const target=deps.settings;
+    const current=nextMutation(target,key);
+    const previous = target[key];
+    target[key] = value;
     try { await deps.saveServerSettings(); deps.saveSettingsDebounced(); }
-    catch (error) { if (deps.settings[key] === value) deps.settings[key] = previous; setFormValues(); throw error; }
+    catch (error) { if (current() && deps.settings===target) target[key] = previous; setFormValues(); throw error; }
 }
 
 async function saveRetrievalSettings(patch) {
+    const chatKey=deps.stateChatKey();
     deps.invalidateReasonerJobs();
-    const previous=Object.fromEntries(Object.keys(patch).map(key=>[key,deps.settings[key]]));
-    Object.assign(deps.settings,patch);
+    const target=deps.settings;
+    const current=Object.fromEntries(Object.keys(patch).map(key=>[key,nextMutation(target,key)]));
+    const previous=Object.fromEntries(Object.keys(patch).map(key=>[key,target[key]]));
+    Object.assign(target,patch);
     try { await deps.saveServerSettings(); deps.saveSettingsDebounced(); }
     catch(error) {
-        for(const [key,value] of Object.entries(patch))if(deps.settings[key]===value)deps.settings[key]=previous[key];
+        for(const key of Object.keys(patch))if(current[key]() && deps.settings===target)target[key]=previous[key];
         setFormValues();
         throw error;
     }
+    if(chatKey!==deps.stateChatKey() || deps.settings!==target || Object.keys(patch).some(key=>!current[key]()))return;
     deps.vectorRetrieval.clear();
     const rec=deps.record(true);
     rec.lastJudgment=null;
     if(!rec.pendingPlan?.outputText)rec.pendingPlan=null;
-    await deps.persistChat();
-    await deps.clearInjection();
+    await deps.persistChat(chatKey,rec);
+    await deps.clearInjection({chatKey});
+    if(chatKey!==deps.stateChatKey())return;
     setFormValues();
     deps.renderAll();
 }
@@ -533,44 +560,59 @@ async function retrievalSecretState() {
 
 async function savePreference(key, value) {
     const rec = deps.record(true);
+    const chatKey=deps.stateChatKey();
+    const current=nextMutation(rec,key);
     deps.invalidateReasonerJobs();
     const previous = { preference: rec.preferences[key], pendingPlan: rec.pendingPlan, lastJudgment: rec.lastJudgment };
     if (!rec.pendingPlan?.outputText) rec.pendingPlan = null;
     rec.preferences[key] = value;
     rec.lastJudgment = null;
-    try { await deps.persistChat(); }
+    try { await deps.persistChat(chatKey,rec); }
     catch (error) {
-        if (rec.preferences[key] === value) {
+        if (current()) {
             rec.preferences[key] = previous.preference;
             rec.pendingPlan = previous.pendingPlan;
             rec.lastJudgment = previous.lastJudgment;
         }
-        setFormValues();
+        if(chatKey===deps.stateChatKey())setFormValues();
         throw error;
     }
-    await deps.clearInjection();
+    if(chatKey!==deps.stateChatKey() || !current())return;
+    await deps.clearInjection({chatKey});
+    if(chatKey!==deps.stateChatKey() || !current())return;
     if (key === 'selectedWorldId') await deps.applyStoredInjection();
-    deps.renderAll();
+    if(chatKey===deps.stateChatKey() && current())deps.renderAll();
 }
 
 async function saveInjectionMode(value) {
     if (value === 'macro' && !deps.macroAvailable) notifySceneReaderToast(deps.window, 'warning', '현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
     const mode = value === 'macro' && deps.macroAvailable ? 'macro' : 'depth';
-    deps.preferences().injectionMode = mode;
-    await deps.persistChat();
+    const rec=deps.record(true),chatKey=deps.stateChatKey();
+    const current=nextMutation(rec,'injectionMode');
+    const previous=rec.preferences.injectionMode;
+    rec.preferences.injectionMode = mode;
+    try { await deps.persistChat(chatKey,rec); }
+    catch(error) { if(current())rec.preferences.injectionMode=previous; if(chatKey===deps.stateChatKey())setFormValues(); throw error; }
+    if(chatKey!==deps.stateChatKey() || !current())return;
     await deps.applyStoredInjection();
-    setFormValues();
+    if(chatKey===deps.stateChatKey())setFormValues();
 }
 
 async function saveWorldInjectionMode(value) {
     if (value === 'macro' && !deps.macroAvailable) notifySceneReaderToast(deps.window, 'warning', '현재 SillyTavern에서는 사용자 매크로를 등록할 수 없어 기본 위치를 사용합니다.', '씬판독기');
-    deps.preferences().worldInjectionMode = value === 'macro' && deps.macroAvailable ? 'macro' : 'depth';
-    await deps.persistChat();
+    const rec=deps.record(true),chatKey=deps.stateChatKey();
+    const current=nextMutation(rec,'worldInjectionMode');
+    const previous=rec.preferences.worldInjectionMode;
+    rec.preferences.worldInjectionMode = value === 'macro' && deps.macroAvailable ? 'macro' : 'depth';
+    try { await deps.persistChat(chatKey,rec); }
+    catch(error) { if(current())rec.preferences.worldInjectionMode=previous; if(chatKey===deps.stateChatKey())setFormValues(); throw error; }
+    if(chatKey!==deps.stateChatKey() || !current())return;
     await deps.applyStoredInjection();
-    setFormValues();
+    if(chatKey===deps.stateChatKey())setFormValues();
 }
 
 async function endActiveEvent() {
+    const chatKey=deps.stateChatKey();
     const rec = deps.record(true);
     if (rec.eventProfile) deps.archiveCurrentEvent(rec, 'ended_by_user');
     rec.eventProfile = null;
@@ -579,8 +621,9 @@ async function endActiveEvent() {
     rec.sceneOpportunity += 1;
     rec.lastJudgment = null;
     rec.pendingPlan = null;
-    await deps.persistChat();
-    await deps.clearInjection();
+    await deps.persistChat(chatKey,rec);
+    await deps.clearInjection({chatKey});
+    if(chatKey!==deps.stateChatKey())return;
     deps.renderAll();
     notifySceneReaderToast(deps.window, 'success', '현재 사건을 끝냈습니다. 다음 적합한 기회부터 새 사건을 판정합니다.', '씬판독기');
 }
@@ -647,20 +690,23 @@ function bindForm() {
     deps.document.getElementById('sr-character-sheet-refresh')?.addEventListener('click',()=>deps.runUiTask(importCurrentSheet(),'현재 시트를 가져오지 못했습니다.'));
     deps.document.getElementById('sr-debug-open')?.addEventListener('click', () => {
         const judgment = deps.record()?.lastJudgment;
-        if (!judgment) { notifySceneReaderToast(deps.window, 'warning', '검토할 판정이 없습니다.', '씬판독기'); return; }
-        const frame = deps.lastDebugFrame?.chatKey === deps.stateChatKey() && deps.lastDebugFrame?.inputKey === judgment.inputKey ? deps.lastDebugFrame : null;
+        const frame = judgment && deps.lastDebugFrame?.chatKey === deps.stateChatKey() && deps.lastDebugFrame?.inputKey === judgment.inputKey ? deps.lastDebugFrame : null;
         const preview = deps.document.getElementById('sr-debug-preview');
         if (!preview) return;
         preview.value = debugReportText({
-            judgedAt: judgment.judgedAt, model: judgment.model,
+            status: judgment ? 'judgment_available' : 'no_judgment',
+            diagnostics: deps.diagnosticEvents?.slice(-80) || [],
+            judgedAt: judgment?.judgedAt, model: judgment?.model,
             request: frame?.request || '원문 요청은 재시작 또는 다른 채팅으로 전환되어 메모리에 남아 있지 않습니다.',
-            rawJevAnswers: frame?.answers || judgment.rawChoices,
-            worldSelection: judgment.worldSelection, worldGate: frame?.worldGate,
-            decisions: judgment.details, actionPlan: judgment.actionPlan, rolls: judgment.rolls,
-            correctionSelection: judgment.correctionSelection,
-            characterTrace: judgment.characterTrace,
-            verification: judgment.priorVerification, characterStateCapture: selectedStateCapture(),
-            finalInjection: judgment.payload, worldInjection: judgment.worldPayload,
+            rawJevAnswers: frame?.answers || judgment?.rawChoices,
+            jevDiagnostics: judgment?.jevDiagnostics,
+            worldSelection: judgment?.worldSelection, worldGate: frame?.worldGate,
+            sceneIntimacy: judgment?.sceneIntimacy,
+            decisions: judgment?.details, actionPlan: judgment?.actionPlan, rolls: judgment?.rolls,
+            correctionSelection: judgment?.correctionSelection,
+            characterTrace: judgment?.characterTrace,
+            verification: judgment?.priorVerification, characterStateCapture: selectedStateCapture(),
+            finalInjection: judgment?.payload, worldInjection: judgment?.worldPayload,
         }, deps.ownerPrompt());
         preview.hidden = false;
     });
@@ -675,7 +721,11 @@ function bindForm() {
     deps.document.getElementById('sr-close')?.addEventListener('click', () => deps.dialog.close());
     deps.document.getElementById('sr-copy-debug')?.addEventListener('click', () => deps.runUiTask((async () => {
         const judgment = deps.record()?.lastJudgment;
-        if (!judgment) { notifySceneReaderToast(deps.window, 'warning', '복사할 판정이 없습니다.', '씬판독기'); return; }
+        if (!judgment) {
+            await deps.copyText(debugReportText({status:'no_judgment',diagnostics:deps.diagnosticEvents?.slice(-80)||[]},deps.ownerPrompt()));
+            notifySceneReaderToast(deps.window, 'success', '판독 실패·진행 기록을 복사했습니다.', '씬판독기');
+            return;
+        }
         const tab = deps.dialog.querySelector('.sr-tab-panel.active')?.id?.replace('sr-tab-', '') || 'flow';
         const related = (key) => tab === 'advanced' ? key.startsWith('advanced_') || ['primary_focus', 'secondary_focus', 'event_state', 'event_route'].includes(key)
             : tab === 'conflict' ? ['conflict_state', 'fight_sustain', 'villain_route', 'npc_autonomy', 'npc_knowledge_fit', 'world_hostility', 'misfortune', 'negative_priority'].includes(key) || key.startsWith('verification_')
@@ -750,6 +800,25 @@ function bindForm() {
         notifySceneReaderToast(deps.window, 'success', '개발자 모드를 열었습니다.', '씬판독기');
     };
     deps.document.getElementById('sr-owner-unlock')?.addEventListener('click', () => deps.runUiTask(unlockOwner(), '잠금을 해제하지 못했습니다.'));
+    const ownerDiagnostic = () => {
+        if(!deps.ownerUnlocked())throw new Error('개발자 모드를 먼저 열어 주세요.');
+        const category=deps.document.getElementById('sr-owner-diagnostic-category')?.value||'all';
+        const snapshot=deps.diagnosticSnapshot();
+        const checks=deps.diagnosticChecks(snapshot);
+        const pattern={automatic:/자동|판독|생성|입력|judge_|jev_/,scene:/장면|중단|복귀|다시|scene_gate/,storage:/저장|채팅 상태|불러오|hydration/,retrieval:/검색|임베딩|벡터|세계관|retrieval/,characters:/인물|감정|기록|character/,injection:/주입|적용|매크로|injection_/}[category];
+        const events=(deps.diagnosticEvents||[]).filter(event=>!pattern || pattern.test(`${event.message||''} ${event.stage||''}`)).slice(-35);
+        const selectedChecks=category==='all'?checks:{[category]:checks[category]};
+        const report={checkedAt:new Date().toISOString(),category,summary:Object.values(selectedChecks).flat().some(item=>item.result==='check')?'확인 필요':'기본 상태 확인 통과',checks:selectedChecks,state:category==='all'?snapshot:{[category]:snapshot[category]},recentEvents:events};
+        const output=deps.document.getElementById('sr-owner-diagnostic-output');
+        const value=debugReportText(report,deps.ownerPrompt());
+        if(output){output.value=value;output.hidden=false;}
+        return value;
+    };
+    deps.document.getElementById('sr-owner-diagnostic-run')?.addEventListener('click',()=>deps.runUiTask(Promise.resolve().then(ownerDiagnostic),'기능 상태를 확인하지 못했습니다.'));
+    deps.document.getElementById('sr-owner-diagnostic-copy')?.addEventListener('click',()=>deps.runUiTask((async()=>{
+        await deps.copyText(ownerDiagnostic());
+        notifySceneReaderToast(deps.window,'success','기능 진단 결과를 복사했습니다.','씬판독기');
+    })(),'기능 진단 결과를 복사하지 못했습니다.'));
     deps.document.getElementById('sr-owner-password')?.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
@@ -892,6 +961,7 @@ function bindForm() {
     deps.document.getElementById('sr-world-new')?.addEventListener('click', () => showWorldEditor());
     deps.document.getElementById('sr-world-cancel')?.addEventListener('click', showWorldList);
     deps.document.getElementById('sr-world-save')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        const chatKey=deps.stateChatKey();
         const name = String(deps.document.getElementById('sr-world-edit-name')?.value || '').trim();
         const hint = String(deps.document.getElementById('sr-world-edit-hint')?.value || '').trim();
         const prompt = String(deps.document.getElementById('sr-world-edit-prompt')?.value || '').trim();
@@ -921,7 +991,9 @@ function bindForm() {
         if (!deps.saveCustomWorlds(worlds)) { notifySceneReaderToast(deps.window, 'error', '브라우저 저장소에 세계관을 저장하지 못했습니다.', '씬판독기'); return; }
         try { await deps.saveServerSettings(); }
         catch (error) { deps.saveCustomWorlds(previous); throw error; }
-        invalidatePreparedJudgment(); await deps.persistChat();
+        if(chatKey!==deps.stateChatKey())return;
+        invalidatePreparedJudgment(); const rec=deps.record(true); await deps.persistChat(chatKey,rec);
+        if(chatKey!==deps.stateChatKey())return;
         if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
         showWorldList();
         notifySceneReaderToast(deps.window, 'success', '커스텀 세계관을 저장했습니다.', '씬판독기');
@@ -933,13 +1005,16 @@ function bindForm() {
     deps.document.getElementById('sr-world-advanced-file')?.addEventListener('change', event => deps.runUiTask(worldTask(async () => {
         const file = event.target.files?.[0];
         if (!file) return;
+        const chatKey=deps.stateChatKey();
         const value = await file.text();
+        if(chatKey!==deps.stateChatKey())return;
         deps.document.getElementById('sr-world-advanced-json').value = value;
         deps.document.getElementById('sr-world-advanced-status').textContent = `${file.name} · 검증 후 저장을 누르세요.`;
         event.target.value = '';
     }), 'JSON 파일을 읽지 못했습니다.'));
     deps.document.getElementById('sr-world-advanced-cancel')?.addEventListener('click', showWorldList);
     deps.document.getElementById('sr-world-advanced-save')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        const chatKey=deps.stateChatKey();
         const status = deps.document.getElementById('sr-world-advanced-status');
         let parsed;
         try { parsed = parseAdvancedWorld(deps.document.getElementById('sr-world-advanced-json').value); }
@@ -953,31 +1028,40 @@ function bindForm() {
         if (!deps.saveCustomWorlds(next)) { status.textContent = '브라우저 저장소에 저장하지 못했습니다.'; return; }
         try { await deps.saveServerSettings(); }
         catch (error) { deps.saveCustomWorlds(previous); throw error; }
-        invalidatePreparedJudgment(); await deps.persistChat();
+        if(chatKey!==deps.stateChatKey())return;
+        invalidatePreparedJudgment(); const rec=deps.record(true); await deps.persistChat(chatKey,rec);
+        if(chatKey!==deps.stateChatKey())return;
         if (deps.preferences().selectedWorldId === id) await deps.applyStoredInjection();
         showWorldList();
         notifySceneReaderToast(deps.window, 'success', `고급 세계관 ${parsed.name} · 기록 ${parsed.records.length}개 저장`, '씬판독기');
     }), '고급 세계관을 저장하지 못했습니다.'));
     deps.document.getElementById('sr-world-advanced-delete')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        const chatKey=deps.stateChatKey();
         const id = deps.document.getElementById('sr-world-advanced-edit-id').value;
         if (!id) return;
         const previous = deps.loadCustomWorlds();
         if (!deps.saveCustomWorlds(previous.filter(world => world.id !== id))) throw new Error('브라우저 저장소에서 삭제하지 못했습니다.');
         try { await deps.saveServerSettings(); }
         catch (error) { deps.saveCustomWorlds(previous); throw error; }
+        if(chatKey!==deps.stateChatKey())return;
         if (deps.preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
-        invalidatePreparedJudgment(); await deps.persistChat();
+        if(chatKey!==deps.stateChatKey())return;
+        invalidatePreparedJudgment(); const rec=deps.record(true); await deps.persistChat(chatKey,rec);
+        if(chatKey!==deps.stateChatKey())return;
         showWorldList();
         notifySceneReaderToast(deps.window, 'success', '고급 세계관을 삭제했습니다.', '씬판독기');
     }), '고급 세계관을 삭제하지 못했습니다.'));
     deps.document.getElementById('sr-world-delete')?.addEventListener('click', () => deps.runUiTask(worldTask(async () => {
+        const chatKey=deps.stateChatKey();
         const id = String(deps.document.getElementById('sr-world-edit-id')?.value || '');
         if (!id) return;
         const previous = deps.loadCustomWorlds();
         if (!deps.saveCustomWorlds(previous.filter((world) => world.id !== id))) { notifySceneReaderToast(deps.window, 'error', '브라우저 저장소에서 세계관을 삭제하지 못했습니다.', '씬판독기'); return; }
         try { await deps.saveServerSettings(); }
         catch (error) { deps.saveCustomWorlds(previous); throw error; }
+        if(chatKey!==deps.stateChatKey())return;
         if (deps.preferences().selectedWorldId === id) await savePreference('selectedWorldId', 'current');
+        if(chatKey!==deps.stateChatKey())return;
         showWorldList();
         notifySceneReaderToast(deps.window, 'success', '커스텀 세계관을 삭제했습니다.', '씬판독기');
     }), '커스텀 세계관을 삭제하지 못했습니다.'));

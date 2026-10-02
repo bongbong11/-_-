@@ -41,14 +41,20 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
         const job=deps.jobs.begin('character-transfer'), chat=deps.stateChatKey();
         let saved=false,applied=false;
         try {
-            await deps.saveCharacterStore(chat,next);job.assert();
+            await deps.saveCharacterStore(chat,next);
             saved=true;
+            if(chat!==deps.stateChatKey())return false;
+            job.assert();
             deps.characterStore=deps.normalizeCharacterStore(next);
             applied=true;
+            job.finish();
             invalidatePreparedJudgment();
-            await deps.clearInjection();await deps.persistChat();
+            const rec=deps.record(true);
+            await deps.clearInjection({chatKey:chat});await deps.persistChat(chat,rec);
+            if(chat!==deps.stateChatKey())return false;
             if(entry)deps.characterAnalysisSelection={kind:entry.kind,id:entry.id};
             deps.renderCharacterStore();
+            return true;
         } catch(error){error.characterSaved=saved;error.characterApplied=applied;error.characterStage=saved?'apply':'save';throw error;} finally {job.finish();}
     }
     const npcSheet=`NPC 시트\n이름: \n역할·소속: \n주요 관계: \n원하는 것과 우선순위: \n평소 행동·대사: \n확인된 지식·능력·접근 범위: \n조건별 반응과 제한: \n지속적인 감정·충동 경향과 자제 방식(있는 경우만): `;
@@ -75,7 +81,7 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
         const form=characterForm();
         const sourceHash=form.source ? await deps.sha256Hex(form.source) : '';
         const result=importRecordVersion(deps.characterStore,el('sr-character-import-json').value,el('sr-character-import-name').value,{...form,sourceHash});
-        await persist(result.store,result.entry);
+        if(!await persist(result.store,result.entry))return;
         status(`${result.entry.name} · ${result.entry.recordBank.records.length}개 기록을 날짜별로 저장하고 적용했습니다.`);
         el('sr-character-editor-cancel')?.click();
         notifySceneReaderToast(deps.window, 'success', `${result.entry.name} 판독시트를 저장·적용했습니다.`, '씬판독기');
@@ -108,14 +114,14 @@ export function bindCharacterTransfer(deps, {characterForm, invalidatePreparedJu
             if(action==='copy'){await deps.copyText(JSON.stringify(output,null,2));status('판독시트를 복사했습니다.');}
             if(action==='download')downloadJson(`${group.name.replace(/[<>:"/\\|?*]/g,'_')}.json`,output);
             if(action==='view')showVersionPreview(group,version);
-            if(action==='apply'){const result=applyRecordVersion(deps.characterStore,groupId,versionId);await persist(result.store,result.entry);status('선택한 버전을 적용했습니다. 다음 판독부터 사용합니다.');notifySceneReaderToast(deps.window, 'success', '선택한 날짜의 판독시트를 적용했습니다.','씬판독기');}
+            if(action==='apply'){const result=applyRecordVersion(deps.characterStore,groupId,versionId);if(!await persist(result.store,result.entry))return;status('선택한 버전을 적용했습니다. 다음 판독부터 사용합니다.');notifySceneReaderToast(deps.window, 'success', '선택한 날짜의 판독시트를 적용했습니다.','씬판독기');}
             if(action==='edit'){
                 const entry=entriesForVersion(deps.characterStore,version,group.kind);
                 showVersionEditor(group.kind,entry,group,version);
             }
             if(action==='delete'){
                 if(!deps.window.confirm('이 날짜의 판독시트를 삭제할까요? 적용 중인 버전이면 이번 인물의 기록 적용도 해제됩니다.'))return;
-                await persist(deleteRecordVersion(deps.characterStore,groupId,versionId));
+                if(!await persist(deleteRecordVersion(deps.characterStore,groupId,versionId)))return;
                 el('sr-character-preview').hidden=true;status('해당 버전을 삭제했습니다.');
                 notifySceneReaderToast(deps.window, 'success', '해당 날짜의 판독시트를 삭제했습니다.','씬판독기');
             }

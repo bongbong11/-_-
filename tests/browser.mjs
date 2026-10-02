@@ -74,7 +74,7 @@ const server=http.createServer(async(req,res)=>{try{
         else if(req.url.endsWith('/characters')) { if(failCharacterWrite){failCharacterWrite=false;res.statusCode=500;res.end(JSON.stringify({error:'Simulated failed save'}));return;} store.characters=body.value; }
         else if(req.url.endsWith('/chat'))store.chat=body.value;
         else if(req.url.endsWith('/history'))store.history=body.value;
-        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,q.type==='noul'?{type:'noul',noul:0.9}:{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).find(value=>value!=='none')||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_affect_')?'visible':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
+        else if(req.url.endsWith('/systemone'))result={answers:Object.fromEntries(Object.entries(body.questions||{}).map(([key,q])=>[key,q.type==='noul'?{type:'noul',noul:0.9}:{choice:key==='scene_level'&&gateScenario?gateScenario.level:key==='scene_phase'&&gateScenario?gateScenario.phase:key==='scene_evidence'&&gateScenario?Object.keys(q.criteria).filter(value=>value!=='none').at(-1)||'none':key.startsWith('scene_participant_')&&gateScenario?'yes':key.startsWith('world_record_')?worldChoice:key.startsWith('verification_')?'fulfilled':key.endsWith('_presence') && key.startsWith('character_')?'active':key.includes('_affect_')?'visible':key.includes('_profile_slot_1')?Object.keys(q.criteria)[1]||'none':key.endsWith('_response_direction')?'act':({primary_focus:'direct',scene_state:'active',event_state:'none',npc_presence:'none',context_change_source:'none'}[key]||Object.keys(q.criteria)[0]),confidence:1}]))};
         res.end(JSON.stringify(result));return;
     }
     if(req.url.startsWith(prefix)){const file=path.resolve(root,decodeURIComponent(req.url.slice(prefix.length)));if(!file.startsWith(root+path.sep))throw Error('path');res.setHeader('Content-Type',file.endsWith('.css')?'text/css':file.endsWith('.webp')?'image/webp':'application/javascript');res.end(await readFile(file));return;}
@@ -739,6 +739,33 @@ try{
     await page.waitForFunction(()=>!JSON.stringify(mock.prompts).includes('Halloween week'));
     assert.equal(await page.evaluate(()=>mock.macros['scene-reader-world']?.()||''),'','disabled extension removes world macro');
     assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-state-capture']),'','disabled extension also removes state collection');
+    store.settings.global.ownerUnlocked=true;
+    await page.reload();
+    await page.locator('#sr-extension-open').evaluate(e=>e.closest('details').open=true);
+    await page.locator('#sr-extension-open').click();
+    await page.locator('#sr-settings-button').click();
+    assert.equal(await page.locator('#sr-owner-diagnostic-panel').evaluate(e=>e.hidden),false,'developer diagnostics appear after unlock');
+    await page.locator('#sr-owner-diagnostic-panel > summary').click();
+    await page.locator('#sr-owner-diagnostic-category').selectOption('injection');
+    await page.locator('#sr-owner-diagnostic-run').click();
+    const ownerReport=JSON.parse(await page.locator('#sr-owner-diagnostic-output').inputValue());
+    assert.equal(ownerReport.category,'injection');
+    assert.ok(ownerReport.checks.injection.length,'developer diagnostics run category checks');
+    await page.locator('#sr-owner-diagnostic-copy').click();
+    assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/"category": "injection"/);
+    const toastPlacement=await page.evaluate(async prefix=>{
+        const dialog=document.getElementById('scene-reader-dialog');
+        if(!dialog.open)dialog.showModal();
+        const {notifySceneReaderToast}=await import(prefix+'src/ui/toasts.js');
+        const toast=notifySceneReaderToast(window,'info','Placement check','씬판독기',{timeOut:0});
+        const inside=toast[0].parentElement?.parentElement===dialog;
+        dialog.close();
+        await new Promise(resolve=>setTimeout(resolve,0));
+        const visible=toast[0].parentElement?.parentElement===document.body;
+        toast.remove();
+        return {inside,visible};
+    },prefix);
+    assert.deepEqual(toastPlacement,{inside:true,visible:true},'toast remains visible when its dialog closes');
     assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>mock.errors),[]);
     console.log('Browser passed: 4 viewport sizes × 4 tabs, character/world save, native vector retrieval, integrated key settings, two Jev calls, seasonal context, NSFW pause/resume, OOC, delete, clipboard.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

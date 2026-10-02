@@ -11,17 +11,45 @@ export function sceneGateRequest({model,transcript,previous='normal',people=[],p
     return {model,state:{scope:'Classify current scene continuity and any supplied world-rule relevance. Do not propose actions, character traits, or a new scene.',recent_roleplay:transcript,previous_route:previous,previous_participant_ids:previous==='paused'?previousParticipantIds:[],registered_people:people.map(person=>({id:person.id,name:person.name,aliases:person.aliases||[]}))},questions};
 }
 
+export function sceneGateAnswersConflict(answers) {
+    const level=choice(answers?.scene_level),phase=choice(answers?.scene_phase);
+    return (phase==='ended' && ['3','4'].includes(level)) || (phase==='active' && ['0','1','2'].includes(level));
+}
+
+export function sceneGateConflictRequest(request,answers) {
+    return {
+        model:request.model,
+        state:{scope:'Resolve only the conflicting current-scene status. Use current RP evidence; do not infer an ending from silence or elapsed time.',recent_roleplay:request.state.recent_roleplay,previous_route:request.state.previous_route,first_level:choice(answers?.scene_level),first_phase:choice(answers?.scene_phase)},
+        questions:{
+            scene_resolution:{type:'choice',instructions:'Has the current sexual interaction actually ended, is it still active, or is it briefly paused? Select unclear if the latest RP does not establish this.',criteria:{active:'Activity is happening now.',paused:'The same interaction is briefly paused.',ended:'The interaction actually ended or shifted to another purpose.',unclear:'Current RP does not establish the status.'}},
+            scene_evidence:request.questions.scene_evidence,
+        },
+    };
+}
+
+export function resolveSceneGateConflict(initial,answers,request,previous='normal') {
+    const resolution=choice(answers?.scene_resolution),evidence=choice(answers?.scene_evidence);
+    const recent=Object.keys(request.questions.scene_evidence.criteria).filter(id=>id!=='none').slice(-2);
+    if(!recent.includes(evidence))return {...initial,confirmation:'unresolved'};
+    if(resolution==='ended')return {...initial,route:'normal',transition:previous==='paused'?'exited':'',phase:'ended',evidence,confirmation:'resolved'};
+    if(resolution==='active')return {...initial,route:'paused',transition:previous==='paused'?'':'entered',phase:'active',evidence,confirmation:'resolved'};
+    if(resolution==='paused' && previous==='paused')return {...initial,route:'paused',transition:'',phase:'paused',evidence,confirmation:'resolved'};
+    return {...initial,confirmation:'unresolved'};
+}
+
 export function resolveSceneGate(answers,request,previous='normal') {
     const level=choice(answers?.scene_level), phase=choice(answers?.scene_phase), evidence=choice(answers?.scene_evidence);
-    const validEvidence=evidence!=='none' && Object.hasOwn(request.questions.scene_evidence.criteria,evidence);
+    const cited=Object.keys(request.questions.scene_evidence.criteria).filter(id=>id!=='none');
+    const validEvidence=evidence!=='none' && cited.includes(evidence);
+    const recentEvidence=validEvidence && cited.slice(-2).includes(evidence);
     let route=previous==='paused'?'paused':'normal';
     let transition='';
-    if(phase==='active' && ['3','4'].includes(level) && validEvidence) {
+    if(phase==='active' && ['3','4'].includes(level) && recentEvidence) {
         if(route!=='paused')transition='entered';
         route='paused';
     } else if(route==='paused' && phase==='paused' && validEvidence) {
         route='paused';
-    } else if(route==='paused' && phase==='ended' && validEvidence && ['0','1','2'].includes(level)) {
+    } else if(route==='paused' && recentEvidence && ['0','1','2'].includes(level) && ['ended','normal'].includes(phase)) {
         route='normal';transition='exited';
     }
     const participantIds=[];
