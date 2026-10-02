@@ -559,11 +559,14 @@ async function retrievalSecretState() {
 }
 
 async function savePreference(key, value) {
-    const rec = deps.record(true);
     const chatKey=deps.stateChatKey();
-    const current=nextMutation(rec,key);
-    deps.invalidateReasonerJobs();
-    const previous = { preference: rec.preferences[key], pendingPlan: rec.pendingPlan, lastJudgment: rec.lastJudgment };
+    const initialRecord = deps.record(true);
+    return deps.queueWrite(`preferences:${chatKey}`, async () => {
+    const rec = deps.chatRecords.get(chatKey) || initialRecord;
+    const mutationCurrent=nextMutation(rec,key);
+    const current=()=>mutationCurrent() && deps.chatRecords.get(chatKey)===rec;
+    if (chatKey === deps.stateChatKey()) deps.invalidateReasonerJobs();
+    const previous = { preference: rec.preferences[key], preferences:JSON.stringify(rec.preferences), pendingPlan: rec.pendingPlan, lastJudgment: rec.lastJudgment };
     if (!rec.pendingPlan?.outputText) rec.pendingPlan = null;
     rec.preferences[key] = value;
     rec.lastJudgment = null;
@@ -571,17 +574,20 @@ async function savePreference(key, value) {
     catch (error) {
         if (current()) {
             rec.preferences[key] = previous.preference;
-            rec.pendingPlan = previous.pendingPlan;
-            rec.lastJudgment = previous.lastJudgment;
+            if (JSON.stringify(rec.preferences) === previous.preferences) {
+                rec.pendingPlan = previous.pendingPlan;
+                rec.lastJudgment = previous.lastJudgment;
+            }
         }
         if(chatKey===deps.stateChatKey())setFormValues();
         throw error;
     }
     if(chatKey!==deps.stateChatKey() || !current())return;
-    await deps.clearInjection({chatKey});
+    await deps.clearInjection({chatKey,onlyIfOrphaned:true});
     if(chatKey!==deps.stateChatKey() || !current())return;
     if (key === 'selectedWorldId') await deps.applyStoredInjection();
     if(chatKey===deps.stateChatKey() && current())deps.renderAll();
+    });
 }
 
 async function saveInjectionMode(value) {
@@ -612,6 +618,7 @@ async function saveWorldInjectionMode(value) {
 }
 
 async function endActiveEvent() {
+    deps.invalidateReasonerJobs();
     const chatKey=deps.stateChatKey();
     const rec = deps.record(true);
     if (rec.eventProfile) deps.archiveCurrentEvent(rec, 'ended_by_user');
@@ -622,7 +629,7 @@ async function endActiveEvent() {
     rec.lastJudgment = null;
     rec.pendingPlan = null;
     await deps.persistChat(chatKey,rec);
-    await deps.clearInjection({chatKey});
+    await deps.clearInjection({chatKey,onlyIfOrphaned:true});
     if(chatKey!==deps.stateChatKey())return;
     deps.renderAll();
     notifySceneReaderToast(deps.window, 'success', '현재 사건을 끝냈습니다. 다음 적합한 기회부터 새 사건을 판정합니다.', '씬판독기');
@@ -800,15 +807,16 @@ function bindForm() {
         notifySceneReaderToast(deps.window, 'success', '개발자 모드를 열었습니다.', '씬판독기');
     };
     deps.document.getElementById('sr-owner-unlock')?.addEventListener('click', () => deps.runUiTask(unlockOwner(), '잠금을 해제하지 못했습니다.'));
-    const ownerDiagnostic = () => {
+    const ownerDiagnostic = async () => {
         if(!deps.ownerUnlocked())throw new Error('개발자 모드를 먼저 열어 주세요.');
+        const orphanCleared = await deps.reconcileInjection();
         const category=deps.document.getElementById('sr-owner-diagnostic-category')?.value||'all';
         const snapshot=deps.diagnosticSnapshot();
         const checks=deps.diagnosticChecks(snapshot);
         const pattern={automatic:/자동|판독|생성|입력|judge_|jev_/,scene:/장면|중단|복귀|다시|scene_gate/,storage:/저장|채팅 상태|불러오|hydration/,retrieval:/검색|임베딩|벡터|세계관|retrieval/,characters:/인물|감정|기록|character/,injection:/주입|적용|매크로|injection_/}[category];
         const events=(deps.diagnosticEvents||[]).filter(event=>!pattern || pattern.test(`${event.message||''} ${event.stage||''}`)).slice(-35);
         const selectedChecks=category==='all'?checks:{[category]:checks[category]};
-        const report={checkedAt:new Date().toISOString(),category,summary:Object.values(selectedChecks).flat().some(item=>item.result==='check')?'확인 필요':'기본 상태 확인 통과',checks:selectedChecks,state:category==='all'?snapshot:{[category]:snapshot[category]},recentEvents:events};
+        const report={checkedAt:new Date().toISOString(),category,summary:orphanCleared?'오류 · 저장 판정 없이 남은 주입문을 정리했습니다.':Object.values(selectedChecks).flat().some(item=>item.result==='check')?'확인 필요':'기본 상태 확인 통과',checks:selectedChecks,state:category==='all'?snapshot:{[category]:snapshot[category]},recentEvents:events};
         const output=deps.document.getElementById('sr-owner-diagnostic-output');
         const value=debugReportText(report,deps.ownerPrompt());
         if(output){output.value=value;output.hidden=false;}
@@ -816,7 +824,7 @@ function bindForm() {
     };
     deps.document.getElementById('sr-owner-diagnostic-run')?.addEventListener('click',()=>deps.runUiTask(Promise.resolve().then(ownerDiagnostic),'기능 상태를 확인하지 못했습니다.'));
     deps.document.getElementById('sr-owner-diagnostic-copy')?.addEventListener('click',()=>deps.runUiTask((async()=>{
-        await deps.copyText(ownerDiagnostic());
+        await deps.copyText(await ownerDiagnostic());
         notifySceneReaderToast(deps.window,'success','기능 진단 결과를 복사했습니다.','씬판독기');
     })(),'기능 진단 결과를 복사하지 못했습니다.'));
     deps.document.getElementById('sr-owner-password')?.addEventListener('keydown', (event) => {
@@ -1067,6 +1075,7 @@ function bindForm() {
     }), '커스텀 세계관을 삭제하지 못했습니다.'));
     deps.document.getElementById('sr-reset-npc')?.addEventListener('click', () => deps.runUiTask((async () => {
         deps.invalidateReasonerJobs();
+        const chatKey = deps.stateChatKey();
         const rec = structuredClone(deps.record(true));
         rec.npcProfile = null;
         rec.villainProfile = null;
@@ -1092,47 +1101,54 @@ function bindForm() {
         rec.lastContinuityTrace = null;
         rec.pendingPlan = null;
         rec.lastJudgment = null;
-        await deps.saveSession(deps.stateChatKey(), rec, []);
-        await deps.clearInjection();
+        await deps.clearInjection({chatKey});
+        await deps.saveSession(chatKey, rec, []);
+        if(chatKey!==deps.stateChatKey())return;
         deps.renderAll();
         notifySceneReaderToast(deps.window, 'success', '이 채팅의 판정, 관계 누적, 사건과 추첨 인물을 초기화했습니다.', '씬판독기');
     })(), '채팅 판정 상태를 초기화하지 못했습니다.'));
     deps.document.getElementById('sr-reset-villain')?.addEventListener('click', () => deps.runUiTask((async () => {
-        const rec = deps.record(true);
+        deps.invalidateReasonerJobs();
+        const chatKey = deps.stateChatKey();
+        const rec = structuredClone(deps.record(true));
         rec.villainProfile = null;
         rec.lastVillainRoll = null;
         rec.lastJudgment = null;
         rec.pendingPlan = null;
-        await deps.clearStateHistory();
-        await deps.persistChat();
-        await deps.clearInjection();
+        await deps.clearInjection({chatKey});
+        await deps.saveSession(chatKey, rec, []);
+        if(chatKey!==deps.stateChatKey())return;
         deps.renderAll();
         notifySceneReaderToast(deps.window, 'success', '현재 빌런을 종료하고 새 추첨 대기로 전환했습니다.', '씬판독기');
     })(), '현재 빌런을 종료하지 못했습니다.'));
     deps.document.getElementById('sr-reset-current-npc')?.addEventListener('click', () => deps.runUiTask((async () => {
-        const rec = deps.record(true);
+        deps.invalidateReasonerJobs();
+        const chatKey = deps.stateChatKey();
+        const rec = structuredClone(deps.record(true));
         rec.npcProfile = null;
         rec.lastNpcRoll = null;
         rec.lastJudgment = null;
         rec.pendingPlan = null;
         rec.sceneOpportunity += 1;
-        await deps.clearStateHistory();
-        await deps.persistChat();
-        await deps.clearInjection();
+        await deps.clearInjection({chatKey});
+        await deps.saveSession(chatKey, rec, []);
+        if(chatKey!==deps.stateChatKey())return;
         deps.renderAll();
         notifySceneReaderToast(deps.window, 'success', '현재 일반 NPC를 종료하고 새 판독 대기로 전환했습니다.', '씬판독기');
     })(), '현재 일반 NPC를 종료하지 못했습니다.'));
     deps.document.getElementById('sr-reset-event')?.addEventListener('click', () => deps.runUiTask(endActiveEvent(), '사건을 종료하지 못했습니다.'));
     deps.document.getElementById('sr-reset-relationship')?.addEventListener('click', () => deps.runUiTask((async () => {
-        const rec = deps.record(true);
+        deps.invalidateReasonerJobs();
+        const chatKey = deps.stateChatKey();
+        const rec = structuredClone(deps.record(true));
         rec.pacingState.relationship = { closer: 0, distant: 0, lastBeat: 'none', evidence: [] };
         rec.relationshipState = { motion: 'none', trust: 'none', intimacy: 'none', romance: 'none', lastBeat: 'none' };
         rec.observationState = { relationshipMotion: 'unclear', trustSignal: 'unclear', intimacySignal: 'unclear', romanceEvidence: 'unclear', unresolved: 'unclear', evidenceKey: '' };
         rec.lastJudgment = null;
         rec.pendingPlan = null;
-        await deps.clearStateHistory();
-        await deps.persistChat();
-        await deps.clearInjection();
+        await deps.clearInjection({chatKey});
+        await deps.saveSession(chatKey, rec, []);
+        if(chatKey!==deps.stateChatKey())return;
         deps.renderAll();
         notifySceneReaderToast(deps.window, 'success', '확장이 저장한 관계 누적 상태를 초기화했습니다.', '씬판독기');
     })(), '관계 누적 상태를 초기화하지 못했습니다.'));

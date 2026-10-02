@@ -14,7 +14,7 @@ const wadeSource='Name: Wade\nRole: Businessman.\nHe controls his son.\nHe keeps
 const wadeHash=createHash('sha256').update(wadeSource).digest('hex');
 const wadeItem=prepareProfileItems({items:[{id:'c1',kind:'relationship',topic:'family_decisions',target:'son',rule:'Wade tends to control his son on family matters.'}]}).items;
 const wadeProfile=createProfile(wadeItem,{characterId:'wade',sourceHash:wadeHash,source:wadeSource,analysisId:'browser'});
-const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:{preferences:{charmMemory:true,lorebookMemory:true}},history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true}],npcs:[{id:'wade',name:'Wade',source:wadeSource,sourceHash:wadeHash,sourceVisibleToMain:false,profile:wadeProfile}]}};
+const store={settings:{global:{enabled:true,autoJudge:true,showConfidence:true,pauseOnOoc:true}},chat:{preferences:{settingsContract:3,charmMemory:true,lorebookMemory:true}},history:[],characters:{enabled:true,characters:[{id:'hunter',name:'Hunter',source:'Hunter is a lawyer.',sourceVisibleToMain:true}],npcs:[{id:'wade',name:'Wade',source:wadeSource,sourceHash:wadeHash,sourceVisibleToMain:false,profile:wadeProfile}]}};
 const wadeEntry={...store.characters.npcs[0],kind:'npc',npcRole:'mixed'};
 store.characters.npcs[0]={...wadeEntry,recordBank:createRecordBank({entity_type:'npc',entity_name:'Wade',intimacy_reference:{text:'Wade keeps intimate wishes private unless he chooses to disclose them.',source_ids:['S001']},records:[{type:'relationship',target:'son',when:['family matters'],rule:'Wade tends to control his son on family matters.',modality:'tendency',basis:'explicit',source_ids:['S001'],knowledge_domain:'none',knowledge_state:'none'}]},wadeEntry,'browser-records')};
 const requests=[];
@@ -88,6 +88,7 @@ try{
     const page=await context.newPage();page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});page.on('console',message=>{if(message.type()==='error')console.error(message.text())});
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.locator('#scene-reader-quick-button').waitFor();
+    assert.equal(store.chat.preferences.settingsContract,4,'legacy chat preferences are migrated and saved during startup');
     await page.waitForFunction(()=>document.querySelector('#scene-reader-quick-button img')?.naturalWidth>0);
     assert.deepEqual(await page.locator('#scene-reader-quick-button').evaluate(node=>({width:node.offsetWidth,height:node.offsetHeight})),{width:32,height:32},'opening button keeps its original size');
     assert.equal(await page.locator('#scene-reader-quick-button img').evaluate(node=>node.offsetWidth),26);
@@ -276,7 +277,11 @@ try{
     await page.locator('#sr-character-record-close').click();
     assert.equal(await page.locator('#sr-npc-read-names').count(),0,'NPC name-reading button was removed');
     await page.locator('[data-sr-tab="flow"]').click();
+    await page.locator('#sr-close').click();
     await page.evaluate(async()=>{mock.chat.push({is_user:true,mes:'Open the door.'});await mock.emit('MESSAGE_SENT',0);await mock.emit('GENERATION_AFTER_COMMANDS','normal',{},false);});
+    await page.locator('#scene-reader-quick-button').click();
+    assert.doesNotMatch(await page.locator('#sr-turn-summary').textContent(),/아직 판독 결과가 없습니다/,'opening the panel after automatic generation preserves the result');
+    assert.equal(await page.evaluate(()=>mock.prompts['scene-reader-router']),store.chat.lastJudgment.payload,'automatic injection equals the server judgment after opening the panel');
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.length),'reserved memory must not reach Jev even with old enabled settings');
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Extra:3')),'reserved auxiliary lore stays off');
     assert.ok(!requests.some(r=>r.body.state?.memory_reference?.entries?.some(e=>e.sourceId==='Hunter Lore:2')),'irrelevant lore must not reach Jev');
